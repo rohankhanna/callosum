@@ -1,0 +1,19 @@
+*.kate-swp
+
+# python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# tool caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# runtime artifacts
+logs/
+tmp/
