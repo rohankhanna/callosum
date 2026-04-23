@@ -22,14 +22,25 @@ def rank(
     model: str,
     now_ts: float,
     excluded: frozenset[str] | None = None,
+    preferred_id: str | None = None,
 ) -> BackendSnapshot | None:
-    """Pick the highest-ranked snapshot serving `model`. Returns None if none viable."""
+    """Pick the highest-ranked snapshot serving `model`. Returns None if none viable.
+
+    When `preferred_id` names a viable backend, that one wins over the
+    usage-based ranking. This is how sticky sessions pin a request to a
+    previously bound backend without giving up the rotation fallback when
+    that backend is no longer viable.
+    """
     excluded_ids = excluded or frozenset()
     viable = [
         s for s in snapshots if _is_viable(s, model=model, now_ts=now_ts, excluded=excluded_ids)
     ]
     if not viable:
         return None
+    if preferred_id is not None:
+        for snapshot in viable:
+            if snapshot.backend.id == preferred_id:
+                return snapshot
     return min(viable, key=_rank_key)
 
 
@@ -65,6 +76,7 @@ async def select(
     model: str,
     now_ts: float | None = None,
     excluded: frozenset[str] | None = None,
+    preferred_id: str | None = None,
 ) -> Backend | None:
     """Gather snapshots from each backend and pick the best one for `model`."""
     if not backends:
@@ -75,5 +87,11 @@ async def select(
         health = await backend.health()
         usage = await backend.usage_snapshot()
         snapshots.append(BackendSnapshot(backend=backend, health=health, usage=usage))
-    chosen = rank(snapshots, model=model, now_ts=resolved_now, excluded=excluded)
+    chosen = rank(
+        snapshots,
+        model=model,
+        now_ts=resolved_now,
+        excluded=excluded,
+        preferred_id=preferred_id,
+    )
     return chosen.backend if chosen is not None else None

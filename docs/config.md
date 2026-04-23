@@ -27,7 +27,7 @@ default_mode = "stateless"
 allow_consumer_auth_backends = false
 ```
 
-- `default_mode` — session policy. Only `"stateless"` is wired in v1 (every request is routed independently; no server-side session state).
+- `default_mode` — session policy. Supported values: `"stateless"` (each request is selected fresh) and `"sticky"` (first-touch backend is remembered per session; see [Session policy](#session-policy) below). `"sticky_replay"` is reserved for a future release.
 - `allow_consumer_auth_backends` — gate for the `codex_auth_vault` backend type. Must be `true` for that type to load. See the ToS note on that backend below before enabling.
 
 ### `[state]`
@@ -136,6 +136,17 @@ Set `"stream": true` in the request body and the proxy returns `text/event-strea
 ## Pinning
 
 Use `/control/pin` to force routing to a specific backend id. While a pin is set, the selector considers only that backend — no fallback — so upstream errors surface directly to the client. `/control/unpin` clears the pin.
+
+## Session policy
+
+`policy.default_mode` controls how the proxy treats per-client session identity.
+
+- `stateless` (default) — the selector runs fresh on every request. The `X-Codex-Session-Id` header is ignored. `/status.sessions` is always `{}`.
+- `sticky` — when a request carries `X-Codex-Session-Id: <id>`, the proxy remembers which backend served it and prefers that backend on subsequent requests with the same id. If the bound backend is no longer viable (health, cooldown, excluded mid-retry), the selector falls back to normal ranking and the binding is updated to the backend that actually served the request. Requests without the header behave like stateless. Bindings are in-memory and process-local; they do not survive a restart.
+
+A pin set via `/control/pin` overrides sticky bindings: while pinned, all traffic goes to the pinned backend regardless of the session header. Clearing the pin restores sticky behavior; existing bindings are preserved.
+
+`/status` reports the active mode under `session_mode` and the current bindings under `sessions` (a map of `session_id → backend_id`, only populated when the mode is sticky and at least one binding exists).
 
 ## Verification
 

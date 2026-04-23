@@ -2,15 +2,20 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from codex_proxy import __version__
 from codex_proxy.backend import Backend
 from codex_proxy.errors import RETRYABLE, BackendError, ErrorClass
 from codex_proxy.selector import select
+from codex_proxy.session import SessionRegistry
+
+SessionMode = Literal["stateless", "sticky", "sticky_replay"]
+
+SESSION_HEADER = "x-codex-session-id"
 
 _EXHAUSTED_STATUS: dict[ErrorClass, int] = {
     "auth_invalid": 502,
@@ -37,9 +42,15 @@ class PinState:
         self._pinned = None
 
 
-def create_app(*, backends: Sequence[Backend] = ()) -> FastAPI:
+def create_app(
+    *,
+    backends: Sequence[Backend] = (),
+    session_mode: SessionMode = "stateless",
+    sessions: SessionRegistry | None = None,
+) -> FastAPI:
     backends_list: list[Backend] = list(backends)
     pin_state = PinState()
+    session_registry = sessions if sessions is not None else SessionRegistry()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -79,7 +90,12 @@ def create_app(*, backends: Sequence[Backend] = ()) -> FastAPI:
                     },
                 }
             )
-        return {"backends": entries, "pinned": pin_state.get()}
+        return {
+            "backends": entries,
+            "pinned": pin_state.get(),
+            "session_mode": session_mode,
+            "sessions": session_registry.snapshot() if session_mode != "stateless" else {},
+        }
 
     @app.post("/control/pin")
     async def control_pin(body: dict[str, Any]) -> dict[str, str | None]:
@@ -97,14 +113,31 @@ def create_app(*, backends: Sequence[Backend] = ()) -> FastAPI:
         return {"pinned": None}
 
     @app.post("/v1/chat/completions")
-    async def chat_completions(body: dict[str, Any]) -> Any:
+    async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         model = body.get("model")
         if not isinstance(model, str):
             raise HTTPException(status_code=400, detail="'model' must be a string")
-        active = _active_pool(backends_list, pin_state.get())
+        pinned = pin_state.get()
+        active = _active_pool(backends_list, pinned)
+        session_id = _session_id_from_request(request, mode=session_mode, pinned=pinned)
+        preferred_id = session_registry.get(session_id) if session_id is not None else None
         if body.get("stream") is True:
-            return await _dispatch_stream(body, model=model, backends_list=active)
-        return await _dispatch_nonstream(body, model=model, backends_list=active)
+            return await _dispatch_stream(
+                body,
+                model=model,
+                backends_list=active,
+                preferred_id=preferred_id,
+                session_id=session_id,
+                session_registry=session_registry,
+            )
+        return await _dispatch_nonstream(
+            body,
+            model=model,
+            backends_list=active,
+            preferred_id=preferred_id,
+            session_id=session_id,
+            session_registry=session_registry,
+        )
 
     return app
 
@@ -115,38 +148,84 @@ def _active_pool(backends_list: Sequence[Backend], pinned: str | None) -> Sequen
     return [b for b in backends_list if b.id == pinned]
 
 
+def _session_id_from_request(
+    request: Request, *, mode: SessionMode, pinned: str | None
+) -> str | None:
+    # Sticky binding is only consulted when the policy asks for it and no pin is
+    # in effect. A pin is an operator override that must win outright.
+    if mode == "stateless" or pinned is not None:
+        return None
+    raw = request.headers.get(SESSION_HEADER)
+    if raw is None:
+        return None
+    session_id = raw.strip()
+    return session_id or None
+
+
+def _remember_binding(registry: SessionRegistry, session_id: str | None, backend_id: str) -> None:
+    if session_id is None:
+        return
+    registry.set(session_id, backend_id)
+
+
 async def _dispatch_nonstream(
-    body: dict[str, Any], *, model: str, backends_list: Sequence[Backend]
+    body: dict[str, Any],
+    *,
+    model: str,
+    backends_list: Sequence[Backend],
+    preferred_id: str | None,
+    session_id: str | None,
+    session_registry: SessionRegistry,
 ) -> dict[str, Any]:
     excluded: set[str] = set()
     last_error: BackendError | None = None
     while True:
-        backend = await select(backends_list, model=model, excluded=frozenset(excluded))
+        backend = await select(
+            backends_list,
+            model=model,
+            excluded=frozenset(excluded),
+            preferred_id=preferred_id,
+        )
         if backend is None:
             break
         try:
-            return await backend.chat_completions(body)
+            result = await backend.chat_completions(body)
         except BackendError as exc:
             last_error = exc
             if exc.classification not in RETRYABLE:
                 raise _terminal_http(exc) from exc
             excluded.add(backend.id)
+            continue
+        _remember_binding(session_registry, session_id, backend.id)
+        return result
     raise _no_viable(model=model, last_error=last_error)
 
 
 async def _dispatch_stream(
-    body: dict[str, Any], *, model: str, backends_list: Sequence[Backend]
+    body: dict[str, Any],
+    *,
+    model: str,
+    backends_list: Sequence[Backend],
+    preferred_id: str | None,
+    session_id: str | None,
+    session_registry: SessionRegistry,
 ) -> StreamingResponse:
     excluded: set[str] = set()
     last_error: BackendError | None = None
     while True:
-        backend = await select(backends_list, model=model, excluded=frozenset(excluded))
+        backend = await select(
+            backends_list,
+            model=model,
+            excluded=frozenset(excluded),
+            preferred_id=preferred_id,
+        )
         if backend is None:
             break
         iterator = backend.chat_completions_stream(body)
         try:
             first_chunk = await iterator.__anext__()
         except StopAsyncIteration:
+            _remember_binding(session_registry, session_id, backend.id)
             return StreamingResponse(_empty_iter(), media_type="text/event-stream")
         except BackendError as exc:
             last_error = exc
@@ -154,6 +233,7 @@ async def _dispatch_stream(
                 raise _terminal_http(exc) from exc
             excluded.add(backend.id)
             continue
+        _remember_binding(session_registry, session_id, backend.id)
         return StreamingResponse(
             _prepend(first_chunk, iterator),
             media_type="text/event-stream",
