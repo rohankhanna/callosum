@@ -8,8 +8,13 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from codex_proxy.auth_vault import AuthVault
 from codex_proxy.backend import Backend
 from codex_proxy.backends.azure_openai import AzureOpenAIBackend
+from codex_proxy.backends.codex_auth_vault import (
+    DEFAULT_BASE_URL as CODEX_AUTH_VAULT_DEFAULT_BASE_URL,
+)
+from codex_proxy.backends.codex_auth_vault import CodexAuthVaultBackend
 from codex_proxy.backends.openai_api_key import OpenAIApiKeyBackend
 from codex_proxy.state import StateStore
 
@@ -50,6 +55,8 @@ class BackendConfig(BaseModel):
     endpoint: str | None = None
     api_version: str | None = None
     deployments: dict[str, str] = Field(default_factory=dict)
+    vault_path: Path | None = None
+    codex_base_url: str = CODEX_AUTH_VAULT_DEFAULT_BASE_URL
 
 
 class Config(BaseModel):
@@ -93,6 +100,19 @@ def build_backend(
             base_url=cfg.base_url,
             state_store=state_store,
         )
+    if cfg.type == "codex_auth_vault":
+        if cfg.vault_path is None:
+            raise ValueError(f"backend {cfg.id!r}: vault_path is required for codex_auth_vault")
+        if not cfg.models:
+            raise ValueError(f"backend {cfg.id!r}: models is required for codex_auth_vault")
+        vault = AuthVault(path=cfg.vault_path)
+        return CodexAuthVaultBackend(
+            id=cfg.id,
+            vault=vault,
+            advertised_models=frozenset(cfg.models),
+            base_url=cfg.codex_base_url,
+            state_store=state_store,
+        )
     if cfg.type == "azure_openai":
         if cfg.endpoint is None:
             raise ValueError(f"backend {cfg.id!r}: endpoint is required for azure_openai")
@@ -113,7 +133,7 @@ def build_backend(
             deployments=cfg.deployments,
             state_store=state_store,
         )
-    raise NotImplementedError(f"backend type {cfg.type!r} is not yet supported")
+    raise ValueError(f"backend {cfg.id!r}: unsupported type {cfg.type!r}")
 
 
 def build_backends(cfg: Config, *, env: Mapping[str, str] | None = None) -> list[Backend]:

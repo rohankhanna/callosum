@@ -154,10 +154,38 @@ def test_build_backend_rejects_codex_auth_vault_without_gate() -> None:
         build_backend(bc, policy=PolicyConfig(allow_consumer_auth_backends=False), env={})
 
 
-def test_build_backend_errors_on_codex_auth_vault_even_when_gated() -> None:
+def test_build_backend_errors_on_codex_auth_vault_without_vault_path() -> None:
     bc = BackendConfig(id="p", type="codex_auth_vault", models=["m"])
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(ValueError, match="vault_path"):
         build_backend(bc, policy=PolicyConfig(allow_consumer_auth_backends=True), env={})
+
+
+def test_build_backend_errors_on_codex_auth_vault_without_models(tmp_path: Path) -> None:
+    vault = tmp_path / "auth.json"
+    vault.write_text("{}")
+    bc = BackendConfig(id="p", type="codex_auth_vault", vault_path=vault)
+    with pytest.raises(ValueError, match="models"):
+        build_backend(bc, policy=PolicyConfig(allow_consumer_auth_backends=True), env={})
+
+
+async def test_build_backend_constructs_codex_auth_vault_when_gated(tmp_path: Path) -> None:
+    vault = tmp_path / "auth.json"
+    vault.write_text(
+        '{"tokens": {"access_token": "a", "refresh_token": "r", "account_id": "acct"}}'
+    )
+    bc = BackendConfig(
+        id="vault",
+        type="codex_auth_vault",
+        vault_path=vault,
+        models=["model-a0d0"],
+    )
+    backend = build_backend(bc, policy=PolicyConfig(allow_consumer_auth_backends=True), env={})
+    try:
+        assert backend.id == "vault"
+        assert backend.kind == "codex_auth_vault"
+        assert "model-a0d0" in backend.advertised_models
+    finally:
+        await backend.aclose()
 
 
 async def test_build_backends_iterates() -> None:

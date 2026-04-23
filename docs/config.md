@@ -28,7 +28,7 @@ allow_consumer_auth_backends = false
 ```
 
 - `default_mode` — session policy. Only `"stateless"` is wired in v1 (every request is routed independently; no server-side session state).
-- `allow_consumer_auth_backends` — gate for the `codex_auth_vault` backend type (not yet implemented). Must be `true` for that type to load.
+- `allow_consumer_auth_backends` — gate for the `codex_auth_vault` backend type. Must be `true` for that type to load. See the ToS note on that backend below before enabling.
 
 ### `[state]`
 
@@ -78,6 +78,30 @@ deployments = { "model-a0f5" = "model-a0f5-prod", "model-a0f5-mini" = "model-a0f
 - `endpoint` — required. Your Azure OpenAI resource base URL.
 - `api_version` — required. Azure API version.
 - `deployments` — required. Map from model name (as clients request it) to Azure deployment name. The keys become the advertised model list for this backend.
+
+#### `codex_auth_vault`
+
+For Codex/ChatGPT consumer-plan credentials stored as `auth.json` (the format the Codex CLI's login flow writes). The backend reads tokens from disk, refreshes via OAuth when the access token nears expiry, and hits the ChatGPT backend Responses API on your behalf. Chat-completions requests are translated to the Responses API shape and back.
+
+Gated behind `policy.allow_consumer_auth_backends = true`. Do not enable unless you have read OpenAI's consumer terms and decided you're comfortable with programmatic rotation across your own seats.
+
+```toml
+[policy]
+allow_consumer_auth_backends = true
+
+[[backends]]
+id = "codex-account-a"
+type = "codex_auth_vault"
+vault_path = "/home/you/.local/state/codex-proxy/vaults/account-a/auth.json"
+models = ["model-a0d0"]
+codex_base_url = "https://chatgpt.com/backend-api/codex"   # optional
+```
+
+- `vault_path` — required. Absolute path to the account's `auth.json`. The file must contain a `tokens` object with `access_token` and `refresh_token`; `account_id` and `id_token` are used when present. The file is rewritten in place after each successful refresh.
+- `models` — required. Advertised model list for this backend.
+- `codex_base_url` — optional. Defaults to the ChatGPT backend base. Override for a staging or on-prem endpoint.
+
+One backend entry per account. To rotate across multiple accounts, declare multiple `[[backends]]` entries with different `vault_path`s and the same advertised model.
 
 ## Selector behavior
 
