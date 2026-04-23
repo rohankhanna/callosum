@@ -27,6 +27,7 @@ class CodexAuthVaultBackend:
     """
 
     kind: BackendKind = "codex_auth_vault"
+    responses_supported: bool = True
 
     def __init__(
         self,
@@ -131,16 +132,63 @@ class CodexAuthVaultBackend:
         yield frame({}, finish_reason)
         yield b"data: [DONE]\n\n"
 
+    async def responses(self, body: dict[str, Any]) -> dict[str, Any]:
+        # Body is already in Responses-API shape; forward verbatim.
+        tokens = await self._vault.current()
+        headers = self._build_headers(tokens.access_token, tokens.account_id)
+        try:
+            response = await self._client.post(
+                f"{self._base_url}/responses",
+                json=body,
+                headers=headers,
+            )
+        except httpx.HTTPError as exc:
+            raise BackendError(classification="transient", message=str(exc)) from exc
+        if response.status_code >= 400:
+            err = error_from_response(response)
+            self._apply_error_to_usage(err)
+            raise err
+        return cast(dict[str, Any], response.json())
+
+    async def responses_stream(self, body: dict[str, Any]) -> AsyncIterator[bytes]:
+        tokens = await self._vault.current()
+        headers = self._build_headers(
+            tokens.access_token, tokens.account_id, accept_event_stream=True
+        )
+        try:
+            stream_ctx = self._client.stream(
+                "POST",
+                f"{self._base_url}/responses",
+                json=body,
+                headers=headers,
+            )
+            async with stream_ctx as response:
+                if response.status_code >= 400:
+                    await response.aread()
+                    err = error_from_response(response)
+                    self._apply_error_to_usage(err)
+                    raise err
+                async for chunk in response.aiter_bytes():
+                    yield chunk
+        except httpx.HTTPError as exc:
+            raise BackendError(classification="transient", message=str(exc)) from exc
+
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()
         await self._vault.aclose()
 
-    def _build_headers(self, access_token: str, account_id: str | None) -> dict[str, str]:
+    def _build_headers(
+        self,
+        access_token: str,
+        account_id: str | None,
+        *,
+        accept_event_stream: bool = False,
+    ) -> dict[str, str]:
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
-            "Accept": "application/json",
+            "Accept": "text/event-stream" if accept_event_stream else "application/json",
             "OpenAI-Beta": RESPONSES_BETA_HEADER_VALUE,
             "originator": "codex_cli_rs",
         }

@@ -21,10 +21,14 @@ class InMemoryFakeBackend:
         canned_response: dict[str, Any] | None = None,
         canned_stream_chunks: Sequence[bytes] | None = None,
         canned_error: BackendError | None = None,
+        responses_supported: bool = True,
+        canned_responses_response: dict[str, Any] | None = None,
+        canned_responses_stream_chunks: Sequence[bytes] | None = None,
     ) -> None:
         self.id = id
         self.kind: BackendKind = kind
         self.advertised_models = advertised_models
+        self.responses_supported = responses_supported
         self._health = health if health is not None else HealthStatus(available=True, reason="ok")
         self._usage = (
             usage
@@ -39,6 +43,8 @@ class InMemoryFakeBackend:
         self._canned_response = canned_response
         self._canned_stream_chunks = canned_stream_chunks
         self._canned_error = canned_error
+        self._canned_responses_response = canned_responses_response
+        self._canned_responses_stream_chunks = canned_responses_stream_chunks
 
     async def health(self) -> HealthStatus:
         return self._health
@@ -74,6 +80,37 @@ class InMemoryFakeBackend:
             chunks = (
                 f'data: {{"id":"fake-{self.id}","model":"{model}",'
                 f'"choices":[{{"delta":{{"content":"fake"}}}}]}}\n\n'.encode(),
+                b"data: [DONE]\n\n",
+            )
+        for chunk in chunks:
+            yield chunk
+
+    async def responses(self, body: dict[str, Any]) -> dict[str, Any]:
+        if self._canned_error is not None:
+            raise self._canned_error
+        if self._canned_responses_response is not None:
+            return self._canned_responses_response
+        model = body.get("model", "unknown")
+        return {
+            "id": f"resp-{self.id}",
+            "object": "response",
+            "model": model,
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": f"fake responses from {self.id}"}],
+                }
+            ],
+        }
+
+    async def responses_stream(self, body: dict[str, Any]) -> AsyncIterator[bytes]:
+        if self._canned_error is not None:
+            raise self._canned_error
+        chunks = self._canned_responses_stream_chunks
+        if chunks is None:
+            chunks = (
+                f'data: {{"type":"response.created","id":"resp-{self.id}"}}\n\n'.encode(),
                 b"data: [DONE]\n\n",
             )
         for chunk in chunks:

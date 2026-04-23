@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from typing import Any, Literal
 
@@ -16,6 +16,9 @@ from codex_proxy.session import SessionRegistry
 SessionMode = Literal["stateless", "sticky", "sticky_replay"]
 
 SESSION_HEADER = "x-codex-session-id"
+
+NonstreamCall = Callable[[Backend, dict[str, Any]], Awaitable[dict[str, Any]]]
+StreamCall = Callable[[Backend, dict[str, Any]], AsyncIterator[bytes]]
 
 _EXHAUSTED_STATUS: dict[ErrorClass, int] = {
     "auth_invalid": 502,
@@ -77,6 +80,7 @@ def create_app(
                     "id": backend.id,
                     "kind": backend.kind,
                     "advertised_models": sorted(backend.advertised_models),
+                    "responses_supported": backend.responses_supported,
                     "health": {
                         "available": h.available,
                         "reason": h.reason,
@@ -114,9 +118,7 @@ def create_app(
 
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
-        model = body.get("model")
-        if not isinstance(model, str):
-            raise HTTPException(status_code=400, detail="'model' must be a string")
+        model = _require_model(body)
         pinned = pin_state.get()
         active = _active_pool(backends_list, pinned)
         session_id = _session_id_from_request(request, mode=session_mode, pinned=pinned)
@@ -129,6 +131,7 @@ def create_app(
                 preferred_id=preferred_id,
                 session_id=session_id,
                 session_registry=session_registry,
+                call=lambda b, payload: b.chat_completions_stream(payload),
             )
         return await _dispatch_nonstream(
             body,
@@ -137,9 +140,44 @@ def create_app(
             preferred_id=preferred_id,
             session_id=session_id,
             session_registry=session_registry,
+            call=lambda b, payload: b.chat_completions(payload),
+        )
+
+    @app.post("/v1/responses")
+    async def responses(request: Request, body: dict[str, Any]) -> Any:
+        model = _require_model(body)
+        pinned = pin_state.get()
+        active = [b for b in _active_pool(backends_list, pinned) if b.responses_supported]
+        session_id = _session_id_from_request(request, mode=session_mode, pinned=pinned)
+        preferred_id = session_registry.get(session_id) if session_id is not None else None
+        if body.get("stream") is True:
+            return await _dispatch_stream(
+                body,
+                model=model,
+                backends_list=active,
+                preferred_id=preferred_id,
+                session_id=session_id,
+                session_registry=session_registry,
+                call=lambda b, payload: b.responses_stream(payload),
+            )
+        return await _dispatch_nonstream(
+            body,
+            model=model,
+            backends_list=active,
+            preferred_id=preferred_id,
+            session_id=session_id,
+            session_registry=session_registry,
+            call=lambda b, payload: b.responses(payload),
         )
 
     return app
+
+
+def _require_model(body: dict[str, Any]) -> str:
+    model = body.get("model")
+    if not isinstance(model, str):
+        raise HTTPException(status_code=400, detail="'model' must be a string")
+    return model
 
 
 def _active_pool(backends_list: Sequence[Backend], pinned: str | None) -> Sequence[Backend]:
@@ -176,6 +214,7 @@ async def _dispatch_nonstream(
     preferred_id: str | None,
     session_id: str | None,
     session_registry: SessionRegistry,
+    call: NonstreamCall,
 ) -> dict[str, Any]:
     excluded: set[str] = set()
     last_error: BackendError | None = None
@@ -189,7 +228,7 @@ async def _dispatch_nonstream(
         if backend is None:
             break
         try:
-            result = await backend.chat_completions(body)
+            result = await call(backend, body)
         except BackendError as exc:
             last_error = exc
             if exc.classification not in RETRYABLE:
@@ -209,6 +248,7 @@ async def _dispatch_stream(
     preferred_id: str | None,
     session_id: str | None,
     session_registry: SessionRegistry,
+    call: StreamCall,
 ) -> StreamingResponse:
     excluded: set[str] = set()
     last_error: BackendError | None = None
@@ -221,7 +261,7 @@ async def _dispatch_stream(
         )
         if backend is None:
             break
-        iterator = backend.chat_completions_stream(body)
+        iterator = call(backend, body)
         try:
             first_chunk = await iterator.__anext__()
         except StopAsyncIteration:

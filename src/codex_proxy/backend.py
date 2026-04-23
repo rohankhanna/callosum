@@ -27,6 +27,10 @@ class Backend(Protocol):
     id: str
     kind: BackendKind
     advertised_models: frozenset[str]
+    # True when this backend speaks the OpenAI Responses API natively. The
+    # /v1/responses route filters the pool by this flag before ranking so it
+    # never picks a backend that cannot serve the request.
+    responses_supported: bool
 
     async def health(self) -> HealthStatus: ...
 
@@ -35,5 +39,9 @@ class Backend(Protocol):
     async def chat_completions(self, body: dict[str, Any]) -> dict[str, Any]: ...
 
     def chat_completions_stream(self, body: dict[str, Any]) -> AsyncIterator[bytes]: ...
+
+    async def responses(self, body: dict[str, Any]) -> dict[str, Any]: ...
+
+    def responses_stream(self, body: dict[str, Any]) -> AsyncIterator[bytes]: ...
 
     async def aclose(self) -> None: ...

@@ -16,6 +16,7 @@ class OpenAIApiKeyBackend:
     """Forwards requests to an OpenAI-compatible HTTP endpoint using a bearer token."""
 
     kind: BackendKind = "openai_api_key"
+    responses_supported: bool = True
 
     def __init__(
         self,
@@ -74,6 +75,40 @@ class OpenAIApiKeyBackend:
             stream_ctx = self._client.stream(
                 "POST",
                 f"{self._base_url}/chat/completions",
+                json=body,
+                headers={"Authorization": f"Bearer {self._api_key}"},
+            )
+            async with stream_ctx as response:
+                if response.status_code >= 400:
+                    await response.aread()
+                    err = error_from_response(response)
+                    self._apply_error_to_usage(err)
+                    raise err
+                async for chunk in response.aiter_bytes():
+                    yield chunk
+        except httpx.HTTPError as exc:
+            raise BackendError(classification="transient", message=str(exc)) from exc
+
+    async def responses(self, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            response = await self._client.post(
+                f"{self._base_url}/responses",
+                json=body,
+                headers={"Authorization": f"Bearer {self._api_key}"},
+            )
+        except httpx.HTTPError as exc:
+            raise BackendError(classification="transient", message=str(exc)) from exc
+        if response.status_code >= 400:
+            err = error_from_response(response)
+            self._apply_error_to_usage(err)
+            raise err
+        return cast(dict[str, Any], response.json())
+
+    async def responses_stream(self, body: dict[str, Any]) -> AsyncIterator[bytes]:
+        try:
+            stream_ctx = self._client.stream(
+                "POST",
+                f"{self._base_url}/responses",
                 json=body,
                 headers={"Authorization": f"Bearer {self._api_key}"},
             )

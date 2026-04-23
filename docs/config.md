@@ -133,6 +133,25 @@ Rotation means: exclude the failing backend from this request and re-run the sel
 
 Set `"stream": true` in the request body and the proxy returns `text/event-stream`. Upstream SSE chunks are forwarded byte-for-byte. Errors before the first chunk still trigger rotation; errors mid-stream cannot be retried and surface to the client.
 
+## Endpoints
+
+| Route                    | Request shape             | Backends considered                       |
+| ------------------------ | ------------------------- | ----------------------------------------- |
+| `POST /v1/chat/completions` | OpenAI Chat Completions | any backend that advertises the model     |
+| `POST /v1/responses`       | OpenAI Responses API    | only backends with native Responses support |
+
+Per-backend Responses support:
+
+| Backend type        | `responses_supported` | Notes |
+| ------------------- | --------------------- | ----- |
+| `openai_api_key`    | yes                   | Body is forwarded to `{base_url}/responses`. |
+| `codex_auth_vault`  | yes                   | Body is forwarded verbatim to the ChatGPT Responses endpoint with vault headers. `/v1/chat/completions` on this backend goes through a translation layer; `/v1/responses` is the native, streaming-friendly path. |
+| `azure_openai`      | no                    | Azure's Responses API shape is not wired in this release. A request to `/v1/responses` that can only route to an Azure backend returns `503`. |
+
+The selector's viability and rotation logic apply identically to both routes: the pool for `/v1/responses` is filtered to `responses_supported=True` backends first, then the usual ranking runs.
+
+Sticky bindings are shared across routes. A session id bound on `/v1/chat/completions` is honored on `/v1/responses` and vice versa, so a client that mixes the two stays on one backend per session.
+
 ## Pinning
 
 Use `/control/pin` to force routing to a specific backend id. While a pin is set, the selector considers only that backend — no fallback — so upstream errors surface directly to the client. `/control/unpin` clears the pin.

@@ -146,3 +146,27 @@ async def test_stream_yields_upstream_bytes() -> None:
         assert "api-version=2024-10-01-preview" in str(captured["url"])
     finally:
         await backend.aclose()
+
+
+async def test_responses_not_supported_raises_without_network() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("azure responses must not reach upstream")
+
+    backend = AzureOpenAIBackend(
+        id="azure",
+        endpoint="https://example.openai.azure.com",
+        api_key="az-secret",
+        api_version="2024-10-01-preview",
+        deployments={"model-a0f5-mini": "model-a0f5-mini-prod"},
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        assert backend.responses_supported is False
+        with pytest.raises(BackendError) as excinfo:
+            await backend.responses({"model": "model-a0f5-mini", "input": []})
+        assert excinfo.value.classification == "unknown_model"
+        with pytest.raises(BackendError):
+            async for _ in backend.responses_stream({"model": "model-a0f5-mini", "input": []}):
+                pass
+    finally:
+        await backend.aclose()

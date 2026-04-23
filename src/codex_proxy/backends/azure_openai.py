@@ -16,6 +16,7 @@ class AzureOpenAIBackend:
     """Forwards requests to an Azure OpenAI resource using api-key auth and deployment URLs."""
 
     kind: BackendKind = "azure_openai"
+    responses_supported: bool = False
 
     def __init__(
         self,
@@ -85,6 +86,22 @@ class AzureOpenAIBackend:
                     yield chunk
         except httpx.HTTPError as exc:
             raise BackendError(classification="transient", message=str(exc)) from exc
+
+    async def responses(self, body: dict[str, Any]) -> dict[str, Any]:
+        raise BackendError(
+            classification="unknown_model",
+            status_code=404,
+            message=f"azure_openai backend {self.id!r} does not serve the Responses API",
+        )
+
+    async def responses_stream(self, body: dict[str, Any]) -> AsyncIterator[bytes]:
+        raise BackendError(
+            classification="unknown_model",
+            status_code=404,
+            message=f"azure_openai backend {self.id!r} does not serve the Responses API",
+        )
+        if False:
+            yield b""  # pragma: no cover
 
     async def aclose(self) -> None:
         if self._owns_client:

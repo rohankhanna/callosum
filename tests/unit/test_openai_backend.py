@@ -191,3 +191,46 @@ async def test_health_and_usage_return_defaults() -> None:
         assert not usage.weekly_exhausted
     finally:
         await backend.aclose()
+
+
+async def test_responses_forwards_body_to_responses_endpoint() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["auth"] = request.headers.get("Authorization")
+        return httpx.Response(200, json={"id": "resp-1", "object": "response"})
+
+    backend = OpenAIApiKeyBackend(
+        id="test",
+        api_key="sk-test",
+        advertised_models=frozenset({"model-a0f5-mini"}),
+        base_url="https://api.openai.example.com/v1",
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        result = await backend.responses({"model": "model-a0f5-mini", "input": []})
+        assert captured["url"] == "https://api.openai.example.com/v1/responses"
+        assert captured["auth"] == "Bearer sk-test"
+        assert result["id"] == "resp-1"
+    finally:
+        await backend.aclose()
+
+
+async def test_responses_stream_passes_sse_chunks_through() -> None:
+    sse_body = b'data: {"type":"response.created"}\n\ndata: [DONE]\n\n'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=sse_body)
+
+    backend = OpenAIApiKeyBackend(
+        id="test",
+        api_key="sk-test",
+        advertised_models=frozenset({"model-a0f5-mini"}),
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        chunks = [c async for c in backend.responses_stream({"model": "model-a0f5-mini", "input": []})]
+        assert b"".join(chunks) == sse_body
+    finally:
+        await backend.aclose()
