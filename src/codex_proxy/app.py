@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 
 from codex_proxy import __version__
 from codex_proxy.backend import Backend
@@ -29,13 +30,18 @@ def create_app(*, backends: Sequence[Backend] = ()) -> FastAPI:
         return {"status": "ok", "version": __version__}
 
     @app.post("/v1/chat/completions")
-    async def chat_completions(body: dict[str, Any]) -> dict[str, Any]:
+    async def chat_completions(body: dict[str, Any]) -> Any:
         model = body.get("model")
         if not isinstance(model, str):
             raise HTTPException(status_code=400, detail="'model' must be a string")
         backend = await select(backends_list, model=model)
         if backend is None:
             raise HTTPException(status_code=503, detail=f"no viable backend for model {model!r}")
+        if body.get("stream") is True:
+            return StreamingResponse(
+                backend.chat_completions_stream(body),
+                media_type="text/event-stream",
+            )
         return await backend.chat_completions(body)
 
     return app

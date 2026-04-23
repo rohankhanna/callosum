@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 from codex_proxy.backend import BackendKind, HealthStatus, UsageSnapshot
@@ -17,6 +18,7 @@ class InMemoryFakeBackend:
         health: HealthStatus | None = None,
         usage: UsageSnapshot | None = None,
         canned_response: dict[str, Any] | None = None,
+        canned_stream_chunks: Sequence[bytes] | None = None,
     ) -> None:
         self.id = id
         self.kind: BackendKind = kind
@@ -33,6 +35,7 @@ class InMemoryFakeBackend:
             )
         )
         self._canned_response = canned_response
+        self._canned_stream_chunks = canned_stream_chunks
 
     async def health(self) -> HealthStatus:
         return self._health
@@ -56,6 +59,18 @@ class InMemoryFakeBackend:
                 }
             ],
         }
+
+    async def chat_completions_stream(self, body: dict[str, Any]) -> AsyncIterator[bytes]:
+        chunks = self._canned_stream_chunks
+        if chunks is None:
+            model = body.get("model", "unknown")
+            chunks = (
+                f'data: {{"id":"fake-{self.id}","model":"{model}",'
+                f'"choices":[{{"delta":{{"content":"fake"}}}}]}}\n\n'.encode(),
+                b"data: [DONE]\n\n",
+            )
+        for chunk in chunks:
+            yield chunk
 
     async def aclose(self) -> None:
         return None

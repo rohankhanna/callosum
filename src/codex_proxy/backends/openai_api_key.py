@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import AsyncIterator
 from typing import Any, cast
 
 import httpx
@@ -54,6 +55,17 @@ class OpenAIApiKeyBackend:
         )
         response.raise_for_status()
         return cast(dict[str, Any], response.json())
+
+    async def chat_completions_stream(self, body: dict[str, Any]) -> AsyncIterator[bytes]:
+        async with self._client.stream(
+            "POST",
+            f"{self._base_url}/chat/completions",
+            json=body,
+            headers={"Authorization": f"Bearer {self._api_key}"},
+        ) as response:
+            response.raise_for_status()
+            async for chunk in response.aiter_bytes():
+                yield chunk
 
     async def aclose(self) -> None:
         if self._owns_client:

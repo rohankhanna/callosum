@@ -47,6 +47,64 @@ def test_chat_completions_rejects_missing_model() -> None:
     assert response.status_code == 400
 
 
+def test_chat_completions_streaming_routes_through_fake_backend() -> None:
+    chunks = (b'data: {"id":"1"}\n\n', b"data: [DONE]\n\n")
+    fake = InMemoryFakeBackend(
+        id="fake",
+        advertised_models=frozenset({"model-a0f5-mini"}),
+        canned_stream_chunks=chunks,
+    )
+    with (
+        TestClient(create_app(backends=[fake])) as client,
+        client.stream(
+            "POST",
+            "/v1/chat/completions",
+            json={
+                "model": "model-a0f5-mini",
+                "stream": True,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        ) as response,
+    ):
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        body = b"".join(response.iter_bytes())
+    assert body == b"".join(chunks)
+
+
+def test_chat_completions_streaming_end_to_end_with_openai_backend_and_mock_upstream() -> None:
+    stream_body = b'data: {"id":"c1"}\n\ndata: [DONE]\n\n'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            headers={"content-type": "text/event-stream"},
+            content=stream_body,
+        )
+
+    backend = OpenAIApiKeyBackend(
+        id="primary",
+        api_key="sk-test",
+        advertised_models=frozenset({"model-a0f5-mini"}),
+        transport=httpx.MockTransport(handler),
+    )
+    with (
+        TestClient(create_app(backends=[backend])) as client,
+        client.stream(
+            "POST",
+            "/v1/chat/completions",
+            json={
+                "model": "model-a0f5-mini",
+                "stream": True,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        ) as response,
+    ):
+        assert response.status_code == 200
+        body = b"".join(response.iter_bytes())
+    assert body == stream_body
+
+
 def test_chat_completions_end_to_end_with_openai_backend_and_mock_upstream() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

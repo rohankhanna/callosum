@@ -64,6 +64,51 @@ async def test_chat_completions_raises_on_upstream_error() -> None:
         await backend.aclose()
 
 
+async def test_chat_completions_stream_yields_upstream_bytes() -> None:
+    stream_body = b'data: {"id":"1"}\n\ndata: {"id":"2"}\n\ndata: [DONE]\n\n'
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["auth"] = request.headers.get("Authorization")
+        return httpx.Response(
+            status_code=200,
+            headers={"content-type": "text/event-stream"},
+            content=stream_body,
+        )
+
+    backend = OpenAIApiKeyBackend(
+        id="test",
+        api_key="sk-test",
+        advertised_models=frozenset({"model-a0f5-mini"}),
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        chunks = [c async for c in backend.chat_completions_stream({"model": "model-a0f5-mini"})]
+        assert b"".join(chunks) == stream_body
+        assert captured["auth"] == "Bearer sk-test"
+    finally:
+        await backend.aclose()
+
+
+async def test_chat_completions_stream_raises_on_upstream_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code=429, json={"error": {"message": "rate limit"}})
+
+    backend = OpenAIApiKeyBackend(
+        id="test",
+        api_key="sk-test",
+        advertised_models=frozenset({"model-a0f5-mini"}),
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        with pytest.raises(httpx.HTTPStatusError):
+            async for _ in backend.chat_completions_stream({"model": "model-a0f5-mini"}):
+                pass
+    finally:
+        await backend.aclose()
+
+
 async def test_health_and_usage_return_defaults() -> None:
     backend = OpenAIApiKeyBackend(
         id="test",

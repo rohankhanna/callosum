@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
@@ -32,5 +33,7 @@ class Backend(Protocol):
     async def usage_snapshot(self) -> UsageSnapshot: ...
 
     async def chat_completions(self, body: dict[str, Any]) -> dict[str, Any]: ...
+
+    def chat_completions_stream(self, body: dict[str, Any]) -> AsyncIterator[bytes]: ...
 
     async def aclose(self) -> None: ...
