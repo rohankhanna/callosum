@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import httpx
 import pytest
 
+from codex_proxy.backend import UsageSnapshot
 from codex_proxy.backends.openai_api_key import OpenAIApiKeyBackend
 from codex_proxy.errors import BackendError
+from codex_proxy.state import StateStore
 
 
 async def test_chat_completions_forwards_body_and_returns_response() -> None:
@@ -115,6 +119,59 @@ async def test_chat_completions_stream_raises_classified_backend_error() -> None
                 pass
         assert excinfo.value.classification == "auth_invalid"
         assert excinfo.value.status_code == 401
+    finally:
+        await backend.aclose()
+
+
+async def test_rate_limited_response_records_cooldown(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=429,
+            headers={"retry-after": "7"},
+            json={"error": {"message": "rate"}},
+        )
+
+    store = StateStore(tmp_path)
+    backend = OpenAIApiKeyBackend(
+        id="test",
+        api_key="sk-test",
+        advertised_models=frozenset({"model-a0f5-mini"}),
+        transport=httpx.MockTransport(handler),
+        state_store=store,
+    )
+    try:
+        with pytest.raises(BackendError):
+            await backend.chat_completions({"model": "model-a0f5-mini"})
+        usage = await backend.usage_snapshot()
+        assert usage.cooldown_until_ts is not None
+        persisted = store.load_usage("test")
+        assert persisted is not None
+        assert persisted.cooldown_until_ts == usage.cooldown_until_ts
+    finally:
+        await backend.aclose()
+
+
+async def test_state_store_preloads_usage_on_construction(tmp_path: Path) -> None:
+    store = StateStore(tmp_path)
+    store.save_usage(
+        "test",
+        UsageSnapshot(
+            remaining_fraction=0.25,
+            cooldown_until_ts=9999.0,
+            weekly_exhausted=False,
+            probed_at_ts=1.0,
+        ),
+    )
+    backend = OpenAIApiKeyBackend(
+        id="test",
+        api_key="sk-test",
+        advertised_models=frozenset({"model-a0f5-mini"}),
+        state_store=store,
+    )
+    try:
+        usage = await backend.usage_snapshot()
+        assert usage.cooldown_until_ts == 9999.0
+        assert usage.remaining_fraction == 0.25
     finally:
         await backend.aclose()
 

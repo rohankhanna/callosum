@@ -8,6 +8,9 @@ import httpx
 
 from codex_proxy.backend import BackendKind, HealthStatus, UsageSnapshot
 from codex_proxy.errors import BackendError, classify_http_status
+from codex_proxy.state import StateStore
+
+_DEFAULT_COOLDOWN_S = 60.0
 
 
 class OpenAIApiKeyBackend:
@@ -25,6 +28,7 @@ class OpenAIApiKeyBackend:
         client: httpx.AsyncClient | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         timeout_s: float = 60.0,
+        state_store: StateStore | None = None,
     ) -> None:
         self.id = id
         self.advertised_models = advertised_models
@@ -36,17 +40,20 @@ class OpenAIApiKeyBackend:
         else:
             self._client = httpx.AsyncClient(transport=transport, timeout=timeout_s)
             self._owns_client = True
-
-    async def health(self) -> HealthStatus:
-        return HealthStatus(available=True, reason="ok")
-
-    async def usage_snapshot(self) -> UsageSnapshot:
-        return UsageSnapshot(
+        self._state_store = state_store
+        loaded = state_store.load_usage(id) if state_store is not None else None
+        self._usage = loaded or UsageSnapshot(
             remaining_fraction=None,
             cooldown_until_ts=None,
             weekly_exhausted=False,
             probed_at_ts=time.time(),
         )
+
+    async def health(self) -> HealthStatus:
+        return HealthStatus(available=True, reason="ok")
+
+    async def usage_snapshot(self) -> UsageSnapshot:
+        return self._usage
 
     async def chat_completions(self, body: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -58,7 +65,9 @@ class OpenAIApiKeyBackend:
         except httpx.HTTPError as exc:
             raise BackendError(classification="transient", message=str(exc)) from exc
         if response.status_code >= 400:
-            raise _error_from_response(response)
+            err = _error_from_response(response)
+            self._apply_error_to_usage(err)
+            raise err
         return cast(dict[str, Any], response.json())
 
     async def chat_completions_stream(self, body: dict[str, Any]) -> AsyncIterator[bytes]:
@@ -72,7 +81,9 @@ class OpenAIApiKeyBackend:
             async with stream_ctx as response:
                 if response.status_code >= 400:
                     await response.aread()
-                    raise _error_from_response(response)
+                    err = _error_from_response(response)
+                    self._apply_error_to_usage(err)
+                    raise err
                 async for chunk in response.aiter_bytes():
                     yield chunk
         except httpx.HTTPError as exc:
@@ -81,6 +92,20 @@ class OpenAIApiKeyBackend:
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()
+
+    def _apply_error_to_usage(self, err: BackendError) -> None:
+        if err.classification != "rate_limited":
+            return
+        now = time.time()
+        cooldown_until = now + (err.retry_after_s or _DEFAULT_COOLDOWN_S)
+        self._usage = UsageSnapshot(
+            remaining_fraction=self._usage.remaining_fraction,
+            cooldown_until_ts=cooldown_until,
+            weekly_exhausted=self._usage.weekly_exhausted,
+            probed_at_ts=now,
+        )
+        if self._state_store is not None:
+            self._state_store.save_usage(self.id, self._usage)
 
 
 def _error_from_response(response: httpx.Response) -> BackendError:

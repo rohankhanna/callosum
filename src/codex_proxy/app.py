@@ -38,6 +38,32 @@ def create_app(*, backends: Sequence[Backend] = ()) -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "ok", "version": __version__}
 
+    @app.get("/status")
+    async def status() -> dict[str, Any]:
+        entries: list[dict[str, Any]] = []
+        for backend in backends_list:
+            h = await backend.health()
+            u = await backend.usage_snapshot()
+            entries.append(
+                {
+                    "id": backend.id,
+                    "kind": backend.kind,
+                    "advertised_models": sorted(backend.advertised_models),
+                    "health": {
+                        "available": h.available,
+                        "reason": h.reason,
+                        "retry_after_s": h.retry_after_s,
+                    },
+                    "usage": {
+                        "remaining_fraction": u.remaining_fraction,
+                        "cooldown_until_ts": u.cooldown_until_ts,
+                        "weekly_exhausted": u.weekly_exhausted,
+                        "probed_at_ts": u.probed_at_ts,
+                    },
+                }
+            )
+        return {"backends": entries}
+
     @app.post("/v1/chat/completions")
     async def chat_completions(body: dict[str, Any]) -> Any:
         model = body.get("model")

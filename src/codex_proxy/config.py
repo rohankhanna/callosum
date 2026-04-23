@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from codex_proxy.backend import Backend
 from codex_proxy.backends.openai_api_key import OpenAIApiKeyBackend
+from codex_proxy.state import StateStore
 
 BackendType = Literal["openai_api_key", "azure_openai", "codex_auth_vault"]
 SessionMode = Literal["stateless", "sticky", "sticky_replay"]
@@ -31,6 +32,12 @@ class PolicyConfig(BaseModel):
     allow_consumer_auth_backends: bool = False
 
 
+class StateConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    dir: Path | None = None
+
+
 class BackendConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -46,6 +53,7 @@ class Config(BaseModel):
 
     server: ServerConfig = Field(default_factory=ServerConfig)
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
+    state: StateConfig = Field(default_factory=StateConfig)
     backends: list[BackendConfig] = Field(default_factory=list)
 
 
@@ -60,6 +68,7 @@ def build_backend(
     *,
     policy: PolicyConfig,
     env: Mapping[str, str] | None = None,
+    state_store: StateStore | None = None,
 ) -> Backend:
     resolved_env = env if env is not None else os.environ
     if cfg.type == "codex_auth_vault" and not policy.allow_consumer_auth_backends:
@@ -78,9 +87,14 @@ def build_backend(
             api_key=api_key,
             advertised_models=frozenset(cfg.models),
             base_url=cfg.base_url,
+            state_store=state_store,
         )
     raise NotImplementedError(f"backend type {cfg.type!r} is not yet supported")
 
 
 def build_backends(cfg: Config, *, env: Mapping[str, str] | None = None) -> list[Backend]:
-    return [build_backend(bc, policy=cfg.policy, env=env) for bc in cfg.backends]
+    state_store = StateStore(cfg.state.dir) if cfg.state.dir is not None else None
+    return [
+        build_backend(bc, policy=cfg.policy, env=env, state_store=state_store)
+        for bc in cfg.backends
+    ]

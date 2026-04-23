@@ -31,12 +31,32 @@ models = ["model-a0f5-mini"]
     assert cfg.server.port == 8765
     assert cfg.policy.default_mode == "stateless"
     assert cfg.policy.allow_consumer_auth_backends is False
+    assert cfg.state.dir is None
     assert len(cfg.backends) == 1
     bc = cfg.backends[0]
     assert bc.id == "primary"
     assert bc.type == "openai_api_key"
     assert bc.api_key_env == "OPENAI_API_KEY"
     assert bc.models == ["model-a0f5-mini"]
+
+
+def test_load_config_with_state_dir(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    path = tmp_path / "config.toml"
+    path.write_text(
+        f"""
+[state]
+dir = "{state_dir}"
+
+[[backends]]
+id = "primary"
+type = "openai_api_key"
+api_key_env = "OPENAI_API_KEY"
+models = ["model-a0f5-mini"]
+"""
+    )
+    cfg = load_config(path)
+    assert cfg.state.dir == state_dir
 
 
 def test_load_rejects_unknown_backend_type(tmp_path: Path) -> None:
