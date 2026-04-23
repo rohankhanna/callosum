@@ -21,8 +21,25 @@ _EXHAUSTED_STATUS: dict[ErrorClass, int] = {
 }
 
 
+class PinState:
+    """Process-wide backend pin. Thread-safety not needed under single-loop uvicorn."""
+
+    def __init__(self) -> None:
+        self._pinned: str | None = None
+
+    def get(self) -> str | None:
+        return self._pinned
+
+    def set(self, backend_id: str) -> None:
+        self._pinned = backend_id
+
+    def clear(self) -> None:
+        self._pinned = None
+
+
 def create_app(*, backends: Sequence[Backend] = ()) -> FastAPI:
     backends_list: list[Backend] = list(backends)
+    pin_state = PinState()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -62,18 +79,40 @@ def create_app(*, backends: Sequence[Backend] = ()) -> FastAPI:
                     },
                 }
             )
-        return {"backends": entries}
+        return {"backends": entries, "pinned": pin_state.get()}
+
+    @app.post("/control/pin")
+    async def control_pin(body: dict[str, Any]) -> dict[str, str | None]:
+        backend_id = body.get("backend_id")
+        if not isinstance(backend_id, str):
+            raise HTTPException(status_code=400, detail="'backend_id' must be a string")
+        if not any(b.id == backend_id for b in backends_list):
+            raise HTTPException(status_code=404, detail=f"backend {backend_id!r} not in pool")
+        pin_state.set(backend_id)
+        return {"pinned": backend_id}
+
+    @app.post("/control/unpin")
+    async def control_unpin() -> dict[str, str | None]:
+        pin_state.clear()
+        return {"pinned": None}
 
     @app.post("/v1/chat/completions")
     async def chat_completions(body: dict[str, Any]) -> Any:
         model = body.get("model")
         if not isinstance(model, str):
             raise HTTPException(status_code=400, detail="'model' must be a string")
+        active = _active_pool(backends_list, pin_state.get())
         if body.get("stream") is True:
-            return await _dispatch_stream(body, model=model, backends_list=backends_list)
-        return await _dispatch_nonstream(body, model=model, backends_list=backends_list)
+            return await _dispatch_stream(body, model=model, backends_list=active)
+        return await _dispatch_nonstream(body, model=model, backends_list=active)
 
     return app
+
+
+def _active_pool(backends_list: Sequence[Backend], pinned: str | None) -> Sequence[Backend]:
+    if pinned is None:
+        return backends_list
+    return [b for b in backends_list if b.id == pinned]
 
 
 async def _dispatch_nonstream(
