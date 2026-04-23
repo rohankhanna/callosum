@@ -7,6 +7,7 @@ from typing import Any, cast
 import httpx
 
 from codex_proxy.backend import BackendKind, HealthStatus, UsageSnapshot
+from codex_proxy.errors import BackendError, classify_http_status
 
 
 class OpenAIApiKeyBackend:
@@ -48,25 +49,52 @@ class OpenAIApiKeyBackend:
         )
 
     async def chat_completions(self, body: dict[str, Any]) -> dict[str, Any]:
-        response = await self._client.post(
-            f"{self._base_url}/chat/completions",
-            json=body,
-            headers={"Authorization": f"Bearer {self._api_key}"},
-        )
-        response.raise_for_status()
+        try:
+            response = await self._client.post(
+                f"{self._base_url}/chat/completions",
+                json=body,
+                headers={"Authorization": f"Bearer {self._api_key}"},
+            )
+        except httpx.HTTPError as exc:
+            raise BackendError(classification="transient", message=str(exc)) from exc
+        if response.status_code >= 400:
+            raise _error_from_response(response)
         return cast(dict[str, Any], response.json())
 
     async def chat_completions_stream(self, body: dict[str, Any]) -> AsyncIterator[bytes]:
-        async with self._client.stream(
-            "POST",
-            f"{self._base_url}/chat/completions",
-            json=body,
-            headers={"Authorization": f"Bearer {self._api_key}"},
-        ) as response:
-            response.raise_for_status()
-            async for chunk in response.aiter_bytes():
-                yield chunk
+        try:
+            stream_ctx = self._client.stream(
+                "POST",
+                f"{self._base_url}/chat/completions",
+                json=body,
+                headers={"Authorization": f"Bearer {self._api_key}"},
+            )
+            async with stream_ctx as response:
+                if response.status_code >= 400:
+                    await response.aread()
+                    raise _error_from_response(response)
+                async for chunk in response.aiter_bytes():
+                    yield chunk
+        except httpx.HTTPError as exc:
+            raise BackendError(classification="transient", message=str(exc)) from exc
 
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()
+
+
+def _error_from_response(response: httpx.Response) -> BackendError:
+    classification = classify_http_status(response.status_code)
+    retry_after = response.headers.get("retry-after")
+    retry_after_s: float | None = None
+    if retry_after is not None:
+        try:
+            retry_after_s = float(retry_after)
+        except ValueError:
+            retry_after_s = None
+    return BackendError(
+        classification=classification,
+        status_code=response.status_code,
+        retry_after_s=retry_after_s,
+        message=f"upstream {response.status_code}",
+    )

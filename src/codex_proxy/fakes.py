@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 from codex_proxy.backend import BackendKind, HealthStatus, UsageSnapshot
+from codex_proxy.errors import BackendError
 
 
 class InMemoryFakeBackend:
@@ -19,6 +20,7 @@ class InMemoryFakeBackend:
         usage: UsageSnapshot | None = None,
         canned_response: dict[str, Any] | None = None,
         canned_stream_chunks: Sequence[bytes] | None = None,
+        canned_error: BackendError | None = None,
     ) -> None:
         self.id = id
         self.kind: BackendKind = kind
@@ -36,6 +38,7 @@ class InMemoryFakeBackend:
         )
         self._canned_response = canned_response
         self._canned_stream_chunks = canned_stream_chunks
+        self._canned_error = canned_error
 
     async def health(self) -> HealthStatus:
         return self._health
@@ -44,6 +47,8 @@ class InMemoryFakeBackend:
         return self._usage
 
     async def chat_completions(self, body: dict[str, Any]) -> dict[str, Any]:
+        if self._canned_error is not None:
+            raise self._canned_error
         if self._canned_response is not None:
             return self._canned_response
         model = body.get("model", "unknown")
@@ -61,6 +66,8 @@ class InMemoryFakeBackend:
         }
 
     async def chat_completions_stream(self, body: dict[str, Any]) -> AsyncIterator[bytes]:
+        if self._canned_error is not None:
+            raise self._canned_error
         chunks = self._canned_stream_chunks
         if chunks is None:
             model = body.get("model", "unknown")

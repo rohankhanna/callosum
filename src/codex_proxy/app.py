@@ -9,7 +9,16 @@ from fastapi.responses import StreamingResponse
 
 from codex_proxy import __version__
 from codex_proxy.backend import Backend
+from codex_proxy.errors import RETRYABLE, BackendError, ErrorClass
 from codex_proxy.selector import select
+
+_EXHAUSTED_STATUS: dict[ErrorClass, int] = {
+    "auth_invalid": 502,
+    "unknown_model": 400,
+    "rate_limited": 429,
+    "transient": 502,
+    "client_error": 400,
+}
 
 
 def create_app(*, backends: Sequence[Backend] = ()) -> FastAPI:
@@ -34,14 +43,80 @@ def create_app(*, backends: Sequence[Backend] = ()) -> FastAPI:
         model = body.get("model")
         if not isinstance(model, str):
             raise HTTPException(status_code=400, detail="'model' must be a string")
-        backend = await select(backends_list, model=model)
-        if backend is None:
-            raise HTTPException(status_code=503, detail=f"no viable backend for model {model!r}")
         if body.get("stream") is True:
-            return StreamingResponse(
-                backend.chat_completions_stream(body),
-                media_type="text/event-stream",
-            )
-        return await backend.chat_completions(body)
+            return await _dispatch_stream(body, model=model, backends_list=backends_list)
+        return await _dispatch_nonstream(body, model=model, backends_list=backends_list)
 
     return app
+
+
+async def _dispatch_nonstream(
+    body: dict[str, Any], *, model: str, backends_list: Sequence[Backend]
+) -> dict[str, Any]:
+    excluded: set[str] = set()
+    last_error: BackendError | None = None
+    while True:
+        backend = await select(backends_list, model=model, excluded=frozenset(excluded))
+        if backend is None:
+            break
+        try:
+            return await backend.chat_completions(body)
+        except BackendError as exc:
+            last_error = exc
+            if exc.classification not in RETRYABLE:
+                raise _terminal_http(exc) from exc
+            excluded.add(backend.id)
+    raise _no_viable(model=model, last_error=last_error)
+
+
+async def _dispatch_stream(
+    body: dict[str, Any], *, model: str, backends_list: Sequence[Backend]
+) -> StreamingResponse:
+    excluded: set[str] = set()
+    last_error: BackendError | None = None
+    while True:
+        backend = await select(backends_list, model=model, excluded=frozenset(excluded))
+        if backend is None:
+            break
+        iterator = backend.chat_completions_stream(body)
+        try:
+            first_chunk = await iterator.__anext__()
+        except StopAsyncIteration:
+            return StreamingResponse(_empty_iter(), media_type="text/event-stream")
+        except BackendError as exc:
+            last_error = exc
+            if exc.classification not in RETRYABLE:
+                raise _terminal_http(exc) from exc
+            excluded.add(backend.id)
+            continue
+        return StreamingResponse(
+            _prepend(first_chunk, iterator),
+            media_type="text/event-stream",
+        )
+    raise _no_viable(model=model, last_error=last_error)
+
+
+async def _prepend(first: bytes, rest: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
+    yield first
+    async for chunk in rest:
+        yield chunk
+
+
+async def _empty_iter() -> AsyncIterator[bytes]:
+    if False:
+        yield b""
+
+
+def _terminal_http(exc: BackendError) -> HTTPException:
+    status = exc.status_code or _EXHAUSTED_STATUS.get(exc.classification, 500)
+    return HTTPException(status_code=status, detail=exc.message or exc.classification)
+
+
+def _no_viable(*, model: str, last_error: BackendError | None) -> HTTPException:
+    if last_error is None:
+        return HTTPException(status_code=503, detail=f"no viable backend for model {model!r}")
+    status = _EXHAUSTED_STATUS.get(last_error.classification, 502)
+    return HTTPException(
+        status_code=status,
+        detail=last_error.message or last_error.classification,
+    )

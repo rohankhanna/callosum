@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from codex_proxy.backends.openai_api_key import OpenAIApiKeyBackend
+from codex_proxy.errors import BackendError
 
 
 async def test_chat_completions_forwards_body_and_returns_response() -> None:
@@ -47,9 +48,13 @@ async def test_chat_completions_forwards_body_and_returns_response() -> None:
         await backend.aclose()
 
 
-async def test_chat_completions_raises_on_upstream_error() -> None:
+async def test_chat_completions_raises_classified_backend_error() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(status_code=429, json={"error": {"message": "rate limit"}})
+        return httpx.Response(
+            status_code=429,
+            headers={"retry-after": "5"},
+            json={"error": {"message": "rate limit"}},
+        )
 
     backend = OpenAIApiKeyBackend(
         id="test",
@@ -58,8 +63,11 @@ async def test_chat_completions_raises_on_upstream_error() -> None:
         transport=httpx.MockTransport(handler),
     )
     try:
-        with pytest.raises(httpx.HTTPStatusError):
+        with pytest.raises(BackendError) as excinfo:
             await backend.chat_completions({"model": "model-a0f5-mini"})
+        assert excinfo.value.classification == "rate_limited"
+        assert excinfo.value.status_code == 429
+        assert excinfo.value.retry_after_s == 5.0
     finally:
         await backend.aclose()
 
@@ -91,9 +99,9 @@ async def test_chat_completions_stream_yields_upstream_bytes() -> None:
         await backend.aclose()
 
 
-async def test_chat_completions_stream_raises_on_upstream_error() -> None:
+async def test_chat_completions_stream_raises_classified_backend_error() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(status_code=429, json={"error": {"message": "rate limit"}})
+        return httpx.Response(status_code=401, json={"error": {"message": "auth"}})
 
     backend = OpenAIApiKeyBackend(
         id="test",
@@ -102,9 +110,11 @@ async def test_chat_completions_stream_raises_on_upstream_error() -> None:
         transport=httpx.MockTransport(handler),
     )
     try:
-        with pytest.raises(httpx.HTTPStatusError):
+        with pytest.raises(BackendError) as excinfo:
             async for _ in backend.chat_completions_stream({"model": "model-a0f5-mini"}):
                 pass
+        assert excinfo.value.classification == "auth_invalid"
+        assert excinfo.value.status_code == 401
     finally:
         await backend.aclose()
 
