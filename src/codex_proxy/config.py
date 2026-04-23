@@ -9,6 +9,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from codex_proxy.backend import Backend
+from codex_proxy.backends.azure_openai import AzureOpenAIBackend
 from codex_proxy.backends.openai_api_key import OpenAIApiKeyBackend
 from codex_proxy.state import StateStore
 
@@ -46,6 +47,9 @@ class BackendConfig(BaseModel):
     api_key_env: str | None = None
     base_url: str = "https://api.openai.com/v1"
     models: list[str] = Field(default_factory=list)
+    endpoint: str | None = None
+    api_version: str | None = None
+    deployments: dict[str, str] = Field(default_factory=dict)
 
 
 class Config(BaseModel):
@@ -87,6 +91,26 @@ def build_backend(
             api_key=api_key,
             advertised_models=frozenset(cfg.models),
             base_url=cfg.base_url,
+            state_store=state_store,
+        )
+    if cfg.type == "azure_openai":
+        if cfg.endpoint is None:
+            raise ValueError(f"backend {cfg.id!r}: endpoint is required for azure_openai")
+        if cfg.api_version is None:
+            raise ValueError(f"backend {cfg.id!r}: api_version is required for azure_openai")
+        if not cfg.deployments:
+            raise ValueError(f"backend {cfg.id!r}: deployments is required for azure_openai")
+        if cfg.api_key_env is None:
+            raise ValueError(f"backend {cfg.id!r}: api_key_env is required for azure_openai")
+        api_key = resolved_env.get(cfg.api_key_env)
+        if not api_key:
+            raise ValueError(f"backend {cfg.id!r}: env var {cfg.api_key_env!r} is not set")
+        return AzureOpenAIBackend(
+            id=cfg.id,
+            endpoint=cfg.endpoint,
+            api_key=api_key,
+            api_version=cfg.api_version,
+            deployments=cfg.deployments,
             state_store=state_store,
         )
     raise NotImplementedError(f"backend type {cfg.type!r} is not yet supported")

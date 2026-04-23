@@ -94,6 +94,60 @@ def test_build_backend_requires_api_key_env_for_openai() -> None:
         build_backend(bc, policy=PolicyConfig(), env={})
 
 
+async def test_build_backend_constructs_azure_backend() -> None:
+    bc = BackendConfig(
+        id="azure-main",
+        type="azure_openai",
+        api_key_env="AZURE_KEY",
+        endpoint="https://example.openai.azure.com",
+        api_version="2024-10-01-preview",
+        deployments={"model-a0f5-mini": "model-a0f5-mini-prod"},
+    )
+    backend = build_backend(bc, policy=PolicyConfig(), env={"AZURE_KEY": "az-secret"})
+    try:
+        assert backend.id == "azure-main"
+        assert backend.kind == "azure_openai"
+        assert "model-a0f5-mini" in backend.advertised_models
+    finally:
+        await backend.aclose()
+
+
+def test_build_azure_backend_requires_endpoint() -> None:
+    bc = BackendConfig(
+        id="azure",
+        type="azure_openai",
+        api_key_env="K",
+        api_version="2024-10-01-preview",
+        deployments={"model-a0f5-mini": "model-a0f5-mini-prod"},
+    )
+    with pytest.raises(ValueError, match="endpoint"):
+        build_backend(bc, policy=PolicyConfig(), env={"K": "az"})
+
+
+def test_build_azure_backend_requires_api_version() -> None:
+    bc = BackendConfig(
+        id="azure",
+        type="azure_openai",
+        api_key_env="K",
+        endpoint="https://example.openai.azure.com",
+        deployments={"model-a0f5-mini": "model-a0f5-mini-prod"},
+    )
+    with pytest.raises(ValueError, match="api_version"):
+        build_backend(bc, policy=PolicyConfig(), env={"K": "az"})
+
+
+def test_build_azure_backend_requires_deployments() -> None:
+    bc = BackendConfig(
+        id="azure",
+        type="azure_openai",
+        api_key_env="K",
+        endpoint="https://example.openai.azure.com",
+        api_version="2024-10-01-preview",
+    )
+    with pytest.raises(ValueError, match="deployments"):
+        build_backend(bc, policy=PolicyConfig(), env={"K": "az"})
+
+
 def test_build_backend_rejects_codex_auth_vault_without_gate() -> None:
     bc = BackendConfig(id="p", type="codex_auth_vault", models=["m"])
     with pytest.raises(ValueError, match="consumer-auth"):
