@@ -17,26 +17,26 @@ def _usage(remaining: float) -> UsageSnapshot:
     )
 
 
-def test_sticky_mode_keeps_session_on_first_picked_backend() -> None:
+def test_header_opts_session_into_sticky_binding() -> None:
     # Equal ranking initially; alpha wins on id tiebreak.
     alpha = InMemoryFakeBackend(
         id="alpha",
-        advertised_models=frozenset({"model-a0f5-mini"}),
+        advertised_models=frozenset({"model-a0d0"}),
         usage=_usage(0.5),
     )
     beta = InMemoryFakeBackend(
         id="beta",
-        advertised_models=frozenset({"model-a0f5-mini"}),
+        advertised_models=frozenset({"model-a0d0"}),
         usage=_usage(0.5),
     )
-    with TestClient(create_app(backends=[alpha, beta], session_mode="sticky")) as client:
-        body = {"model": "model-a0f5-mini", "messages": [{"role": "user", "content": "hi"}]}
+    with TestClient(create_app(backends=[alpha, beta])) as client:
+        body = {"model": "model-a0d0", "messages": [{"role": "user", "content": "hi"}]}
         first = client.post("/v1/chat/completions", json=body, headers={"X-Codex-Session-Id": "s1"})
         assert first.status_code == 200
         assert first.json()["id"] == "fake-alpha"
 
-        # After the first bind, make beta the obvious default winner. Sticky
-        # should still keep s1 on alpha.
+        # After the first bind, make beta the obvious default winner. The
+        # session header keeps s1 pinned to alpha.
         beta.set_usage(_usage(0.99))
         alpha.set_usage(_usage(0.1))
 
@@ -46,58 +46,24 @@ def test_sticky_mode_keeps_session_on_first_picked_backend() -> None:
         assert second.status_code == 200
         assert second.json()["id"] == "fake-alpha"
 
-        # A different session id is a fresh selection and must reflect the
-        # current usage landscape, i.e. pick beta.
-        third = client.post("/v1/chat/completions", json=body, headers={"X-Codex-Session-Id": "s2"})
-        assert third.status_code == 200
-        assert third.json()["id"] == "fake-beta"
 
-
-def test_sticky_binding_migrates_when_bound_backend_fails() -> None:
+def test_no_header_reselects_fresh_each_request() -> None:
     alpha = InMemoryFakeBackend(
         id="alpha",
-        advertised_models=frozenset({"model-a0f5-mini"}),
-        canned_error=BackendError(
-            classification="rate_limited",
-            status_code=429,
-            message="alpha exhausted",
-        ),
-    )
-    beta = InMemoryFakeBackend(
-        id="beta",
-        advertised_models=frozenset({"model-a0f5-mini"}),
-    )
-    with TestClient(create_app(backends=[alpha, beta], session_mode="sticky")) as client:
-        body = {"model": "model-a0f5-mini", "messages": []}
-        response = client.post(
-            "/v1/chat/completions", json=body, headers={"X-Codex-Session-Id": "s1"}
-        )
-        assert response.status_code == 200
-        # alpha failed, rotation landed on beta, and the binding was updated.
-        assert response.json()["id"] == "fake-beta"
-
-        status = client.get("/status").json()
-        assert status["session_mode"] == "sticky"
-        assert status["sessions"] == {"s1": "beta"}
-
-
-def test_sticky_mode_without_session_header_behaves_like_stateless() -> None:
-    alpha = InMemoryFakeBackend(
-        id="alpha",
-        advertised_models=frozenset({"model-a0f5-mini"}),
+        advertised_models=frozenset({"model-a0d0"}),
         usage=_usage(0.5),
     )
     beta = InMemoryFakeBackend(
         id="beta",
-        advertised_models=frozenset({"model-a0f5-mini"}),
+        advertised_models=frozenset({"model-a0d0"}),
         usage=_usage(0.5),
     )
-    with TestClient(create_app(backends=[alpha, beta], session_mode="sticky")) as client:
-        body = {"model": "model-a0f5-mini", "messages": []}
+    with TestClient(create_app(backends=[alpha, beta])) as client:
+        body = {"model": "model-a0d0", "messages": []}
         first = client.post("/v1/chat/completions", json=body)
         assert first.json()["id"] == "fake-alpha"
 
-        # Swap rankings to prove the second request re-selects afresh.
+        # Swap rankings: a request without the header re-selects from scratch.
         beta.set_usage(_usage(0.99))
         alpha.set_usage(_usage(0.1))
 
@@ -108,46 +74,44 @@ def test_sticky_mode_without_session_header_behaves_like_stateless() -> None:
         assert status["sessions"] == {}
 
 
-def test_stateless_mode_ignores_session_header() -> None:
+def test_sticky_binding_migrates_when_bound_backend_fails() -> None:
     alpha = InMemoryFakeBackend(
         id="alpha",
-        advertised_models=frozenset({"model-a0f5-mini"}),
-        usage=_usage(0.5),
+        advertised_models=frozenset({"model-a0d0"}),
+        canned_error=BackendError(
+            classification="rate_limited",
+            status_code=429,
+            message="alpha exhausted",
+        ),
     )
     beta = InMemoryFakeBackend(
         id="beta",
-        advertised_models=frozenset({"model-a0f5-mini"}),
-        usage=_usage(0.5),
+        advertised_models=frozenset({"model-a0d0"}),
     )
-    with TestClient(create_app(backends=[alpha, beta], session_mode="stateless")) as client:
-        body = {"model": "model-a0f5-mini", "messages": []}
-        first = client.post("/v1/chat/completions", json=body, headers={"X-Codex-Session-Id": "s1"})
-        assert first.json()["id"] == "fake-alpha"
-
-        beta.set_usage(_usage(0.99))
-        alpha.set_usage(_usage(0.1))
-
-        second = client.post(
+    with TestClient(create_app(backends=[alpha, beta])) as client:
+        body = {"model": "model-a0d0", "messages": []}
+        response = client.post(
             "/v1/chat/completions", json=body, headers={"X-Codex-Session-Id": "s1"}
         )
-        assert second.json()["id"] == "fake-beta"
+        assert response.status_code == 200
+        # alpha failed, rotation landed on beta, and the binding was updated.
+        assert response.json()["id"] == "fake-beta"
 
         status = client.get("/status").json()
-        assert status["session_mode"] == "stateless"
-        assert status["sessions"] == {}
+        assert status["sessions"] == {"s1": "beta"}
 
 
-def test_pin_overrides_sticky_binding() -> None:
+def test_pin_overrides_session_binding() -> None:
     alpha = InMemoryFakeBackend(
         id="alpha",
-        advertised_models=frozenset({"model-a0f5-mini"}),
+        advertised_models=frozenset({"model-a0d0"}),
     )
     beta = InMemoryFakeBackend(
         id="beta",
-        advertised_models=frozenset({"model-a0f5-mini"}),
+        advertised_models=frozenset({"model-a0d0"}),
     )
-    with TestClient(create_app(backends=[alpha, beta], session_mode="sticky")) as client:
-        body = {"model": "model-a0f5-mini", "messages": []}
+    with TestClient(create_app(backends=[alpha, beta])) as client:
+        body = {"model": "model-a0d0", "messages": []}
         # Bind s1 to alpha (default tiebreak).
         client.post("/v1/chat/completions", json=body, headers={"X-Codex-Session-Id": "s1"})
 

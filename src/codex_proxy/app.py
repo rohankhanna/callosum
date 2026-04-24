@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -13,8 +13,8 @@ from codex_proxy.errors import RETRYABLE, BackendError, ErrorClass
 from codex_proxy.selector import select
 from codex_proxy.session import SessionRegistry
 
-SessionMode = Literal["stateless", "sticky", "sticky_replay"]
-
+# Clients opt into sticky routing by sending this header. When absent, every
+# request is a fresh selection. There is no server-side "session mode" knob.
 SESSION_HEADER = "x-codex-session-id"
 
 NonstreamCall = Callable[[Backend, dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -48,7 +48,6 @@ class PinState:
 def create_app(
     *,
     backends: Sequence[Backend] = (),
-    session_mode: SessionMode = "stateless",
     sessions: SessionRegistry | None = None,
 ) -> FastAPI:
     backends_list: list[Backend] = list(backends)
@@ -80,7 +79,6 @@ def create_app(
                     "id": backend.id,
                     "kind": backend.kind,
                     "advertised_models": sorted(backend.advertised_models),
-                    "responses_supported": backend.responses_supported,
                     "health": {
                         "available": h.available,
                         "reason": h.reason,
@@ -97,8 +95,7 @@ def create_app(
         return {
             "backends": entries,
             "pinned": pin_state.get(),
-            "session_mode": session_mode,
-            "sessions": session_registry.snapshot() if session_mode != "stateless" else {},
+            "sessions": session_registry.snapshot(),
         }
 
     @app.post("/control/pin")
@@ -118,59 +115,65 @@ def create_app(
 
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
-        model = _require_model(body)
-        pinned = pin_state.get()
-        active = _active_pool(backends_list, pinned)
-        session_id = _session_id_from_request(request, mode=session_mode, pinned=pinned)
-        preferred_id = session_registry.get(session_id) if session_id is not None else None
-        if body.get("stream") is True:
-            return await _dispatch_stream(
-                body,
-                model=model,
-                backends_list=active,
-                preferred_id=preferred_id,
-                session_id=session_id,
-                session_registry=session_registry,
-                call=lambda b, payload: b.chat_completions_stream(payload),
-            )
-        return await _dispatch_nonstream(
+        return await _dispatch_route(
             body,
-            model=model,
-            backends_list=active,
-            preferred_id=preferred_id,
-            session_id=session_id,
+            request=request,
+            backends_list=backends_list,
+            pin_state=pin_state,
             session_registry=session_registry,
-            call=lambda b, payload: b.chat_completions(payload),
+            nonstream=lambda b, payload: b.chat_completions(payload),
+            stream=lambda b, payload: b.chat_completions_stream(payload),
         )
 
     @app.post("/v1/responses")
     async def responses(request: Request, body: dict[str, Any]) -> Any:
-        model = _require_model(body)
-        pinned = pin_state.get()
-        active = [b for b in _active_pool(backends_list, pinned) if b.responses_supported]
-        session_id = _session_id_from_request(request, mode=session_mode, pinned=pinned)
-        preferred_id = session_registry.get(session_id) if session_id is not None else None
-        if body.get("stream") is True:
-            return await _dispatch_stream(
-                body,
-                model=model,
-                backends_list=active,
-                preferred_id=preferred_id,
-                session_id=session_id,
-                session_registry=session_registry,
-                call=lambda b, payload: b.responses_stream(payload),
-            )
-        return await _dispatch_nonstream(
+        return await _dispatch_route(
+            body,
+            request=request,
+            backends_list=backends_list,
+            pin_state=pin_state,
+            session_registry=session_registry,
+            nonstream=lambda b, payload: b.responses(payload),
+            stream=lambda b, payload: b.responses_stream(payload),
+        )
+
+    return app
+
+
+async def _dispatch_route(
+    body: dict[str, Any],
+    *,
+    request: Request,
+    backends_list: Sequence[Backend],
+    pin_state: PinState,
+    session_registry: SessionRegistry,
+    nonstream: NonstreamCall,
+    stream: StreamCall,
+) -> Any:
+    model = _require_model(body)
+    pinned = pin_state.get()
+    active = _active_pool(backends_list, pinned)
+    session_id = _session_id_from_request(request, pinned=pinned)
+    preferred_id = session_registry.get(session_id) if session_id is not None else None
+    if body.get("stream") is True:
+        return await _dispatch_stream(
             body,
             model=model,
             backends_list=active,
             preferred_id=preferred_id,
             session_id=session_id,
             session_registry=session_registry,
-            call=lambda b, payload: b.responses(payload),
+            call=stream,
         )
-
-    return app
+    return await _dispatch_nonstream(
+        body,
+        model=model,
+        backends_list=active,
+        preferred_id=preferred_id,
+        session_id=session_id,
+        session_registry=session_registry,
+        call=nonstream,
+    )
 
 
 def _require_model(body: dict[str, Any]) -> str:
@@ -186,12 +189,9 @@ def _active_pool(backends_list: Sequence[Backend], pinned: str | None) -> Sequen
     return [b for b in backends_list if b.id == pinned]
 
 
-def _session_id_from_request(
-    request: Request, *, mode: SessionMode, pinned: str | None
-) -> str | None:
-    # Sticky binding is only consulted when the policy asks for it and no pin is
-    # in effect. A pin is an operator override that must win outright.
-    if mode == "stateless" or pinned is not None:
+def _session_id_from_request(request: Request, *, pinned: str | None) -> str | None:
+    # A pin is an operator override: it wins over any client-declared session.
+    if pinned is not None:
         return None
     raw = request.headers.get(SESSION_HEADER)
     if raw is None:

@@ -28,7 +28,7 @@ def main() -> None:
     host = args.host if args.host is not None else cfg.server.host
     port = args.port if args.port is not None else cfg.server.port
     uvicorn.run(
-        create_app(backends=backends, session_mode=cfg.policy.default_mode),
+        create_app(backends=backends),
         host=host,
         port=port,
     )

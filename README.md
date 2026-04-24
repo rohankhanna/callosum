@@ -1,8 +1,8 @@
 # codex-proxy
 
-A local, OpenAI-compatible HTTP endpoint that fronts a pool of upstream model backends and picks one per request based on health, cooldowns, and advertised models. Clients point at `codex-proxy` instead of a single provider, and the proxy rotates across the pool when one backend is rate-limited, returns an auth error, or flakes transiently.
+A small local HTTP proxy that sits in front of multiple Codex Plus/Pro authentications and rotates across them. One endpoint on `127.0.0.1`, many `auth.json` vaults behind it. When one account is rate-limited or otherwise unavailable, the proxy sends the next request to another.
 
-Intended to run on `127.0.0.1` alongside the clients that call it — editor plugins, chat UIs, SDK scripts. Stateless per-request: each request carries its own full history, so backend rotation between turns has no continuity problem.
+It is deliberately a less-than-intelligent router. It does not try to summarize, retry mid-stream, synthesize continuity, or do anything fancier than "pick an account that can serve this request, and if it fails, try the next one." The OpenAI-compatible routes (`/v1/responses` and `/v1/chat/completions`) exist so your normal Codex-speaking clients can point at this proxy without knowing anything changed.
 
 ## Quick start
 
@@ -12,56 +12,60 @@ Install (with [uv](https://docs.astral.sh/uv/)):
 uv sync
 ```
 
+Each account you want to rotate across needs its own `auth.json` — the file format the Codex CLI writes when it logs in. Give each one its own path, e.g. `~/.codex-proxy/vaults/account-a/auth.json`, `~/.codex-proxy/vaults/account-b/auth.json`.
+
 Write a config at `~/.config/codex-proxy/config.toml`:
 
 ```toml
 [[backends]]
-id = "primary"
-type = "openai_api_key"
-api_key_env = "OPENAI_API_KEY"
-models = ["model-a0f5-mini"]
+id = "account-a"
+vault_path = "/home/you/.codex-proxy/vaults/account-a/auth.json"
+models = ["model-a0d0"]
+
+[[backends]]
+id = "account-b"
+vault_path = "/home/you/.codex-proxy/vaults/account-b/auth.json"
+models = ["model-a0d0"]
 ```
 
-Export your key and start the server:
+Start the server:
 
 ```
-export OPENAI_API_KEY=sk-...
 uv run python -m codex_proxy
 ```
 
-The server listens on `http://127.0.0.1:8765` by default.
+It listens on `http://127.0.0.1:8765` by default. Point your Codex-speaking client at that URL.
 
-Call it as if it were OpenAI:
+Native Responses API:
 
 ```
-curl http://127.0.0.1:8765/v1/chat/completions \
+curl http://127.0.0.1:8765/v1/responses \
   -H "Content-Type: application/json" \
-  -d '{"model":"model-a0f5-mini","messages":[{"role":"user","content":"hi"}]}'
+  -d '{
+    "model": "model-a0d0",
+    "input": [{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]
+  }'
 ```
 
-Streaming works with `"stream": true` — SSE chunks are forwarded unmodified.
+Chat-completions shape also works; requests are translated to the Responses API on the way out and back on the way in.
 
-## Backends
+Streaming works on both routes with `"stream": true`. On `/v1/responses` the upstream SSE is forwarded byte-for-byte.
 
-Two backend types ship today:
+## How rotation works
 
-- `openai_api_key` — any OpenAI-compatible endpoint that accepts `Authorization: Bearer <key>` (OpenAI itself, OpenRouter, local LLM servers that expose the same shape).
-- `azure_openai` — Azure OpenAI resources, with per-model deployment mapping.
+On each request, the proxy picks the backend with the most headroom (non-exhausted, not in cooldown, advertises the requested model). If that backend returns a retryable error — `429`, `401/403`, `404`, transient `5xx` — it is excluded from the current request and the proxy re-selects. On `429`, the upstream's `Retry-After` (or 60 seconds if absent) becomes the cooldown; if `[state]` is configured, the cooldown is persisted so it survives a restart.
 
-You can mix and match. When one backend returns `429`, `401/403`, `404`, or a transient 5xx, the proxy excludes it from the pool and re-selects. On `429`, the upstream's `Retry-After` becomes the cooldown window (60s default); the cooldown is persisted to disk if `[state]` is configured, so it survives restart.
+There is no cross-request "session" by default. Each call is independent. If a client wants the *same account* across a series of calls (e.g. to avoid switching accounts mid-conversation), it sends a `X-Codex-Session-Id: <anything>` header on each request and the proxy remembers the binding for that id. No header, no session — it stays a fresh pick every time.
 
 ## Operational endpoints
 
-- `GET /health` — liveness probe. Returns `{"status":"ok","version":"..."}`.
-- `GET /status` — pool state: each backend's id, kind, advertised models, current health, usage snapshot, and the active pin (if any).
-- `POST /control/pin` with `{"backend_id":"<id>"}` — force all routing to one backend.
+- `GET /health` — liveness probe.
+- `GET /status` — backend pool view: each vault's id, advertised models, current health, usage snapshot, cooldown, plus the active pin and any session bindings.
+- `POST /control/pin` with `{"backend_id":"<id>"}` — force all routing to one backend. Useful when you want to burn down one account on purpose.
 - `POST /control/unpin` — clear the pin.
 
 ```
 curl http://127.0.0.1:8765/status | jq
-curl -X POST http://127.0.0.1:8765/control/pin \
-  -H "Content-Type: application/json" \
-  -d '{"backend_id":"primary"}'
 ```
 
 ## Configuration

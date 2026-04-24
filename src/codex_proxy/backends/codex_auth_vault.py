@@ -27,7 +27,6 @@ class CodexAuthVaultBackend:
     """
 
     kind: BackendKind = "codex_auth_vault"
-    responses_supported: bool = True
 
     def __init__(
         self,

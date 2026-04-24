@@ -42,21 +42,6 @@ def test_responses_routes_to_fake_backend() -> None:
     assert body["model"] == "model-a0d0"
 
 
-def test_responses_503_when_no_backend_supports_the_api() -> None:
-    # Only a responses-incapable backend advertises the model.
-    fake = InMemoryFakeBackend(
-        id="legacy",
-        advertised_models=frozenset({"model-a0d0"}),
-        responses_supported=False,
-    )
-    with TestClient(create_app(backends=[fake])) as client:
-        response = client.post(
-            "/v1/responses",
-            json={"model": "model-a0d0", "input": []},
-        )
-    assert response.status_code == 503
-
-
 def test_responses_rejects_missing_model() -> None:
     fake = InMemoryFakeBackend(
         id="fake",
@@ -92,34 +77,18 @@ def test_responses_streaming_passes_chunks_through() -> None:
     assert body == b"".join(chunks)
 
 
-def test_responses_status_reports_capability_flag() -> None:
-    capable = InMemoryFakeBackend(
-        id="capable",
-        advertised_models=frozenset({"model-a0d0"}),
-    )
-    legacy = InMemoryFakeBackend(
-        id="legacy",
-        advertised_models=frozenset({"model-a0f5-mini"}),
-        responses_supported=False,
-    )
-    with TestClient(create_app(backends=[capable, legacy])) as client:
-        status = client.get("/status").json()
-    flags = {b["id"]: b["responses_supported"] for b in status["backends"]}
-    assert flags == {"capable": True, "legacy": False}
-
-
-def test_responses_sticky_binding_is_shared_with_chat_completions() -> None:
+def test_session_binding_is_shared_between_routes() -> None:
     alpha = InMemoryFakeBackend(
         id="alpha",
-        advertised_models=frozenset({"model-a0d0", "model-a0f5-mini"}),
+        advertised_models=frozenset({"model-a0d0"}),
         usage=_usage(0.5),
     )
     beta = InMemoryFakeBackend(
         id="beta",
-        advertised_models=frozenset({"model-a0d0", "model-a0f5-mini"}),
+        advertised_models=frozenset({"model-a0d0"}),
         usage=_usage(0.5),
     )
-    with TestClient(create_app(backends=[alpha, beta], session_mode="sticky")) as client:
+    with TestClient(create_app(backends=[alpha, beta])) as client:
         # First touch via /v1/responses binds s1 -> alpha (id tiebreak).
         first = client.post(
             "/v1/responses",
@@ -137,7 +106,7 @@ def test_responses_sticky_binding_is_shared_with_chat_completions() -> None:
         # must honor the binding established on the other route.
         second = client.post(
             "/v1/chat/completions",
-            json={"model": "model-a0f5-mini", "messages": [{"role": "user", "content": "hi"}]},
+            json={"model": "model-a0d0", "messages": [{"role": "user", "content": "hi"}]},
             headers={"X-Codex-Session-Id": "s1"},
         )
         assert second.status_code == 200

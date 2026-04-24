@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
-BackendKind = Literal["openai_api_key", "azure_openai", "codex_auth_vault"]
+BackendKind = Literal["codex_auth_vault"]
 HealthReason = Literal["ok", "rate_limited", "auth_invalid", "network", "unknown"]
 
 
@@ -27,10 +27,6 @@ class Backend(Protocol):
     id: str
     kind: BackendKind
     advertised_models: frozenset[str]
-    # True when this backend speaks the OpenAI Responses API natively. The
-    # /v1/responses route filters the pool by this flag before ranking so it
-    # never picks a backend that cannot serve the request.
-    responses_supported: bool
 
     async def health(self) -> HealthStatus: ...
 

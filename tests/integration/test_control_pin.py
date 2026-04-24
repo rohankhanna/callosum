@@ -8,8 +8,8 @@ from codex_proxy.fakes import InMemoryFakeBackend
 
 def _two_backends() -> list[InMemoryFakeBackend]:
     return [
-        InMemoryFakeBackend(id="alpha", advertised_models=frozenset({"model-a0f5-mini"})),
-        InMemoryFakeBackend(id="beta", advertised_models=frozenset({"model-a0f5-mini"})),
+        InMemoryFakeBackend(id="alpha", advertised_models=frozenset({"model-a0d0"})),
+        InMemoryFakeBackend(id="beta", advertised_models=frozenset({"model-a0d0"})),
     ]
 
 
@@ -18,7 +18,7 @@ def test_pin_forces_routing_to_chosen_backend() -> None:
         # default: alpha wins on id tiebreak
         default = client.post(
             "/v1/chat/completions",
-            json={"model": "model-a0f5-mini", "messages": []},
+            json={"model": "model-a0d0", "messages": []},
         )
         assert default.json()["id"] == "fake-alpha"
 
@@ -28,7 +28,7 @@ def test_pin_forces_routing_to_chosen_backend() -> None:
 
         pinned = client.post(
             "/v1/chat/completions",
-            json={"model": "model-a0f5-mini", "messages": []},
+            json={"model": "model-a0d0", "messages": []},
         )
         assert pinned.json()["id"] == "fake-beta"
 
@@ -42,7 +42,7 @@ def test_unpin_restores_normal_selection() -> None:
 
         after = client.post(
             "/v1/chat/completions",
-            json={"model": "model-a0f5-mini", "messages": []},
+            json={"model": "model-a0d0", "messages": []},
         )
         assert after.json()["id"] == "fake-alpha"
 
@@ -61,14 +61,14 @@ def test_pin_requires_backend_id_string() -> None:
 
 def test_pin_to_backend_that_cannot_serve_model_returns_503() -> None:
     backends = [
-        InMemoryFakeBackend(id="alpha", advertised_models=frozenset({"model-a0f5-mini"})),
+        InMemoryFakeBackend(id="alpha", advertised_models=frozenset({"model-a0d0"})),
         InMemoryFakeBackend(id="beta", advertised_models=frozenset({"other-model"})),
     ]
     with TestClient(create_app(backends=backends)) as client:
         client.post("/control/pin", json={"backend_id": "beta"})
         response = client.post(
             "/v1/chat/completions",
-            json={"model": "model-a0f5-mini", "messages": []},
+            json={"model": "model-a0d0", "messages": []},
         )
     assert response.status_code == 503
 

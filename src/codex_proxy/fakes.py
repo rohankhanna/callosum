@@ -15,20 +15,17 @@ class InMemoryFakeBackend:
         *,
         id: str,
         advertised_models: frozenset[str],
-        kind: BackendKind = "openai_api_key",
         health: HealthStatus | None = None,
         usage: UsageSnapshot | None = None,
         canned_response: dict[str, Any] | None = None,
         canned_stream_chunks: Sequence[bytes] | None = None,
         canned_error: BackendError | None = None,
-        responses_supported: bool = True,
         canned_responses_response: dict[str, Any] | None = None,
         canned_responses_stream_chunks: Sequence[bytes] | None = None,
     ) -> None:
         self.id = id
-        self.kind: BackendKind = kind
+        self.kind: BackendKind = "codex_auth_vault"
         self.advertised_models = advertised_models
-        self.responses_supported = responses_supported
         self._health = health if health is not None else HealthStatus(available=True, reason="ok")
         self._usage = (
             usage
