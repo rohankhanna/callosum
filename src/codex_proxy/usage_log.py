@@ -48,8 +48,8 @@ CREATE TABLE IF NOT EXISTS requests (
 );
 CREATE INDEX IF NOT EXISTS idx_requests_ts_start ON requests(ts_start);
 CREATE INDEX IF NOT EXISTS idx_requests_backend_id ON requests(backend_id);
-CREATE INDEX IF NOT EXISTS idx_requests_user_id ON requests(user_id);
-CREATE INDEX IF NOT EXISTS idx_requests_api_key_id ON requests(api_key_id);
+-- user_id / api_key_id indexes live in _MIGRATIONS so they run AFTER the
+-- ALTER-TABLE that adds the columns on pre-existing v1 databases.
 
 CREATE TABLE IF NOT EXISTS request_bodies (
     request_id INTEGER PRIMARY KEY REFERENCES requests(id) ON DELETE CASCADE,
