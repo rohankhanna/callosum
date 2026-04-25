@@ -31,9 +31,11 @@ your-tool ...
 
 Persistent edits (rc files, app settings) work too; they just permanently re-target the tool, which is exactly what some users want. Pick whichever matches your intent.
 
+> **Codex CLI does not honor `OPENAI_BASE_URL`.** It has its own typed provider system. Setting `OPENAI_BASE_URL=http://127.0.0.1:8765/v1 codex ...` will silently route to OpenAI's real API and present your codex-proxy key as if it were an OpenAI key — which OpenAI then rejects as invalid. Use the profile pattern in the next section instead.
+
 ## Codex CLI
 
-The OpenAI Codex CLI (`codex`, `codex exec`). It supports a typed provider system, so the cleanest setup is a profile that exists alongside your normal Codex usage rather than replacing it.
+The OpenAI Codex CLI (`codex`, `codex exec`, `codex resume`). It supports a typed provider system, so the cleanest setup is a profile that exists alongside your normal Codex usage rather than replacing it. **The universal `OPENAI_BASE_URL` env var has no effect on this client** — only the profile system does.
 
 **Add to `~/.codex/config.toml`:**
 
@@ -61,8 +63,11 @@ source ~/.bashrc
 ```
 codex -p via_proxy                      # interactive, routed through the proxy
 codex exec -p via_proxy "your prompt"   # non-interactive
+codex resume -p via_proxy               # resume a previous session through the proxy
 codex                                   # unchanged — your normal Codex usage is untouched
 ```
+
+The `-p via_proxy` flag must appear on every invocation you want routed through the proxy. Sessions resumed without `-p` will replay against the default provider (typically OpenAI direct), regardless of `OPENAI_BASE_URL`.
 
 **Stronger isolation** (if you don't want the proxy provider definition in your real config at all): use a separate `CODEX_HOME` for proxy-routed runs:
 
