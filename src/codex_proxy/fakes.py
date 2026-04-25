@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
-from codex_proxy.backend import BackendKind, HealthStatus, UsageSnapshot
+from codex_proxy.backend import BackendKind, CallHandle, HealthStatus, UsageSnapshot
 from codex_proxy.errors import BackendError
 
 
@@ -49,7 +49,10 @@ class InMemoryFakeBackend:
     async def usage_snapshot(self) -> UsageSnapshot:
         return self._usage
 
-    async def chat_completions(self, body: dict[str, Any]) -> dict[str, Any]:
+    async def chat_completions(
+        self, body: dict[str, Any], handle: CallHandle | None = None
+    ) -> dict[str, Any]:
+        del handle  # fake has no upstream; nothing to populate
         if self._canned_error is not None:
             raise self._canned_error
         if self._canned_response is not None:
@@ -68,7 +71,10 @@ class InMemoryFakeBackend:
             ],
         }
 
-    async def chat_completions_stream(self, body: dict[str, Any]) -> AsyncIterator[bytes]:
+    async def chat_completions_stream(
+        self, body: dict[str, Any], handle: CallHandle | None = None
+    ) -> AsyncIterator[bytes]:
+        del handle
         if self._canned_error is not None:
             raise self._canned_error
         chunks = self._canned_stream_chunks
@@ -82,7 +88,10 @@ class InMemoryFakeBackend:
         for chunk in chunks:
             yield chunk
 
-    async def responses(self, body: dict[str, Any]) -> dict[str, Any]:
+    async def responses(
+        self, body: dict[str, Any], handle: CallHandle | None = None
+    ) -> dict[str, Any]:
+        del handle
         if self._canned_error is not None:
             raise self._canned_error
         if self._canned_responses_response is not None:
@@ -101,7 +110,10 @@ class InMemoryFakeBackend:
             ],
         }
 
-    async def responses_stream(self, body: dict[str, Any]) -> AsyncIterator[bytes]:
+    async def responses_stream(
+        self, body: dict[str, Any], handle: CallHandle | None = None
+    ) -> AsyncIterator[bytes]:
+        del handle
         if self._canned_error is not None:
             raise self._canned_error
         chunks = self._canned_responses_stream_chunks

@@ -9,9 +9,11 @@ from typing import Any, cast
 import httpx
 
 from codex_proxy.auth_vault import AuthVault
-from codex_proxy.backend import BackendKind, HealthStatus, UsageSnapshot
+from codex_proxy.backend import BackendKind, CallHandle, HealthStatus, UsageSnapshot
 from codex_proxy.backends._http import DEFAULT_COOLDOWN_S, error_from_response
+from codex_proxy.codex_quota import parse_codex_headers
 from codex_proxy.errors import BackendError
+from codex_proxy.sse_tee import ResponsesStreamCollector
 from codex_proxy.state import StateStore
 
 DEFAULT_BASE_URL = "https://chatgpt.com/backend-api/codex"
@@ -60,6 +62,12 @@ class CodexAuthVaultBackend:
             weekly_exhausted=False,
             probed_at_ts=time.time(),
         )
+        # Most recent quota snapshot observed from upstream response headers.
+        # Becomes `quota_before` on the next call so the logging layer can
+        # compute Δquota for a request.
+        self._last_quota: Any = (
+            None  # CodexQuotaSnapshot | None, loose typed to avoid import cycle noise
+        )
 
     async def health(self) -> HealthStatus:
         return HealthStatus(available=True, reason="ok")
@@ -67,33 +75,25 @@ class CodexAuthVaultBackend:
     async def usage_snapshot(self) -> UsageSnapshot:
         return self._usage
 
-    async def chat_completions(self, body: dict[str, Any]) -> dict[str, Any]:
+    async def chat_completions(
+        self, body: dict[str, Any], handle: CallHandle | None = None
+    ) -> dict[str, Any]:
         requested_model = _require_model(body)
         responses_payload = _chat_to_responses_request(body, stream=False)
-        tokens = await self._vault.current()
-        headers = self._build_headers(tokens.access_token, tokens.account_id)
-        try:
-            response = await self._client.post(
-                f"{self._base_url}/responses",
-                json=responses_payload,
-                headers=headers,
-            )
-        except httpx.HTTPError as exc:
-            raise BackendError(classification="transient", message=str(exc)) from exc
-        if response.status_code >= 400:
-            err = error_from_response(response)
-            self._apply_error_to_usage(err)
-            raise err
-        upstream = cast(dict[str, Any], response.json())
+        # The chat path is implemented as a translated /responses call; pass
+        # the handle through so quota + header observations still land on it.
+        upstream = await self.responses(responses_payload, handle)
         return _responses_to_chat_response(upstream, model=requested_model)
 
-    async def chat_completions_stream(self, body: dict[str, Any]) -> AsyncIterator[bytes]:
+    async def chat_completions_stream(
+        self, body: dict[str, Any], handle: CallHandle | None = None
+    ) -> AsyncIterator[bytes]:
         # Buffered translation: call upstream non-streaming, then synthesise a
         # chat-completions SSE sequence. This keeps the translation simple and
         # avoids parsing upstream Responses-API events. Native streaming is
         # intentionally deferred to the /v1/responses route, which forwards
         # upstream SSE untouched.
-        completion = await self.chat_completions({**body, "stream": False})
+        completion = await self.chat_completions({**body, "stream": False}, handle)
         completion_id = _str_or(completion.get("id"), "chatcmpl-codex")
         model = _str_or(completion.get("model"), "")
         created = _int_or(completion.get("created"), int(time.time()))
@@ -131,10 +131,14 @@ class CodexAuthVaultBackend:
         yield frame({}, finish_reason)
         yield b"data: [DONE]\n\n"
 
-    async def responses(self, body: dict[str, Any]) -> dict[str, Any]:
+    async def responses(
+        self, body: dict[str, Any], handle: CallHandle | None = None
+    ) -> dict[str, Any]:
         # Body is already in Responses-API shape; forward verbatim.
         tokens = await self._vault.current()
         headers = self._build_headers(tokens.access_token, tokens.account_id)
+        if handle is not None:
+            handle.quota_before = self._last_quota
         try:
             response = await self._client.post(
                 f"{self._base_url}/responses",
@@ -143,17 +147,22 @@ class CodexAuthVaultBackend:
             )
         except httpx.HTTPError as exc:
             raise BackendError(classification="transient", message=str(exc)) from exc
+        self._apply_response_to_handle(response.headers, response.status_code, handle)
         if response.status_code >= 400:
             err = error_from_response(response)
             self._apply_error_to_usage(err)
             raise err
         return cast(dict[str, Any], response.json())
 
-    async def responses_stream(self, body: dict[str, Any]) -> AsyncIterator[bytes]:
+    async def responses_stream(
+        self, body: dict[str, Any], handle: CallHandle | None = None
+    ) -> AsyncIterator[bytes]:
         tokens = await self._vault.current()
         headers = self._build_headers(
             tokens.access_token, tokens.account_id, accept_event_stream=True
         )
+        if handle is not None:
+            handle.quota_before = self._last_quota
         try:
             stream_ctx = self._client.stream(
                 "POST",
@@ -162,13 +171,17 @@ class CodexAuthVaultBackend:
                 headers=headers,
             )
             async with stream_ctx as response:
+                self._apply_response_to_handle(response.headers, response.status_code, handle)
                 if response.status_code >= 400:
                     await response.aread()
                     err = error_from_response(response)
                     self._apply_error_to_usage(err)
                     raise err
-                async for chunk in response.aiter_bytes():
+                collector = ResponsesStreamCollector(response.aiter_bytes())
+                async for chunk in collector.iter_through():
                     yield chunk
+                if handle is not None:
+                    handle.stream_summary = collector.summary
         except httpx.HTTPError as exc:
             raise BackendError(classification="transient", message=str(exc)) from exc
 
@@ -194,6 +207,20 @@ class CodexAuthVaultBackend:
         if account_id:
             headers["chatgpt-account-id"] = account_id
         return headers
+
+    def _apply_response_to_handle(
+        self,
+        headers: Any,
+        status_code: int,
+        handle: CallHandle | None,
+    ) -> None:
+        snapshot = parse_codex_headers(dict(headers))
+        if snapshot is not None:
+            self._last_quota = snapshot
+        if handle is not None:
+            handle.upstream_status = status_code
+            handle.upstream_headers = dict(headers)
+            handle.quota_after = snapshot
 
     def _apply_error_to_usage(self, err: BackendError) -> None:
         if err.classification != "rate_limited":

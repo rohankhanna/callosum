@@ -33,6 +33,16 @@ class StateConfig(BaseModel):
     dir: Path | None = None
 
 
+class UsageLogConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: Path | None = None
+    # Default-on during the consumption-modeling phase: capture request and
+    # response payloads plus upstream headers so we can correlate tokens +
+    # reasoning effort with Δquota. Flip to false once the model is trained.
+    capture_bodies: bool = True
+
+
 class BackendConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -48,6 +58,7 @@ class Config(BaseModel):
 
     server: ServerConfig = Field(default_factory=ServerConfig)
     state: StateConfig = Field(default_factory=StateConfig)
+    usage_log: UsageLogConfig = Field(default_factory=UsageLogConfig)
     backends: list[BackendConfig] = Field(default_factory=list)
 
 

@@ -7,6 +7,7 @@ import uvicorn
 
 from codex_proxy.app import create_app
 from codex_proxy.config import build_backends, load_config
+from codex_proxy.usage_log import UsageLog
 
 
 def _default_config_path() -> Path:
@@ -25,10 +26,15 @@ def main() -> None:
 
     cfg = load_config(args.config)
     backends = build_backends(cfg)
+    usage_log = (
+        UsageLog(cfg.usage_log.path, capture_bodies=cfg.usage_log.capture_bodies)
+        if cfg.usage_log.path is not None
+        else None
+    )
     host = args.host if args.host is not None else cfg.server.host
     port = args.port if args.port is not None else cfg.server.port
     uvicorn.run(
-        create_app(backends=backends),
+        create_app(backends=backends, usage_log=usage_log),
         host=host,
         port=port,
     )

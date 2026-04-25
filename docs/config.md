@@ -101,6 +101,73 @@ Bindings are process-local and in-memory; they do not survive a restart.
 
 Use `/control/pin` to force routing to a specific backend id. While a pin is set, the selector considers only that backend — no fallback — so upstream errors surface directly to the client. Pin overrides any session binding: while pinned, the header is ignored. `/control/unpin` clears the pin.
 
+## Usage log (`[usage_log]`)
+
+```toml
+[usage_log]
+path = "/home/you/.local/state/codex-proxy/requests.sqlite"
+capture_bodies = true
+```
+
+- `path` — optional. When set, every backend call is recorded as a row in this SQLite database. When unset, no logging happens.
+- `capture_bodies` — default `true`. When on, the request body, the upstream response body (or full SSE blob for streams), and the upstream response headers are stored as zlib-compressed blobs in a companion `request_bodies` table. Turn off once a usage-prediction model is trained.
+
+### Schema
+
+`requests` (one row per backend attempt — both successes and rotated-from failures):
+
+| Column | Notes |
+| --- | --- |
+| `id`, `ts_start`, `ts_end`, `latency_ms` | timing |
+| `route` | `responses` or `chat_completions` |
+| `stream` | `1` if the client asked for streaming |
+| `session_id` | the `X-Codex-Session-Id` if the client sent one |
+| `backend_id` | which vault served (or attempted) this call |
+| `model`, `reasoning_effort` | extracted from the request body |
+| `status`, `classification` | HTTP status returned + error class (`ok`, `rate_limited`, `auth_invalid`, `transient`, `unknown_model`, `client_error`) |
+| `request_bytes`, `response_bytes` | sizes |
+| `prompt_tokens`, `completion_tokens`, `total_tokens`, `cached_tokens`, `reasoning_tokens` | parsed from upstream `response.usage` (terminal `response.completed` event for streams) |
+| `plan_type`, `active_limit` | from `x-codex-plan-type`, `x-codex-active-limit` |
+| `primary_used_percent_before` / `_after` | the 5-hour-window quota state immediately before and after the call. `before` is null on the first call to a given backend. |
+| `secondary_used_percent_before` / `_after` | same for the weekly window |
+| `primary_reset_at`, `secondary_reset_at` | unix ts when each window resets |
+| `primary_over_secondary_limit_percent` | upstream-reported overage signal |
+| `credits_balance`, `credits_has_credits`, `credits_unlimited` | credits state |
+| `quota_reset_crossover` | `1` if `_after < _before` (a window reset fired during the call); exclude these rows from training |
+
+`request_bodies` (one row per `requests.id`, only present when `capture_bodies = true` and at least one of req/resp/headers had data):
+
+| Column | Notes |
+| --- | --- |
+| `request_id` | foreign key to `requests.id` |
+| `req_payload` | zlib-compressed client request JSON |
+| `resp_payload` | zlib-compressed response (full JSON for non-stream; full SSE blob for streams) |
+| `upstream_headers` | zlib-compressed JSON of all upstream response headers |
+
+### Example: cost per request by model + reasoning effort
+
+```sql
+SELECT
+  model,
+  reasoning_effort,
+  COUNT(*) AS calls,
+  AVG(prompt_tokens) AS avg_prompt,
+  AVG(completion_tokens) AS avg_completion,
+  AVG(primary_used_percent_after - primary_used_percent_before) AS avg_d_primary_pct,
+  AVG(secondary_used_percent_after - secondary_used_percent_before) AS avg_d_secondary_pct
+FROM requests
+WHERE status = 200 AND quota_reset_crossover = 0
+  AND primary_used_percent_before IS NOT NULL
+GROUP BY model, reasoning_effort;
+```
+
+### Operational notes
+
+- **Privacy**: with `capture_bodies = true`, prompts and responses are stored on disk in cleartext (after zlib decompression). Treat the database file as sensitive. `chmod 600` is a sensible baseline.
+- **Granularity**: `primary_used_percent` and `secondary_used_percent` are integer percentages reported by the upstream. Single small calls often show `Δ = 0`. Aggregate across many calls for a useful signal.
+- **Auth-vault refresh-chain caveat**: the same Codex `auth.json` cannot be active in both this proxy and a normal `codex` CLI session at once — the refresh token is one-shot and the first refresh invalidates the other side's stored copy. Either dedicate an account to the proxy, or copy the latest `auth.json` into the vault path immediately before starting the proxy.
+- **No rotation in v1**: the SQLite file grows append-only. Archive manually when it gets large.
+
 ## Verification
 
 ```

@@ -68,6 +68,10 @@ There is no cross-request "session" by default. Each call is independent. If a c
 curl http://127.0.0.1:8765/status | jq
 ```
 
+## Per-request usage log
+
+When `[usage_log] path = "..."` is set in the config, every backend call is recorded as a row in a SQLite database with token counts, latency, and the upstream-reported per-account quota state (5-hour and weekly window) before and after the call. With `capture_bodies = true` (default) the request and response payloads are also stored, zlib-compressed. This is the data corpus for modeling how token-and-reasoning-effort inputs translate into Codex Plus/Pro quota consumption. See [`docs/config.md`](docs/config.md#usage-log-usage_log) for schema and example queries.
+
 ## Configuration
 
 Full config reference: [`docs/config.md`](docs/config.md).
