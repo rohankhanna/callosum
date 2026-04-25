@@ -227,12 +227,22 @@ codex resume           # picker shows sessions tagged "codex_proxy"
 **One-time migration of pre-existing sessions** so they appear under the new default. The `resume` picker filters by the saved `model_provider` field in each rollout. Migrate (with hardlink backup so it's safe and cheap):
 
 ```
+# 1. Migrate the JSONL rollouts (the source of truth for replay).
 cp -al ~/.codex/sessions ~/.codex/sessions.before-migration-$(date +%Y%m%d-%H%M%S)
 find ~/.codex/sessions -name '*.jsonl' \
   -exec sed -i -E 's/"model_provider":\s*"openai"/"model_provider":"codex_proxy"/g' {} +
+
+# 2. ALSO migrate the index DB the picker reads from. Without this, the
+#    picker's WHERE model_provider = 'codex_proxy' filter returns 0 rows
+#    even though the JSONLs are correctly tagged. Discovered the hard way.
+cp ~/.codex/state_5.sqlite ~/.codex/state_5.sqlite.before-migration-$(date +%Y%m%d-%H%M%S)
+sqlite3 ~/.codex/state_5.sqlite \
+  "UPDATE threads SET model_provider = 'codex_proxy' WHERE model_provider = 'openai'"
 ```
 
-The hardlink backup costs near-zero disk space — `sed -i` rename-on-top breaks the hardlink for each modified file, leaving the backup pointing at the original inode.
+The hardlink backup of `sessions/` costs near-zero disk space — `sed -i` rename-on-top breaks the hardlink for each modified file, leaving the backup pointing at the original inode. The index backup is a regular `cp` because SQLite is a single file.
+
+After the migration, verify the picker actually works: `codex resume --all` should return your full history. If it returns "No sessions yet" with `--all`, the index didn't update — check `sqlite3 ~/.codex/state_5.sqlite "SELECT model_provider, COUNT(*) FROM threads GROUP BY model_provider"` and re-run step 2.
 
 #### Option B — opt-in profile, default unchanged
 
