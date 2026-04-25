@@ -36,7 +36,7 @@ One table per Codex account. Each backend needs a unique `id` and its own `auth.
 [[backends]]
 id = "account-a"
 vault_path = "/home/you/.codex-proxy/vaults/account-a/auth.json"
-models = ["model-a0d0"]
+models = ["model-a0e7"]
 codex_base_url = "https://chatgpt.com/backend-api/codex"   # optional
 ```
 

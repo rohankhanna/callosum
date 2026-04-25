@@ -47,12 +47,12 @@ Write a config at `~/.config/codex-proxy/config.toml`:
 [[backends]]
 id = "account-a"
 vault_path = "/home/you/.codex-proxy/vaults/account-a/auth.json"
-models = ["model-a0d0"]
+models = ["model-a0e7"]
 
 [[backends]]
 id = "account-b"
 vault_path = "/home/you/.codex-proxy/vaults/account-b/auth.json"
-models = ["model-a0d0"]
+models = ["model-a0e7"]
 ```
 
 Start the server:
@@ -63,13 +63,14 @@ uv run python -m codex_proxy
 
 It listens on `http://127.0.0.1:8765` by default. Point your Codex-speaking client at that URL.
 
-Native Responses API:
+Native Responses API (the `Authorization` header is required when `[auth]` is configured; ignored in single-operator mode but harmless to include):
 
 ```
 curl http://127.0.0.1:8765/v1/responses \
+  -H "Authorization: Bearer $CODEX_PROXY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "model-a0d0",
+    "model": "model-a0e7",
     "input": [{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]
   }'
 ```
