@@ -35,11 +35,62 @@ Persistent edits (rc files, app settings) work too; they just permanently re-tar
 
 ## Codex CLI
 
-The OpenAI Codex CLI (`codex`, `codex exec`, `codex resume`). It supports a typed provider system, so the cleanest setup is a profile that exists alongside your normal Codex usage rather than replacing it. **The universal `OPENAI_BASE_URL` env var has no effect on this client** — only the profile system does.
+The OpenAI Codex CLI (`codex`, `codex exec`, `codex resume`). It supports a typed provider system. **The universal `OPENAI_BASE_URL` env var has no effect on this client** — only the typed provider config does.
 
-**Add to `~/.codex/config.toml`:**
+You have two integration shapes. Pick based on whether you want the proxy to be the default for all `codex` commands, or only when explicitly opted into.
+
+### Option A — `codex_proxy` as the global default (recommended for "single point of auth" setups)
+
+Edit `~/.codex/config.toml` so global defaults stay at the top, before any `[section]` header. **TOML detail that bit me once:** every `key = value` line after a `[section]` header belongs to that section until the next header. Putting `model_provider = "codex_proxy"` *after* a `[profiles.x]` block silently makes it part of that profile, not a global default.
 
 ```toml
+# Global defaults — MUST be above any [section] header.
+model = "model-a0e7"
+model_provider = "codex_proxy"
+
+# (your other top-level settings: model_reasoning_effort, personality, etc.)
+
+[model_providers.codex_proxy]
+name = "codex-proxy"
+base_url = "http://127.0.0.1:8765/v1"
+env_key = "CODEX_PROXY_TOKEN"
+wire_api = "responses"
+
+# (your [projects.*], [features], etc. continue below)
+```
+
+Set the API key in your shell rc:
+
+```
+echo 'export CODEX_PROXY_TOKEN=<your-codex-proxy-api-key>' >> ~/.bashrc
+source ~/.bashrc
+```
+
+Use it — no flags needed:
+
+```
+codex                  # routes through the proxy
+codex exec "..."       # routes through the proxy
+codex resume           # picker shows sessions whose model_provider matches "codex_proxy"
+```
+
+**One-time migration of pre-existing sessions** so they appear under the new default. The `resume` picker filters by the saved `model_provider` field in each rollout. Migrate (with hardlink backup so it's safe and cheap):
+
+```
+cp -al ~/.codex/sessions ~/.codex/sessions.before-migration-$(date +%Y%m%d-%H%M%S)
+find ~/.codex/sessions -name '*.jsonl' \
+  -exec sed -i -E 's/"model_provider":\s*"openai"/"model_provider":"codex_proxy"/g' {} +
+```
+
+The hardlink backup costs near-zero disk space — `sed -i` rename-on-top breaks the hardlink for each modified file, leaving the backup pointing at the original inode.
+
+### Option B — opt-in profile, default unchanged
+
+Use this when you want plain `codex` to keep going to OpenAI directly and only `codex -p via_proxy` to route through the proxy.
+
+```toml
+# Global defaults stay whatever they were (OpenAI direct, etc.)
+
 [model_providers.codex_proxy]
 name = "codex-proxy"
 base_url = "http://127.0.0.1:8765/v1"
@@ -51,23 +102,13 @@ model = "model-a0e7"
 model_provider = "codex_proxy"
 ```
 
-**Set the API key once:**
-
 ```
-echo 'export CODEX_PROXY_TOKEN=<your-codex-proxy-api-key>' >> ~/.bashrc
-source ~/.bashrc
-```
-
-**Use it:**
-
-```
-codex -p via_proxy                      # interactive, routed through the proxy
-codex exec -p via_proxy "your prompt"   # non-interactive
-codex resume -p via_proxy               # resume a previous session through the proxy
-codex                                   # unchanged — your normal Codex usage is untouched
+codex -p via_proxy
+codex exec -p via_proxy "..."
+codex resume -p via_proxy   # picker only shows sessions tagged "codex_proxy"
 ```
 
-The `-p via_proxy` flag must appear on every invocation you want routed through the proxy. Sessions resumed without `-p` will replay against the default provider (typically OpenAI direct), regardless of `OPENAI_BASE_URL`.
+The `-p via_proxy` flag must appear on every invocation you want routed through the proxy. Sessions resumed without `-p` replay against the default provider — `OPENAI_BASE_URL` does not change this.
 
 **Stronger isolation** (if you don't want the proxy provider definition in your real config at all): use a separate `CODEX_HOME` for proxy-routed runs:
 
