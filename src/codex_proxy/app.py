@@ -7,9 +7,16 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from codex_proxy import __version__
+from codex_proxy.auth import (
+    ApiKeyInvalidError,
+    AuthService,
+    InvalidCredentialsError,
+    SessionInvalidError,
+)
+from codex_proxy.auth_db import ApiKey, Session
 from codex_proxy.backend import Backend, CallHandle
 from codex_proxy.errors import RETRYABLE, BackendError, ErrorClass
 from codex_proxy.selector import select
@@ -53,6 +60,7 @@ def create_app(
     backends: Sequence[Backend] = (),
     sessions: SessionRegistry | None = None,
     usage_log: UsageLog | None = None,
+    auth_service: AuthService | None = None,
 ) -> FastAPI:
     backends_list: list[Backend] = list(backends)
     pin_state = PinState()
@@ -67,8 +75,29 @@ def create_app(
                 await backend.aclose()
             if usage_log is not None:
                 usage_log.close()
+            if auth_service is not None:
+                auth_service.db.close()
 
     app = FastAPI(title="codex-proxy", version=__version__, lifespan=lifespan)
+
+    # Bearer middleware for /v1/* — only enforced when an auth service is
+    # configured. In single-operator mode (no auth db) /v1/* stays open.
+    @app.middleware("http")
+    async def _enforce_api_key(request: Request, call_next: Callable[[Request], Any]) -> Any:
+        if auth_service is None or not request.url.path.startswith("/v1/"):
+            return await call_next(request)
+        plaintext = _bearer(request)
+        if plaintext is None:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Authorization: Bearer <api-key> required"},
+            )
+        try:
+            api_key = auth_service.resolve_api_key(plaintext)
+        except ApiKeyInvalidError as exc:
+            return JSONResponse(status_code=401, content={"detail": str(exc)})
+        request.state.api_key = api_key
+        return await call_next(request)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -103,6 +132,9 @@ def create_app(
             "pinned": pin_state.get(),
             "sessions": session_registry.snapshot(),
         }
+
+    if auth_service is not None:
+        _install_auth_routes(app, auth_service)
 
     @app.post("/control/pin")
     async def control_pin(body: dict[str, Any]) -> dict[str, str | None]:
@@ -167,6 +199,9 @@ async def _dispatch_route(
     active = _active_pool(backends_list, pinned)
     session_id = _session_id_from_request(request, pinned=pinned)
     preferred_id = session_registry.get(session_id) if session_id is not None else None
+    api_key: ApiKey | None = getattr(request.state, "api_key", None)
+    user_id = api_key.user_id if api_key is not None else None
+    api_key_id = api_key.id if api_key is not None else None
     if body.get("stream") is True:
         return await _dispatch_stream(
             body,
@@ -178,6 +213,8 @@ async def _dispatch_route(
             session_registry=session_registry,
             usage_log=usage_log,
             call=stream,
+            user_id=user_id,
+            api_key_id=api_key_id,
         )
     return await _dispatch_nonstream(
         body,
@@ -189,6 +226,8 @@ async def _dispatch_route(
         session_registry=session_registry,
         usage_log=usage_log,
         call=nonstream,
+        user_id=user_id,
+        api_key_id=api_key_id,
     )
 
 
@@ -233,6 +272,8 @@ async def _dispatch_nonstream(
     session_registry: SessionRegistry,
     usage_log: UsageLog | None,
     call: NonstreamCall,
+    user_id: int | None = None,
+    api_key_id: int | None = None,
 ) -> dict[str, Any]:
     excluded: set[str] = set()
     last_error: BackendError | None = None
@@ -264,6 +305,8 @@ async def _dispatch_nonstream(
                 ts_end=ts_end,
                 error=exc,
                 resp_body=None,
+                user_id=user_id,
+                api_key_id=api_key_id,
             )
             last_error = exc
             if exc.classification not in RETRYABLE:
@@ -285,6 +328,8 @@ async def _dispatch_nonstream(
             ts_end=ts_end,
             error=None,
             resp_body=result,
+            user_id=user_id,
+            api_key_id=api_key_id,
         )
         return result
     raise _no_viable(model=model, last_error=last_error)
@@ -301,6 +346,8 @@ async def _dispatch_stream(
     session_registry: SessionRegistry,
     usage_log: UsageLog | None,
     call: StreamCall,
+    user_id: int | None = None,
+    api_key_id: int | None = None,
 ) -> StreamingResponse:
     excluded: set[str] = set()
     last_error: BackendError | None = None
@@ -333,6 +380,8 @@ async def _dispatch_stream(
                 ts_end=ts_end,
                 error=None,
                 resp_body=None,
+                user_id=user_id,
+                api_key_id=api_key_id,
             )
             _remember_binding(session_registry, session_id, backend.id)
             return StreamingResponse(_empty_iter(), media_type="text/event-stream")
@@ -351,6 +400,8 @@ async def _dispatch_stream(
                 ts_end=ts_end,
                 error=exc,
                 resp_body=None,
+                user_id=user_id,
+                api_key_id=api_key_id,
             )
             last_error = exc
             if exc.classification not in RETRYABLE:
@@ -369,6 +420,8 @@ async def _dispatch_stream(
                 backend=backend,
                 handle=handle,
                 ts_start=ts_start,
+                user_id=user_id,
+                api_key_id=api_key_id,
             ),
             media_type="text/event-stream",
         )
@@ -397,6 +450,8 @@ async def _log_on_complete(
     backend: Backend,
     handle: CallHandle,
     ts_start: float,
+    user_id: int | None = None,
+    api_key_id: int | None = None,
 ) -> AsyncIterator[bytes]:
     """Pass-through wrapper that writes the usage log row when the stream ends.
 
@@ -419,6 +474,8 @@ async def _log_on_complete(
         ts_end=ts_end,
         error=None,
         resp_body=None,  # for streams the raw body lives in handle.stream_summary
+        user_id=user_id,
+        api_key_id=api_key_id,
     )
 
 
@@ -436,6 +493,8 @@ def _log_attempt(
     ts_end: float,
     error: BackendError | None,
     resp_body: dict[str, Any] | None,
+    user_id: int | None = None,
+    api_key_id: int | None = None,
 ) -> None:
     if usage_log is None:
         return
@@ -478,6 +537,8 @@ def _log_attempt(
         req_payload=req_payload,
         resp_payload=resp_payload,
         upstream_headers=dict(handle.upstream_headers) if handle.upstream_headers else None,
+        user_id=user_id,
+        api_key_id=api_key_id,
     )
     usage_log.record(entry)
 
@@ -547,6 +608,111 @@ def _int(value: Any) -> int | None:
     if isinstance(value, float):
         return int(value)
     return None
+
+
+def _bearer(request: Request) -> str | None:
+    raw = request.headers.get("authorization")
+    if raw is None:
+        return None
+    parts = raw.split(None, 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return None
+    token = parts[1].strip()
+    return token or None
+
+
+def _install_auth_routes(app: FastAPI, auth_service: AuthService) -> None:
+    """Add /auth/* routes when an AuthService is configured.
+
+    Endpoints:
+    - POST /auth/register {username, password} -> {user_id, username}
+    - POST /auth/login    {username, password} -> {session_token, expires_at}
+    - POST /auth/logout                         -> 204 (session-bearer)
+    - POST /auth/keys     {label?}             -> issued key (plaintext shown ONCE)
+    - GET  /auth/keys                          -> list keys for the session's user
+    - DELETE /auth/keys/{key_id}               -> revoke
+    """
+
+    def _require_session(request: Request) -> Session:
+        plaintext = _bearer(request)
+        if plaintext is None:
+            raise HTTPException(status_code=401, detail="session token required")
+        try:
+            return auth_service.resolve_session(plaintext)
+        except SessionInvalidError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    @app.post("/auth/register", status_code=201)
+    async def register(body: dict[str, Any]) -> dict[str, Any]:
+        username = body.get("username")
+        password = body.get("password")
+        if not isinstance(username, str) or not isinstance(password, str):
+            raise HTTPException(status_code=400, detail="'username' and 'password' must be strings")
+        try:
+            user = auth_service.register(username=username, password=password)
+        except InvalidCredentialsError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"user_id": user.id, "username": user.username}
+
+    @app.post("/auth/login")
+    async def login(body: dict[str, Any]) -> dict[str, Any]:
+        username = body.get("username")
+        password = body.get("password")
+        if not isinstance(username, str) or not isinstance(password, str):
+            raise HTTPException(status_code=400, detail="'username' and 'password' must be strings")
+        try:
+            issued = auth_service.login(username=username, password=password)
+        except InvalidCredentialsError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        return {
+            "session_token": issued.plaintext,
+            "expires_at": issued.session.expires_at,
+        }
+
+    @app.post("/auth/logout", status_code=204)
+    async def logout(request: Request) -> None:
+        plaintext = _bearer(request)
+        if plaintext is not None:
+            auth_service.logout(plaintext)
+
+    @app.post("/auth/keys", status_code=201)
+    async def create_key(request: Request, body: dict[str, Any]) -> dict[str, Any]:
+        session = _require_session(request)
+        label = body.get("label") if isinstance(body.get("label"), str) else None
+        issued = auth_service.create_api_key(user_id=session.user_id, label=label)
+        return {
+            "id": issued.api_key.id,
+            "api_key": issued.plaintext,  # plaintext shown ONCE
+            "prefix": issued.api_key.key_prefix,
+            "label": issued.api_key.label,
+            "created_at": issued.api_key.created_at,
+        }
+
+    @app.get("/auth/keys")
+    async def list_keys(request: Request) -> dict[str, Any]:
+        session = _require_session(request)
+        keys = auth_service.list_api_keys(user_id=session.user_id)
+        return {
+            "keys": [
+                {
+                    "id": k.id,
+                    "prefix": k.key_prefix,
+                    "label": k.label,
+                    "created_at": k.created_at,
+                    "last_used_at": k.last_used_at,
+                    "revoked_at": k.revoked_at,
+                }
+                for k in keys
+            ]
+        }
+
+    @app.delete("/auth/keys/{key_id}")
+    async def revoke_key(request: Request, key_id: int) -> dict[str, bool]:
+        session = _require_session(request)
+        revoked = auth_service.revoke_api_key(key_id=key_id, user_id=session.user_id)
+        if not revoked:
+            raise HTTPException(status_code=404, detail="key not found or already revoked")
+        return {"revoked": True}
 
 
 def _terminal_http(exc: BackendError) -> HTTPException:

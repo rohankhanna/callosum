@@ -168,6 +168,47 @@ GROUP BY model, reasoning_effort;
 - **Auth-vault refresh-chain caveat**: the same Codex `auth.json` cannot be active in both this proxy and a normal `codex` CLI session at once — the refresh token is one-shot and the first refresh invalidates the other side's stored copy. Either dedicate an account to the proxy, or copy the latest `auth.json` into the vault path immediately before starting the proxy.
 - **No rotation in v1**: the SQLite file grows append-only. Archive manually when it gets large.
 
+## Multi-tenant auth (`[auth]`)
+
+Optional. When enabled, other people can register, log in, mint their own API keys, and use those keys to call `/v1/responses` and `/v1/chat/completions`. Each call is attributed to a `(user_id, api_key_id)` pair in the usage log.
+
+```toml
+[auth]
+db = "/home/you/.local/state/codex-proxy/auth.sqlite"
+session_ttl_seconds = 1800   # default
+```
+
+- `db` — required to enable auth. Path to the SQLite database holding users, sessions, and API keys. Single-operator mode is the default (no `[auth]` block at all → `/v1/*` is open, the `/auth/*` routes do not exist).
+- `session_ttl_seconds` — how long a session token returned by `/auth/login` stays valid. Default 30 minutes.
+
+Passwords are stored as **argon2id** hashes. Session tokens and API keys are 32 bytes urandom each, returned to the user once and stored only as `sha256(plaintext)`.
+
+### Endpoints
+
+- `POST /auth/register` `{username, password}` → `201 {user_id, username}`
+- `POST /auth/login` `{username, password}` → `200 {session_token, expires_at}`
+- `POST /auth/logout` (Bearer session) → `204`
+- `POST /auth/keys` (Bearer session) `{label?}` → `201 {id, api_key, prefix, label, created_at}`. **`api_key` is plaintext and shown ONCE — store it now.**
+- `GET /auth/keys` (Bearer session) → `200 {keys: [{id, prefix, label, created_at, last_used_at, revoked_at}, ...]}`
+- `DELETE /auth/keys/{id}` (Bearer session) → `200 {revoked: true}` or `404`
+
+### Calling `/v1/*` with an API key
+
+```
+curl http://127.0.0.1:8765/v1/responses \
+  -H "Authorization: Bearer cp-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"model-a0e7","input":[...]}'
+```
+
+Missing or revoked key → `401`. The `usage_log` `requests` table picks up `user_id` and `api_key_id` so a query like `SELECT user_id, SUM(total_tokens) FROM requests GROUP BY user_id` works as expected.
+
+### Out of scope (today)
+
+- Per-key rate limits / budgets — comes after enough usage data exists to set meaningful values.
+- Email verification, password reset, MFA — single-operator instance; users are people you know personally.
+- TLS / public exposure — keep the proxy on `127.0.0.1` and front it with Caddy/nginx if exposed.
+
 ## Verification
 
 ```

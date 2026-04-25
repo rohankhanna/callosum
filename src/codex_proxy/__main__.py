@@ -6,6 +6,8 @@ from pathlib import Path
 import uvicorn
 
 from codex_proxy.app import create_app
+from codex_proxy.auth import AuthService
+from codex_proxy.auth_db import AuthDB
 from codex_proxy.config import build_backends, load_config
 from codex_proxy.usage_log import UsageLog
 
@@ -31,10 +33,16 @@ def main() -> None:
         if cfg.usage_log.path is not None
         else None
     )
+    auth_service: AuthService | None = None
+    if cfg.auth.db is not None:
+        auth_service = AuthService(
+            AuthDB(cfg.auth.db),
+            session_ttl_seconds=cfg.auth.session_ttl_seconds,
+        )
     host = args.host if args.host is not None else cfg.server.host
     port = args.port if args.port is not None else cfg.server.port
     uvicorn.run(
-        create_app(backends=backends, usage_log=usage_log),
+        create_app(backends=backends, usage_log=usage_log, auth_service=auth_service),
         host=host,
         port=port,
     )

@@ -43,6 +43,17 @@ class UsageLogConfig(BaseModel):
     capture_bodies: bool = True
 
 
+class AuthConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # When set, /auth/* registration + login endpoints become available, and
+    # /v1/* requests must carry `Authorization: Bearer <api-key>` issued via
+    # the auth flow. When unset, auth is disabled (single-operator mode).
+    db: Path | None = None
+    # How long a session token (returned by /auth/login) stays valid.
+    session_ttl_seconds: int = 1800
+
+
 class BackendConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -59,6 +70,7 @@ class Config(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     state: StateConfig = Field(default_factory=StateConfig)
     usage_log: UsageLogConfig = Field(default_factory=UsageLogConfig)
+    auth: AuthConfig = Field(default_factory=AuthConfig)
     backends: list[BackendConfig] = Field(default_factory=list)
 
 

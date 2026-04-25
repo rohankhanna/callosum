@@ -10,6 +10,7 @@ dependencies = [
     "uvicorn[standard]>=0.29",
     "httpx[http2]>=0.27",
     "pydantic>=2.6",
+    "argon2-cffi>=23.1",
 ]
 
 [project.scripts]

@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS requests (
     route TEXT NOT NULL,
     stream INTEGER NOT NULL,
     session_id TEXT,
+    user_id INTEGER,
+    api_key_id INTEGER,
     backend_id TEXT NOT NULL,
     model TEXT,
     reasoning_effort TEXT,
@@ -46,6 +48,8 @@ CREATE TABLE IF NOT EXISTS requests (
 );
 CREATE INDEX IF NOT EXISTS idx_requests_ts_start ON requests(ts_start);
 CREATE INDEX IF NOT EXISTS idx_requests_backend_id ON requests(backend_id);
+CREATE INDEX IF NOT EXISTS idx_requests_user_id ON requests(user_id);
+CREATE INDEX IF NOT EXISTS idx_requests_api_key_id ON requests(api_key_id);
 
 CREATE TABLE IF NOT EXISTS request_bodies (
     request_id INTEGER PRIMARY KEY REFERENCES requests(id) ON DELETE CASCADE,
@@ -54,6 +58,16 @@ CREATE TABLE IF NOT EXISTS request_bodies (
     upstream_headers BLOB
 );
 """
+
+# Columns added after the initial v1 schema. ALTER TABLE on each one (guarded
+# against "duplicate column" errors) means existing usage_log databases gain
+# the new columns automatically on next startup.
+_MIGRATIONS = [
+    "ALTER TABLE requests ADD COLUMN user_id INTEGER",
+    "ALTER TABLE requests ADD COLUMN api_key_id INTEGER",
+    "CREATE INDEX IF NOT EXISTS idx_requests_user_id ON requests(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_requests_api_key_id ON requests(api_key_id)",
+]
 
 
 @dataclass(slots=True)
@@ -82,6 +96,9 @@ class UsageLogEntry:
     req_payload: bytes | None = None
     resp_payload: bytes | None = None
     upstream_headers: dict[str, str] | None = None
+    # Multi-tenant attribution. Both null in single-operator mode (no auth db).
+    user_id: int | None = None
+    api_key_id: int | None = None
 
 
 class UsageLog:
@@ -105,6 +122,23 @@ class UsageLog:
         )
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA)
+        self._apply_migrations()
+
+    def _apply_migrations(self) -> None:
+        """Apply post-v1 ALTER TABLE migrations idempotently.
+
+        Each statement is wrapped in its own try/except so re-running on a
+        DB that already has the column is a no-op. SQLite has no
+        IF NOT EXISTS for ADD COLUMN, hence the catch.
+        """
+        for stmt in _MIGRATIONS:
+            try:
+                self._conn.execute(stmt)
+            except sqlite3.OperationalError as exc:
+                # "duplicate column name" means the migration was already
+                # applied — that's fine. Anything else is a real error.
+                if "duplicate column" not in str(exc).lower():
+                    raise
 
     @property
     def path(self) -> Path:
@@ -132,6 +166,8 @@ class UsageLog:
             entry.route,
             1 if entry.stream else 0,
             entry.session_id,
+            entry.user_id,
+            entry.api_key_id,
             entry.backend_id,
             entry.model,
             entry.reasoning_effort,
@@ -163,7 +199,8 @@ class UsageLog:
                 """
                 INSERT INTO requests (
                     ts_start, ts_end, latency_ms, route, stream,
-                    session_id, backend_id, model, reasoning_effort,
+                    session_id, user_id, api_key_id,
+                    backend_id, model, reasoning_effort,
                     status, classification,
                     request_bytes, response_bytes,
                     prompt_tokens, completion_tokens, total_tokens,
@@ -178,7 +215,8 @@ class UsageLog:
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?
                 )
                 """,
                 row,
