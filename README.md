@@ -29,6 +29,7 @@ It is deliberately a less-than-intelligent router. It does not summarise, retry 
   - [`[[backends]]`](#backends)
 - [Endpoints](#endpoints)
 - [How rotation works](#how-rotation-works)
+- [Switching models and reasoning levels](#switching-models-and-reasoning-levels-model-reasoning)
 - [Sticky session header](#sticky-session-header-x-codex-session-id)
 - [Pinning](#pinning-controlpin--controlunpin)
 - [Per-request usage log](#per-request-usage-log)
@@ -529,6 +530,41 @@ If the chosen backend returns a retryable error, it is excluded from this reques
 | `5xx` / network | transient | rotate; if none left, `502` |
 
 Cooldowns are recorded per backend and visible in `/status`. If `[state] dir` is configured they survive restart.
+
+## Switching models and reasoning levels (`/model`, `/reasoning`)
+
+Codex CLI's `/model` and `/reasoning` slash commands work through the proxy with no code change — just a config tweak and an understanding of where the model list comes from.
+
+**Model list source:** Codex CLI maintains `~/.codex/models_cache.json`, fetched from the upstream Codex backend. It contains every model your account has access to plus that model's supported reasoning levels. The `/model` picker shows that list. To see what your account has, run:
+
+```
+jq -r '.models[] | [.slug, .display_name, .default_reasoning_level, (.supported_reasoning_levels | map(.effort) | join(","))] | @tsv' ~/.codex/models_cache.json
+```
+
+For a Plus account the list typically looks like:
+
+| slug | default reasoning | supported reasoning |
+| --- | --- | --- |
+| `model-a0e7` | xhigh | low, medium, high, xhigh |
+| `model-a0c3` | medium | low, medium, high, xhigh |
+| `model-a0b8` | medium | low, medium, high, xhigh |
+| `model-a0e6` | medium | low, medium, high, xhigh |
+| `codex-auto-review` | medium | low, medium, high, xhigh |
+
+**To make `/model` actually route**, advertise every model you want to use in each backend's `models = [...]` list:
+
+```toml
+[[backends]]
+id = "primary"
+vault_path = "/home/you/.codex-proxy/vaults/primary/auth.json"
+models = ["model-a0e7", "model-a0c3", "model-a0b8", "model-a0e6", "codex-auto-review"]
+```
+
+The selector only routes a request when at least one backend advertises the requested model. If the list omits the model the user just picked, they'll see a `503`.
+
+**`/reasoning` works for free.** Codex CLI sends the chosen level as `reasoning.effort` in the request body. The proxy passes it through unchanged on `/v1/responses`. Picked levels show up in the usage log's `reasoning_effort` column for later analysis.
+
+**Smart auto-router (Phase 4, future).** The end goal is a router inside the proxy that picks `(model, reasoning_effort)` per request to maximize outcome quality per quota cost. It is predicated on (a) a cost model trained on the corpus the usage log is collecting now, (b) some signal of outcome quality (evals or task-completion labels), and (c) the routing policy itself. When it ships it lives inside the proxy, so every client speaking OpenAI shapes — Codex CLI, Hermes, Aider — gets it transparently with zero client-side change. Not yet built; planned after the corpus matures.
 
 ## Sticky session header (`X-Codex-Session-Id`)
 

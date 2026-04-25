@@ -52,6 +52,12 @@ class Backend(Protocol):
 
     async def usage_snapshot(self) -> UsageSnapshot: ...
 
+    async def quota_snapshot(self) -> CodexQuotaSnapshot | None:
+        """Most recent CodexQuotaSnapshot observed from upstream response
+        headers, or None if this backend has not been called yet (or is a
+        kind that does not produce one)."""
+        ...
+
     async def chat_completions(
         self, body: dict[str, Any], handle: CallHandle | None = None
     ) -> dict[str, Any]: ...

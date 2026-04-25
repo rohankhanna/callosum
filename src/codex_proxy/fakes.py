@@ -49,6 +49,11 @@ class InMemoryFakeBackend:
     async def usage_snapshot(self) -> UsageSnapshot:
         return self._usage
 
+    async def quota_snapshot(self) -> Any:  # CodexQuotaSnapshot | None
+        # Fakes don't talk to upstream so they have no real quota snapshot.
+        # Tests that need one set self._fake_quota directly.
+        return getattr(self, "_fake_quota", None)
+
     async def chat_completions(
         self, body: dict[str, Any], handle: CallHandle | None = None
     ) -> dict[str, Any]:

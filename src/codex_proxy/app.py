@@ -111,6 +111,7 @@ def create_app(
         for backend in backends_list:
             h = await backend.health()
             u = await backend.usage_snapshot()
+            q = await backend.quota_snapshot()
             entries.append(
                 {
                     "id": backend.id,
@@ -127,6 +128,7 @@ def create_app(
                         "weekly_exhausted": u.weekly_exhausted,
                         "probed_at_ts": u.probed_at_ts,
                     },
+                    "quota": _quota_to_dict(q),
                 }
             )
         return {
@@ -629,6 +631,32 @@ def _int(value: Any) -> int | None:
     if isinstance(value, float):
         return int(value)
     return None
+
+
+def _quota_to_dict(q: Any) -> dict[str, Any] | None:
+    """Serialize a CodexQuotaSnapshot to a JSON-friendly dict, or None if no
+    snapshot is available yet. Backend type is loosely typed because only the
+    codex_auth_vault backend produces snapshots; everything else returns None.
+    """
+    if q is None:
+        return None
+    return {
+        "plan_type": q.plan_type,
+        "active_limit": q.active_limit,
+        "primary_used_percent": q.primary_used_percent,
+        "secondary_used_percent": q.secondary_used_percent,
+        "primary_window_minutes": q.primary_window_minutes,
+        "secondary_window_minutes": q.secondary_window_minutes,
+        "primary_reset_at": q.primary_reset_at,
+        "secondary_reset_at": q.secondary_reset_at,
+        "primary_reset_after_seconds": q.primary_reset_after_seconds,
+        "secondary_reset_after_seconds": q.secondary_reset_after_seconds,
+        "primary_over_secondary_limit_percent": q.primary_over_secondary_limit_percent,
+        "credits_balance": q.credits_balance,
+        "credits_has_credits": q.credits_has_credits,
+        "credits_unlimited": q.credits_unlimited,
+        "observed_at": q.observed_at,
+    }
 
 
 def _bearer(request: Request) -> str | None:

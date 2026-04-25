@@ -75,6 +75,9 @@ class CodexAuthVaultBackend:
     async def usage_snapshot(self) -> UsageSnapshot:
         return self._usage
 
+    async def quota_snapshot(self) -> Any:  # CodexQuotaSnapshot | None
+        return self._last_quota
+
     async def chat_completions(
         self, body: dict[str, Any], handle: CallHandle | None = None
     ) -> dict[str, Any]:
