@@ -4,10 +4,11 @@ import json
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from codex_proxy import __version__
 from codex_proxy.auth import (
@@ -136,6 +137,7 @@ def create_app(
 
     if auth_service is not None:
         _install_auth_routes(app, auth_service)
+        _install_web_ui(app)
 
     @app.post("/control/pin")
     async def control_pin(body: dict[str, Any]) -> dict[str, str | None]:
@@ -822,6 +824,28 @@ def _install_auth_routes(app: FastAPI, auth_service: AuthService) -> None:
         if not revoked:
             raise HTTPException(status_code=404, detail="key not found or already revoked")
         return {"revoked": True}
+
+
+_STATIC_DIR = Path(__file__).parent / "static"
+
+
+def _install_web_ui(app: FastAPI) -> None:
+    """Serve a small browser UI at /ui/ for users who don't want to curl
+    the /auth/* endpoints by hand. Single-page, vanilla HTML+JS, no build
+    step. Calls the same /auth/* JSON endpoints the curl flow uses; the
+    browser stores the session token in localStorage. Only mounted when
+    auth is enabled — without auth there's nothing to register or log in
+    against.
+    """
+    index = _STATIC_DIR / "index.html"
+
+    @app.get("/ui", include_in_schema=False)
+    async def ui_root_redirect() -> FileResponse:
+        return FileResponse(index, media_type="text/html")
+
+    @app.get("/ui/", include_in_schema=False)
+    async def ui_root() -> FileResponse:
+        return FileResponse(index, media_type="text/html")
 
 
 def _terminal_http(exc: BackendError) -> HTTPException:

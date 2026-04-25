@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>codex-proxy</title>
+  <style>
+    :root {
+      --bg: #0b0c10;
+      --panel: #14161d;
+      --panel-2: #1c1f29;
+      --border: #2a2e3a;
+      --fg: #e6e7ea;
+      --muted: #8b8f9c;
+      --accent: #7aa2f7;
+      --accent-2: #9d7cd8;
+      --good: #9ece6a;
+      --bad: #f7768e;
+      --warn: #e0af68;
+      --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .wrap { max-width: 720px; margin: 0 auto; padding: 32px 20px 80px; }
+    h1 { font-size: 22px; font-weight: 600; margin: 0 0 4px; letter-spacing: -0.01em; }
+    h2 { font-size: 16px; font-weight: 600; margin: 28px 0 10px; letter-spacing: -0.005em; color: var(--fg); }
+    p.lead { margin: 0 0 24px; color: var(--muted); }
+    p.note { margin: 8px 0 0; color: var(--muted); font-size: 13px; }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 16px; }
+    .row { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }
+    .row:last-child { margin-bottom: 0; }
+    label { display: block; color: var(--muted); font-size: 13px; margin-bottom: 6px; }
+    input[type="text"], input[type="password"] {
+      width: 100%; padding: 10px 12px; background: var(--panel-2); color: var(--fg);
+      border: 1px solid var(--border); border-radius: 6px; font: inherit;
+    }
+    input:focus { outline: none; border-color: var(--accent); }
+    button {
+      padding: 9px 14px; background: var(--accent); color: #0b0c10; border: 0;
+      border-radius: 6px; font-weight: 600; cursor: pointer; font: inherit;
+    }
+    button:hover { filter: brightness(1.1); }
+    button.secondary { background: transparent; color: var(--fg); border: 1px solid var(--border); }
+    button.secondary:hover { background: var(--panel-2); }
+    button.danger { background: transparent; color: var(--bad); border: 1px solid var(--bad); }
+    button.danger:hover { background: var(--bad); color: var(--bg); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
+    .tab { padding: 8px 14px; cursor: pointer; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+    .tab.active { color: var(--fg); border-bottom-color: var(--accent); }
+    .keys { display: flex; flex-direction: column; gap: 8px; }
+    .key {
+      display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center;
+      padding: 12px 14px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+    }
+    .key .prefix { font-family: var(--mono); color: var(--accent); font-size: 13px; }
+    .key .label { color: var(--fg); }
+    .key .meta { color: var(--muted); font-size: 12px; }
+    .key.revoked { opacity: 0.45; }
+    .key.revoked .label::after { content: " (revoked)"; color: var(--bad); font-size: 12px; }
+    .reveal {
+      background: var(--panel-2); border: 1px solid var(--warn); border-radius: 8px;
+      padding: 16px; margin-bottom: 12px;
+    }
+    .reveal .key-value {
+      font-family: var(--mono); font-size: 13px; padding: 10px 12px;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+      word-break: break-all; margin: 8px 0;
+    }
+    .reveal .warn { color: var(--warn); font-size: 13px; margin: 0; }
+    .err { color: var(--bad); font-size: 13px; margin-top: 8px; min-height: 1em; }
+    .hide { display: none !important; }
+    .top { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 18px; }
+    .top .who { color: var(--muted); font-size: 13px; }
+    .top .who strong { color: var(--fg); font-weight: 600; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- Logged-out view (login + register) -->
+  <section id="auth-view">
+    <h1>codex-proxy</h1>
+    <p class="lead">Sign in to manage your API keys.</p>
+
+    <div class="panel">
+      <div class="tabs">
+        <div class="tab active" data-tab="login">Sign in</div>
+        <div class="tab" data-tab="register">Create account</div>
+      </div>
+
+      <form id="login-form" class="tabpane">
+        <label for="login-username">Username</label>
+        <input id="login-username" name="username" type="text" autocomplete="username" required>
+        <div style="height: 10px"></div>
+        <label for="login-password">Password</label>
+        <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+        <div style="height: 14px"></div>
+        <button type="submit">Sign in</button>
+        <p class="err" id="login-err"></p>
+      </form>
+
+      <form id="register-form" class="tabpane hide">
+        <label for="register-username">Username</label>
+        <input id="register-username" name="username" type="text" autocomplete="username" required>
+        <div style="height: 10px"></div>
+        <label for="register-password">Password</label>
+        <input id="register-password" name="password" type="password" autocomplete="new-password" required>
+        <p class="note">Passwords are stored as argon2id hashes. Pick something you can remember; there is no password reset.</p>
+        <div style="height: 14px"></div>
+        <button type="submit">Create account &amp; sign in</button>
+        <p class="err" id="register-err"></p>
+      </form>
+    </div>
+  </section>
+
+  <!-- Logged-in view (dashboard) -->
+  <section id="dash-view" class="hide">
+    <div class="top">
+      <h1>codex-proxy keys</h1>
+      <div class="who">Signed in as <strong id="who-username"></strong> &middot; <a href="#" id="logout-link">sign out</a></div>
+    </div>
+    <p class="lead">API keys you mint here go in your shell as <code>CODEX_PROXY_TOKEN</code>. Use them as the bearer when any client (Codex CLI, Aider, curl) calls this proxy.</p>
+
+    <div id="reveal" class="reveal hide">
+      <h2 style="margin-top:0">Your new key</h2>
+      <p class="warn">This is the only time the plaintext key will be shown. Copy it now.</p>
+      <div class="key-value" id="reveal-value"></div>
+      <button type="button" id="reveal-copy" class="secondary">Copy</button>
+      <button type="button" id="reveal-dismiss" class="secondary">Dismiss</button>
+    </div>
+
+    <div class="panel">
+      <h2 style="margin-top:0">Mint a new key</h2>
+      <form id="mint-form">
+        <label for="mint-label">Label (optional)</label>
+        <input id="mint-label" name="label" type="text" placeholder="e.g. laptop, ci-runner, daily-driver">
+        <div style="height: 12px"></div>
+        <button type="submit">Mint key</button>
+        <p class="err" id="mint-err"></p>
+      </form>
+    </div>
+
+    <div class="panel">
+      <h2 style="margin-top:0">Existing keys</h2>
+      <div class="keys" id="keys-list"></div>
+      <p class="err" id="keys-err"></p>
+    </div>
+  </section>
+
+</div>
+
+<script>
+"use strict";
+
+const SESSION_KEY = "codex_proxy.session_token";
+const USERNAME_KEY = "codex_proxy.username";
+
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+
+function show(view) {
+  $("#auth-view").classList.toggle("hide", view !== "auth");
+  $("#dash-view").classList.toggle("hide", view !== "dash");
+}
+
+function setErr(el, msg) {
+  el.textContent = msg || "";
+}
+
+async function api(path, opts = {}) {
+  const headers = Object.assign({}, opts.headers || {});
+  if (opts.body !== undefined && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
+  }
+  const session = sessionStorageGet();
+  if (opts.auth !== false && session) {
+    headers["Authorization"] = "Bearer " + session;
+  }
+  const resp = await fetch(path, {
+    method: opts.method || "GET",
+    headers,
+    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+  });
+  let data;
+  const text = await resp.text();
+  try { data = text ? JSON.parse(text) : {}; } catch { data = { detail: text }; }
+  if (!resp.ok) {
+    const err = new Error((data && data.detail) || ("HTTP " + resp.status));
+    err.status = resp.status;
+    throw err;
+  }
+  return data;
+}
+
+function sessionStorageGet() { return localStorage.getItem(SESSION_KEY) || ""; }
+function sessionStorageSet(token, username) {
+  if (token) { localStorage.setItem(SESSION_KEY, token); }
+  else { localStorage.removeItem(SESSION_KEY); }
+  if (username) { localStorage.setItem(USERNAME_KEY, username); }
+  else { localStorage.removeItem(USERNAME_KEY); }
+}
+
+// --- tab switching --------------------------------------------------------
+$$(".tab").forEach((t) => {
+  t.addEventListener("click", () => {
+    $$(".tab").forEach((x) => x.classList.toggle("active", x === t));
+    const which = t.dataset.tab;
+    $("#login-form").classList.toggle("hide", which !== "login");
+    $("#register-form").classList.toggle("hide", which !== "register");
+  });
+});
+
+// --- login -----------------------------------------------------------------
+$("#login-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  setErr($("#login-err"), "");
+  const username = $("#login-username").value.trim();
+  const password = $("#login-password").value;
+  try {
+    const r = await api("/auth/login", { method: "POST", auth: false, body: { username, password } });
+    sessionStorageSet(r.session_token, username);
+    enterDashboard();
+  } catch (e) {
+    setErr($("#login-err"), e.message);
+  }
+});
+
+// --- register --------------------------------------------------------------
+$("#register-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  setErr($("#register-err"), "");
+  const username = $("#register-username").value.trim();
+  const password = $("#register-password").value;
+  try {
+    await api("/auth/register", { method: "POST", auth: false, body: { username, password } });
+    const r = await api("/auth/login", { method: "POST", auth: false, body: { username, password } });
+    sessionStorageSet(r.session_token, username);
+    enterDashboard();
+  } catch (e) {
+    setErr($("#register-err"), e.message);
+  }
+});
+
+// --- logout ----------------------------------------------------------------
+$("#logout-link").addEventListener("click", async (ev) => {
+  ev.preventDefault();
+  try { await api("/auth/logout", { method: "POST" }); } catch { /* best-effort */ }
+  sessionStorageSet("", "");
+  show("auth");
+});
+
+// --- mint key --------------------------------------------------------------
+$("#mint-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  setErr($("#mint-err"), "");
+  const label = $("#mint-label").value.trim() || null;
+  try {
+    const r = await api("/auth/keys", { method: "POST", body: { label } });
+    showReveal(r.api_key);
+    $("#mint-label").value = "";
+    await refreshKeys();
+  } catch (e) {
+    setErr($("#mint-err"), e.message);
+    if (e.status === 401) { sessionStorageSet("", ""); show("auth"); }
+  }
+});
+
+// --- reveal newly-minted key ----------------------------------------------
+function showReveal(plaintext) {
+  $("#reveal-value").textContent = plaintext;
+  $("#reveal").classList.remove("hide");
+  $("#reveal-copy").onclick = async () => {
+    try { await navigator.clipboard.writeText(plaintext); $("#reveal-copy").textContent = "Copied!"; }
+    catch { $("#reveal-copy").textContent = "Copy failed"; }
+  };
+  $("#reveal-dismiss").onclick = () => {
+    $("#reveal").classList.add("hide");
+    $("#reveal-value").textContent = "";
+    $("#reveal-copy").textContent = "Copy";
+  };
+}
+
+// --- list + revoke keys ----------------------------------------------------
+async function refreshKeys() {
+  setErr($("#keys-err"), "");
+  try {
+    const r = await api("/auth/keys");
+    renderKeys(r.keys || []);
+  } catch (e) {
+    setErr($("#keys-err"), e.message);
+    if (e.status === 401) { sessionStorageSet("", ""); show("auth"); }
+  }
+}
+
+function renderKeys(keys) {
+  const root = $("#keys-list");
+  root.innerHTML = "";
+  if (!keys.length) {
+    root.innerHTML = "<p class='note'>No keys yet. Mint one above.</p>";
+    return;
+  }
+  for (const k of keys) {
+    const row = document.createElement("div");
+    row.className = "key" + (k.revoked_at ? " revoked" : "");
+    const prefix = document.createElement("div");
+    prefix.className = "prefix";
+    prefix.textContent = (k.prefix || "").padEnd(8, "·") + "...";
+    const middle = document.createElement("div");
+    const label = document.createElement("div");
+    label.className = "label";
+    label.textContent = k.label || "(unlabeled)";
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = "created " + fmtTs(k.created_at) + (k.last_used_at ? " · last used " + fmtTs(k.last_used_at) : "");
+    middle.append(label, meta);
+    const actions = document.createElement("div");
+    if (!k.revoked_at) {
+      const btn = document.createElement("button");
+      btn.className = "danger";
+      btn.textContent = "Revoke";
+      btn.onclick = async () => {
+        if (!confirm(`Revoke key '${k.label || k.prefix}'? Clients using this key will start getting 401 immediately.`)) return;
+        try { await api("/auth/keys/" + k.id, { method: "DELETE" }); await refreshKeys(); }
+        catch (e) { alert("Revoke failed: " + e.message); }
+      };
+      actions.appendChild(btn);
+    }
+    row.append(prefix, middle, actions);
+    root.appendChild(row);
+  }
+}
+
+function fmtTs(unix) {
+  if (!unix) return "—";
+  const d = new Date(unix * 1000);
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  const dateStr = d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  const timeStr = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  return sameDay ? "today " + timeStr : dateStr + " " + timeStr;
+}
+
+function enterDashboard() {
+  $("#who-username").textContent = localStorage.getItem(USERNAME_KEY) || "(you)";
+  show("dash");
+  refreshKeys();
+}
+
+// --- bootstrap -------------------------------------------------------------
+(async function init() {
+  const session = sessionStorageGet();
+  if (!session) { show("auth"); return; }
+  // Probe the session by listing keys; if expired, fall back to login.
+  try {
+    await api("/auth/keys");
+    enterDashboard();
+  } catch (e) {
+    sessionStorageSet("", "");
+    show("auth");
+  }
+})();
+</script>
+</body>
+</html>
