@@ -192,7 +192,7 @@ Passwords are stored as **argon2id** hashes. Session tokens and API keys are 32 
 - `GET /auth/keys` (Bearer session) → `200 {keys: [{id, prefix, label, created_at, last_used_at, revoked_at}, ...]}`
 - `DELETE /auth/keys/{id}` (Bearer session) → `200 {revoked: true}` or `404`
 
-### Calling `/v1/*` with an API key
+### Calling `/v1/*` with an API key (curl)
 
 ```
 curl http://127.0.0.1:8765/v1/responses \
@@ -202,6 +202,82 @@ curl http://127.0.0.1:8765/v1/responses \
 ```
 
 Missing or revoked key → `401`. The `usage_log` `requests` table picks up `user_id` and `api_key_id` so a query like `SELECT user_id, SUM(total_tokens) FROM requests GROUP BY user_id` works as expected.
+
+### Setting up the Codex CLI as a client
+
+End users get an account from the operator (or self-register), log in to get a session token, mint an API key, and then point their **own** Codex CLI at the proxy URL with that key. The end user's Codex CLI never touches the operator's vault files; it only knows the proxy URL and its API key.
+
+#### One-time bootstrap (per end user)
+
+1. **Operator-side**: confirm the proxy is reachable from the user's machine and `[auth].db` is set.
+
+2. **User-side: register and log in.** Substitute the proxy URL for the operator's host:port.
+
+   ```
+   curl -X POST http://your-proxy-host:8765/auth/register \
+     -H "Content-Type: application/json" \
+     -d '{"username":"alice","password":"<a-strong-password>"}'
+
+   curl -X POST http://your-proxy-host:8765/auth/login \
+     -H "Content-Type: application/json" \
+     -d '{"username":"alice","password":"<a-strong-password>"}'
+   # → {"session_token":"<token>","expires_at":...}
+   ```
+
+3. **Mint an API key with the session token.** Save the returned plaintext immediately — it is shown only once.
+
+   ```
+   curl -X POST http://your-proxy-host:8765/auth/keys \
+     -H "Authorization: Bearer <session-token>" \
+     -H "Content-Type: application/json" \
+     -d '{"label":"my-laptop"}'
+   # → {"id":1,"api_key":"<plaintext-key>","prefix":"AbCd1234","label":"my-laptop",...}
+   ```
+
+#### Wiring the Codex CLI
+
+Add a provider definition and a profile to the **client's** `~/.codex/config.toml`. (Or use a separate `CODEX_HOME` to keep this isolated from your normal Codex usage — recommended if you also use Codex against `chatgpt.com` directly, see the refresh-chain caveat below.)
+
+```toml
+[model_providers.codex_proxy]
+name = "codex-proxy"
+base_url = "http://your-proxy-host:8765/v1"
+env_key = "CODEX_PROXY_TOKEN"
+wire_api = "responses"
+
+[profiles.via_proxy]
+model = "model-a0e7"
+model_provider = "codex_proxy"
+```
+
+`env_key` is the name of an env var holding the API key. Codex CLI insists on `env_key` being set to a non-empty value; the proxy uses it as the bearer token.
+
+```
+echo 'export CODEX_PROXY_TOKEN=<plaintext-key>' >> ~/.bashrc
+source ~/.bashrc
+```
+
+#### Using the proxy via Codex CLI
+
+```
+# interactive
+codex -p via_proxy
+
+# non-interactive (great for scripts / automation)
+codex exec -p via_proxy "summarise this file" < src/something.py
+
+# without -p, the user's normal codex usage is unaffected
+codex
+```
+
+#### Other clients
+
+The proxy speaks standard OpenAI shapes on `/v1/responses` and `/v1/chat/completions`. Any client that lets you set a base URL and a bearer token will work — Aider, Cursor, Continue, Raycast AI, custom SDK scripts using `openai-python` with `base_url` set, etc. Use the same `Authorization: Bearer <api-key>` pattern.
+
+### Operational notes
+
+- **Auth.json refresh-chain caveat.** The proxy reads `auth.json` files directly. It does *not* run a Codex CLI subprocess — there is no Codex CLI inside the server. The CLI is only used (on the operator's machine, once) to log in and produce the file. Once the file is in a vault path, the proxy owns the OAuth refresh chain for that account: every successful refresh produces a new refresh token and writes it back to the file. If anything else (e.g. the operator's normal `codex` usage on the same account) refreshes against the same `auth.json` chain in parallel, whichever side rotates first invalidates the other side. **Either dedicate an account to the proxy, or route the operator's own Codex usage through the proxy too** (using the client setup above with a `localhost` `base_url`).
+- **One Codex CLI, two roles.** The operator's CLI is used *once per account* to produce `auth.json`. The end user's CLI is used *all the time* to make actual requests, pointed at the proxy. They are the same binary playing different roles.
 
 ### Out of scope (today)
 

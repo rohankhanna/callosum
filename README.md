@@ -4,7 +4,34 @@ A small local HTTP proxy that sits in front of multiple Codex Plus/Pro authentic
 
 It is deliberately a less-than-intelligent router. It does not try to summarize, retry mid-stream, synthesize continuity, or do anything fancier than "pick an account that can serve this request, and if it fails, try the next one." The OpenAI-compatible routes (`/v1/responses` and `/v1/chat/completions`) exist so your normal Codex-speaking clients can point at this proxy without knowing anything changed.
 
-## Quick start
+## How it works (architecture)
+
+Three roles, two of which involve a Codex CLI binary — easy to confuse.
+
+```
+                                                       ┌──────────────────────┐
+[ operator's Codex CLI ]   one-off, only for login →  │  account-a/auth.json │
+[ operator's Codex CLI ]   one-off, only for login →  │  account-b/auth.json │
+                                                       └──────────┬───────────┘
+                                                                  │ files on disk
+                                                                  ▼
+                                                       ┌──────────────────────┐
+[ end user's Codex CLI ] ── HTTP /v1/responses ─────► │   codex-proxy server  │ ── HTTPS ──► chatgpt.com/backend-api/codex
+[ another Codex CLI    ] ── HTTP /v1/responses ─────► │   (FastAPI process)   │           (with vault's access token +
+[ Aider / Cursor / ... ] ── HTTP /v1/chat/completions │                       │            chatgpt-account-id header)
+                                                       └──────────────────────┘
+                                                                  ▲
+                            Authorization: Bearer <api-key> ──────┘
+                            (only when [auth] is enabled)
+```
+
+- **The proxy server is just a FastAPI process.** It does *not* shell out to a Codex CLI at request time. It reads the `auth.json` file directly, refreshes the OAuth access token over HTTPS when it nears expiry, and forwards Responses-API requests upstream itself.
+- **The operator's Codex CLI is only used once per account, to log in and produce `auth.json`.** After that the file is the only thing the proxy needs. The CLI itself is not invoked at runtime.
+- **End users run their own Codex CLI** (or any OpenAI-compatible client) and point its `base_url` at the proxy. They authenticate to the proxy with an API key minted via `/auth/keys` (when multi-tenant mode is on) — they never see the operator's `auth.json`, refresh tokens, or upstream account IDs.
+
+A consequence worth knowing up front: the proxy's `auth.json` and the operator's normal `~/.codex/auth.json` cannot belong to the same Codex account at the same time — refresh tokens are one-shot and whoever rotates first invalidates the other side. See [`docs/config.md`](docs/config.md#operational-notes) for details.
+
+## Quick start (operator)
 
 Install (with [uv](https://docs.astral.sh/uv/)):
 
@@ -50,6 +77,40 @@ curl http://127.0.0.1:8765/v1/responses \
 Chat-completions shape also works; requests are translated to the Responses API on the way out and back on the way in.
 
 Streaming works on both routes with `"stream": true`. On `/v1/responses` the upstream SSE is forwarded byte-for-byte.
+
+## Quick start (Codex CLI as a client)
+
+You can use any OpenAI-compatible client. The most common is the Codex CLI itself, run from a different machine (or the same one, in a separate `CODEX_HOME`) so it does *not* interfere with the auth file the proxy is using.
+
+Add a provider + profile to the **client's** `~/.codex/config.toml` (or use `CODEX_HOME=...` to keep it isolated from your normal Codex usage):
+
+```toml
+[model_providers.codex_proxy]
+name = "codex-proxy"
+base_url = "http://127.0.0.1:8765/v1"   # or your server's URL
+env_key = "CODEX_PROXY_TOKEN"            # holds the API key (or any non-empty value in single-operator mode)
+wire_api = "responses"
+
+[profiles.via_proxy]
+model = "model-a0e7"
+model_provider = "codex_proxy"
+```
+
+Export the API key (or any dummy value when the proxy runs without `[auth]`):
+
+```
+echo 'export CODEX_PROXY_TOKEN=<your-api-key>' >> ~/.bashrc
+source ~/.bashrc
+```
+
+Use the profile per invocation — your normal `codex` (without `-p`) is unaffected:
+
+```
+codex -p via_proxy                      # interactive
+codex exec -p via_proxy "your prompt"   # non-interactive
+```
+
+In multi-tenant mode the API key is one you minted via the `/auth/keys` flow — see [`docs/config.md`](docs/config.md#multi-tenant-auth-auth) for the registration / login / key-issue dance.
 
 ## How rotation works
 
