@@ -78,37 +78,17 @@ Chat-completions shape also works; requests are translated to the Responses API 
 
 Streaming works on both routes with `"stream": true`. On `/v1/responses` the upstream SSE is forwarded byte-for-byte.
 
-## Quick start (Codex CLI as a client)
+## Pointing clients at the proxy
 
-You can use any OpenAI-compatible client. The most common is the Codex CLI itself, run from a different machine (or the same one, in a separate `CODEX_HOME`) so it does *not* interfere with the auth file the proxy is using.
-
-Add a provider + profile to the **client's** `~/.codex/config.toml` (or use `CODEX_HOME=...` to keep it isolated from your normal Codex usage):
-
-```toml
-[model_providers.codex_proxy]
-name = "codex-proxy"
-base_url = "http://127.0.0.1:8765/v1"   # or your server's URL
-env_key = "CODEX_PROXY_TOKEN"            # holds the API key (or any non-empty value in single-operator mode)
-wire_api = "responses"
-
-[profiles.via_proxy]
-model = "model-a0e7"
-model_provider = "codex_proxy"
-```
-
-Export the API key (or any dummy value when the proxy runs without `[auth]`):
+Any tool that takes a base URL and a bearer token works. The fastest history-preserving path:
 
 ```
-echo 'export CODEX_PROXY_TOKEN=<your-api-key>' >> ~/.bashrc
-source ~/.bashrc
+OPENAI_BASE_URL=http://127.0.0.1:8765/v1 \
+OPENAI_API_KEY=<your-codex-proxy-api-key> \
+your-tool ...
 ```
 
-Use the profile per invocation — your normal `codex` (without `-p`) is unaffected:
-
-```
-codex -p via_proxy                      # interactive
-codex exec -p via_proxy "your prompt"   # non-interactive
-```
+Per-tool recipes — Codex CLI, Hermes Agent, Aider, Cursor, Continue, OpenAI Python/JS SDKs, curl, generic OpenAI-compatible — live in [`docs/clients.md`](docs/clients.md). That doc also explains how to keep existing tool histories untouched (per-invocation env-var overrides instead of persistent config edits) and what's needed for Anthropic-shape clients like Claude Code (Phase 3 — not built yet).
 
 In multi-tenant mode the API key is one you minted via the `/auth/keys` flow — see [`docs/config.md`](docs/config.md#multi-tenant-auth-auth) for the registration / login / key-issue dance.
 
