@@ -113,6 +113,10 @@ curl http://127.0.0.1:8765/status | jq
 
 The proxy ships single-operator by default — `127.0.0.1`, no auth on `/v1/*`. When `[auth] db = "..."` is configured, a small `/auth/*` surface goes live: register/login/issue-and-revoke-API-keys. With auth on, every `/v1/*` call requires `Authorization: Bearer <api-key>` and is attributed in the usage log to the issuing user. Argon2id for passwords, sha256-stored opaque keys. See [`docs/config.md`](docs/config.md#multi-tenant-auth-auth) for the endpoints and curl examples. Out of scope: per-key rate limits (comes after enough corpus to budget against), TLS (front with Caddy/nginx), and password reset (single-operator instance).
 
+## Daily upstream healthcheck
+
+`GET /diagnose/upstream` makes one tiny real request per backend and verifies the upstream contract still holds — model still accepted, `x-codex-*` headers still present, `response.completed` event still has a `usage` block. Wire it to a daily cron and alert on `.ok != true` to catch Codex API regressions before they bite a real request. See [`docs/config.md`](docs/config.md#daily-upstream-healthcheck-get-diagnoseupstream) for the full check list and an example cron line.
+
 ## Per-request usage log
 
 When `[usage_log] path = "..."` is set in the config, every backend call is recorded as a row in a SQLite database with token counts, latency, and the upstream-reported per-account quota state (5-hour and weekly window) before and after the call. With `capture_bodies = true` (default) the request and response payloads are also stored, zlib-compressed. This is the data corpus for modeling how token-and-reasoning-effort inputs translate into Codex Plus/Pro quota consumption. See [`docs/config.md`](docs/config.md#usage-log-usage_log) for schema and example queries.

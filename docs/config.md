@@ -285,6 +285,60 @@ The proxy speaks standard OpenAI shapes on `/v1/responses` and `/v1/chat/complet
 - Email verification, password reset, MFA — single-operator instance; users are people you know personally.
 - TLS / public exposure — keep the proxy on `127.0.0.1` and front it with Caddy/nginx if exposed.
 
+## Daily upstream healthcheck (`GET /diagnose/upstream`)
+
+The proxy doesn't have automated tests against the real Codex backend — a regression in the upstream contract (renamed model, removed header, changed SSE event shape) would only show up when a real request fails. `GET /diagnose/upstream` is a one-shot probe per backend that catches those regressions before they bite a user request.
+
+Each invocation makes one tiny streaming request per non-cooldown'd backend (prompt: "say only: ok", a few hundred tokens of overhead total). It then evaluates:
+
+| Check | Catches |
+| --- | --- |
+| `http_2xx` | URL or auth flow change (401, 404, 5xx from upstream) |
+| `quota_headers_present` | `x-codex-*` headers removed or renamed |
+| `primary_used_percent_present` | the 5-hour-window quota field disappeared |
+| `secondary_used_percent_present` | the weekly quota field disappeared |
+| `response_completed_event_present` | SSE terminal event renamed or restructured |
+| `usage_block_present` | `response.completed.response.usage` shape changed |
+
+Plus, an upstream `400` (e.g. "model not supported") surfaces as `stage = "upstream"` with the status code, which catches Codex retiring or renaming a model.
+
+Response shape:
+
+```json
+{
+  "ok": true,
+  "backends": [
+    {
+      "id": "primary",
+      "ok": true,
+      "skipped": false,
+      "stage": "evaluate",
+      "model": "model-a0e7",
+      "checks": {"http_2xx": true, "quota_headers_present": true, "...": true},
+      "failed_checks": [],
+      "upstream_status": 200
+    }
+  ]
+}
+```
+
+Cooled-down backends are reported with `skipped: true` and **don't** flip the aggregate `ok` to false — the daily check shouldn't kick a backend that's already recovering.
+
+When auth is enabled, the route requires a valid API key (same bearer middleware that gates `/v1/*`). Mint a dedicated key labeled "diag-cron" for this purpose so revoking it doesn't disturb other clients.
+
+### Cron example
+
+```
+# Run at 09:00 every day; alert via mail or systemd-cat on any failure.
+0 9 * * *   curl -s -H "Authorization: Bearer $CODEX_PROXY_DIAG_KEY" \
+                 http://127.0.0.1:8765/diagnose/upstream \
+            | jq -e '.ok' > /dev/null \
+            || echo "codex-proxy upstream check failed at $(date)" \
+                | mail -s "codex-proxy: upstream regression" you@example.com
+```
+
+For systemd users, prefer a `systemd.timer` over cron — easier to inspect via `systemctl list-timers` and to log with `journalctl -u codex-proxy-diag`.
+
 ## Verification
 
 ```

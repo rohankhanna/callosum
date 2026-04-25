@@ -80,11 +80,12 @@ def create_app(
 
     app = FastAPI(title="codex-proxy", version=__version__, lifespan=lifespan)
 
-    # Bearer middleware for /v1/* — only enforced when an auth service is
-    # configured. In single-operator mode (no auth db) /v1/* stays open.
+    # Bearer middleware for /v1/* and /diagnose/* — only enforced when an
+    # auth service is configured. In single-operator mode (no auth db) those
+    # routes stay open.
     @app.middleware("http")
     async def _enforce_api_key(request: Request, call_next: Callable[[Request], Any]) -> Any:
-        if auth_service is None or not request.url.path.startswith("/v1/"):
+        if auth_service is None or not _path_requires_api_key(request.url.path):
             return await call_next(request)
         plaintext = _bearer(request)
         if plaintext is None:
@@ -150,6 +151,24 @@ def create_app(
     async def control_unpin() -> dict[str, str | None]:
         pin_state.clear()
         return {"pinned": None}
+
+    @app.get("/diagnose/upstream")
+    async def diagnose_upstream() -> dict[str, Any]:
+        """Probe each backend with a tiny real request and verify the upstream
+        contract still holds (HTTP 200, x-codex-* headers parse, response.completed
+        SSE event with usage block, model name still accepted).
+
+        Intended for a daily cron — run it, alert on any backend's `ok=false`.
+        Each invocation makes one real upstream call per backend, costing a
+        small number of quota tokens. Cooldown'd backends are reported as
+        skipped (the daily run shouldn't kick a backend that's already
+        recovering).
+        """
+        results = []
+        for backend in backends_list:
+            results.append(await _diagnose_backend(backend))
+        all_ok = all(r["ok"] for r in results if not r.get("skipped"))
+        return {"ok": all_ok, "backends": results}
 
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
@@ -619,6 +638,96 @@ def _bearer(request: Request) -> str | None:
         return None
     token = parts[1].strip()
     return token or None
+
+
+def _path_requires_api_key(path: str) -> bool:
+    """Routes the bearer middleware enforces when auth is enabled."""
+    return path.startswith("/v1/") or path.startswith("/diagnose/")
+
+
+# Tiny prompt the diagnostic uses. Kept short to limit quota burn.
+_DIAGNOSE_PROMPT = "say only: ok"
+
+
+async def _diagnose_backend(backend: Backend) -> dict[str, Any]:
+    """Send one minimal streaming request and check upstream contract holds."""
+    if not backend.advertised_models:
+        return {
+            "id": backend.id,
+            "ok": False,
+            "skipped": False,
+            "stage": "config",
+            "reason": "backend has no advertised_models",
+        }
+    usage = await backend.usage_snapshot()
+    now = time.time()
+    if usage.cooldown_until_ts is not None and usage.cooldown_until_ts > now:
+        return {
+            "id": backend.id,
+            "ok": True,
+            "skipped": True,
+            "stage": "cooldown",
+            "reason": "backend in cooldown; not probed",
+            "cooldown_until_ts": usage.cooldown_until_ts,
+        }
+    model = sorted(backend.advertised_models)[0]
+    handle = CallHandle()
+    body = {
+        "model": model,
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": _DIAGNOSE_PROMPT}],
+            }
+        ],
+        "stream": True,
+        "store": False,
+    }
+    try:
+        async for _chunk in backend.responses_stream(body, handle):
+            pass
+    except BackendError as exc:
+        return {
+            "id": backend.id,
+            "ok": False,
+            "skipped": False,
+            "stage": "upstream",
+            "classification": exc.classification,
+            "status_code": exc.status_code,
+            "reason": exc.message or exc.classification,
+            "model": model,
+        }
+    return _evaluate_diagnostic(backend.id, handle, model)
+
+
+def _evaluate_diagnostic(backend_id: str, handle: CallHandle, model: str) -> dict[str, Any]:
+    """Pure check over a CallHandle from a successful diagnostic request."""
+    summary = handle.stream_summary
+    completed = summary.completed_response if summary is not None else None
+    usage_block = completed.get("usage") if isinstance(completed, dict) else None
+    quota = handle.quota_after
+    checks = {
+        "http_2xx": handle.upstream_status is not None and 200 <= handle.upstream_status < 300,
+        "quota_headers_present": quota is not None,
+        "primary_used_percent_present": quota is not None
+        and quota.primary_used_percent is not None,
+        "secondary_used_percent_present": quota is not None
+        and quota.secondary_used_percent is not None,
+        "response_completed_event_present": completed is not None,
+        "usage_block_present": isinstance(usage_block, dict),
+    }
+    failed = [name for name, ok in checks.items() if not ok]
+    return {
+        "id": backend_id,
+        "ok": not failed,
+        "skipped": False,
+        "stage": "evaluate",
+        "model": model,
+        "checks": checks,
+        "failed_checks": failed,
+        "upstream_status": handle.upstream_status,
+    }
 
 
 def _install_auth_routes(app: FastAPI, auth_service: AuthService) -> None:
