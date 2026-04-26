@@ -273,21 +273,40 @@ The `-p via_proxy` flag must appear on every invocation you want routed through 
 
 ### Hermes Agent
 
-[Hermes Agent](https://github.com/nousresearch/hermes-agent) (Nous Research) honours standard OpenAI env vars and also exposes a `hermes config set` CLI that writes them to `~/.hermes/.env`.
+[Hermes Agent](https://github.com/nousresearch/hermes-agent) (Nous Research) needs three config keys to route through the proxy. Verified live against v0.10.0:
 
-Per-invocation (history-preserving):
-
+```bash
+hermes config set model.provider custom
+hermes config set model.base_url http://127.0.0.1:8765/v1
+hermes config set model.api_mode codex_responses
+hermes config set OPENAI_API_KEY "$CODEX_PROXY_TOKEN"
 ```
-OPENAI_BASE_URL=http://127.0.0.1:8765/v1 \
-OPENAI_API_KEY=$CODEX_PROXY_TOKEN \
-hermes
+
+Three things worth knowing about the hermes setup that surprised me during integration:
+
+- **The provider name is `custom`**, not `openai-compatible`. Hermes' `--provider` flag list omits it (and instead lists `auto`, `openai-codex`, `nous`, ...), but `model.provider = custom` is the value the OpenAI-compatible code path checks for.
+- **`model.api_mode = codex_responses` is required**, not optional. Without it hermes sends `/v1/chat/completions` requests with hermes-shape bodies (system prompt as `developer` role, ~28 tool definitions). The proxy's chat-completions → Responses-API translator drops the `developer` role and the tools, and the upstream rejects the resulting minimal body with `400`. Setting `api_mode = codex_responses` makes hermes send native Responses-API requests at `/v1/responses`, which the proxy forwards verbatim — no translation gap. The 400 disappears.
+- **Don't try to keep `model.provider = openai-codex` and just override `base_url`.** That provider path uses Codex's own OAuth token (read from `~/.codex/auth.json`) and a hardcoded base URL — it ignores your proxy entirely. The `custom` provider is the right one.
+
+Verify the setup:
+
+```bash
+hermes chat -q "say only the words: hello via hermes"
+sqlite3 ~/.local/state/codex-proxy/requests.sqlite \
+  "SELECT id, route, user_id, api_key_id, status FROM requests ORDER BY id DESC LIMIT 1"
+# Expect: route = "responses", status = 200, your user_id + api_key_id populated.
+
+hermes chat -c -q "and again: hello again via hermes"
+# Should resume the previous session and add another logged row.
 ```
 
-Persistent (replaces whatever provider you had):
+Per-invocation alternative (no persistent config change):
 
-```
-hermes config set OPENAI_BASE_URL http://127.0.0.1:8765/v1
-hermes config set OPENAI_API_KEY  $CODEX_PROXY_TOKEN
+```bash
+OPENAI_API_KEY="$CODEX_PROXY_TOKEN" hermes chat -q "..." \
+  -- /* you'd still need model.provider=custom, model.base_url=..., model.api_mode=codex_responses
+        applied somehow; hermes doesn't accept those as flags. The persistent form above is the
+        recommended setup for the "single point of auth" use case. */
 ```
 
 ### Aider
