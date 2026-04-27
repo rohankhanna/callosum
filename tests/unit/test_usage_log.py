@@ -9,19 +9,19 @@ from codex_proxy.codex_quota import CodexQuotaSnapshot
 from codex_proxy.usage_log import UsageLog, UsageLogEntry, decompress
 
 
-def _snap(*, primary: int, secondary: int) -> CodexQuotaSnapshot:
+def _snap(*, five_hourly: int, weekly: int) -> CodexQuotaSnapshot:
     return CodexQuotaSnapshot(
         plan_type="plus",
         active_limit="premium",
-        primary_used_percent=primary,
-        secondary_used_percent=secondary,
-        primary_window_minutes=300,
-        secondary_window_minutes=10080,
-        primary_reset_at=1777000000,
-        secondary_reset_at=1777500000,
-        primary_reset_after_seconds=6000,
-        secondary_reset_after_seconds=100000,
-        primary_over_secondary_limit_percent=0,
+        five_hourly_used_percent=five_hourly,
+        weekly_used_percent=weekly,
+        five_hourly_window_minutes=300,
+        weekly_window_minutes=10080,
+        five_hourly_reset_at=1777000000,
+        weekly_reset_at=1777500000,
+        five_hourly_reset_after_seconds=6000,
+        weekly_reset_after_seconds=100000,
+        five_hourly_over_weekly_limit_percent=0,
         credits_balance=None,
         credits_has_credits=False,
         credits_unlimited=False,
@@ -73,15 +73,15 @@ def test_record_persists_quota_before_and_after(tmp_path: Path) -> None:
     log = UsageLog(tmp_path / "u.sqlite")
     rowid = log.record(
         _entry(
-            quota_before=_snap(primary=1, secondary=53),
-            quota_after=_snap(primary=2, secondary=54),
+            quota_before=_snap(five_hourly=1, weekly=53),
+            quota_after=_snap(five_hourly=2, weekly=54),
         )
     )
     conn = sqlite3.connect(tmp_path / "u.sqlite")
     row = conn.execute(
         """
-        SELECT primary_used_percent_before, primary_used_percent_after,
-               secondary_used_percent_before, secondary_used_percent_after,
+        SELECT five_hourly_used_percent_before, five_hourly_used_percent_after,
+               weekly_used_percent_before, weekly_used_percent_after,
                plan_type, quota_reset_crossover
         FROM requests WHERE id = ?
         """,
@@ -95,9 +95,9 @@ def test_record_flags_window_reset_crossover(tmp_path: Path) -> None:
     log = UsageLog(tmp_path / "u.sqlite")
     rowid = log.record(
         _entry(
-            quota_before=_snap(primary=98, secondary=53),
-            # primary window reset mid-request: after < before.
-            quota_after=_snap(primary=1, secondary=54),
+            quota_before=_snap(five_hourly=98, weekly=53),
+            # 5-hour window reset mid-request: after < before.
+            quota_after=_snap(five_hourly=1, weekly=54),
         )
     )
     conn = sqlite3.connect(tmp_path / "u.sqlite")
@@ -152,7 +152,7 @@ def test_null_quota_yields_null_columns_but_not_crossover(tmp_path: Path) -> Non
     conn = sqlite3.connect(tmp_path / "u.sqlite")
     row = conn.execute(
         """
-        SELECT primary_used_percent_before, primary_used_percent_after,
+        SELECT five_hourly_used_percent_before, five_hourly_used_percent_after,
                plan_type, quota_reset_crossover
         FROM requests WHERE id = ?
         """,

@@ -34,13 +34,13 @@ CREATE TABLE IF NOT EXISTS requests (
     reasoning_tokens INTEGER,
     plan_type TEXT,
     active_limit TEXT,
-    primary_used_percent_before INTEGER,
-    primary_used_percent_after INTEGER,
-    secondary_used_percent_before INTEGER,
-    secondary_used_percent_after INTEGER,
-    primary_reset_at INTEGER,
-    secondary_reset_at INTEGER,
-    primary_over_secondary_limit_percent INTEGER,
+    five_hourly_used_percent_before INTEGER,
+    five_hourly_used_percent_after INTEGER,
+    weekly_used_percent_before INTEGER,
+    weekly_used_percent_after INTEGER,
+    five_hourly_reset_at INTEGER,
+    weekly_reset_at INTEGER,
+    five_hourly_over_weekly_limit_percent INTEGER,
     credits_balance TEXT,
     credits_has_credits INTEGER,
     credits_unlimited INTEGER,
@@ -83,6 +83,22 @@ _MIGRATIONS = [
     "UPDATE requests SET routing_mode = 'pass-through' WHERE routing_mode IS NULL",
     "CREATE INDEX IF NOT EXISTS idx_requests_routing_mode ON requests(routing_mode)",
     "CREATE INDEX IF NOT EXISTS idx_requests_served_cell ON requests(model, reasoning_effort)",
+    # Quota-window column renames: upstream's x-codex-primary-* (5h window) and
+    # x-codex-secondary-* (weekly window) are preserved as-is over the wire, but
+    # we name our own columns by what they actually mean. RENAME COLUMN is
+    # SQLite ≥3.25; running a second time fails with "no such column" since the
+    # old name is gone — _apply_migrations swallows that.
+    "ALTER TABLE requests RENAME COLUMN primary_used_percent_before"
+    " TO five_hourly_used_percent_before",
+    "ALTER TABLE requests RENAME COLUMN primary_used_percent_after"
+    " TO five_hourly_used_percent_after",
+    "ALTER TABLE requests RENAME COLUMN secondary_used_percent_before"
+    " TO weekly_used_percent_before",
+    "ALTER TABLE requests RENAME COLUMN secondary_used_percent_after TO weekly_used_percent_after",
+    "ALTER TABLE requests RENAME COLUMN primary_reset_at TO five_hourly_reset_at",
+    "ALTER TABLE requests RENAME COLUMN secondary_reset_at TO weekly_reset_at",
+    "ALTER TABLE requests RENAME COLUMN primary_over_secondary_limit_percent"
+    " TO five_hourly_over_weekly_limit_percent",
 ]
 
 
@@ -152,16 +168,22 @@ class UsageLog:
 
         Each statement is wrapped in its own try/except so re-running on a
         DB that already has the column is a no-op. SQLite has no
-        IF NOT EXISTS for ADD COLUMN, hence the catch.
+        IF NOT EXISTS for ADD COLUMN or RENAME COLUMN, hence the catch.
         """
         for stmt in _MIGRATIONS:
             try:
                 self._conn.execute(stmt)
             except sqlite3.OperationalError as exc:
-                # "duplicate column name" means the migration was already
-                # applied — that's fine. Anything else is a real error.
-                if "duplicate column" not in str(exc).lower():
-                    raise
+                msg = str(exc).lower()
+                # Already-applied signals: ADD COLUMN re-run, or RENAME COLUMN
+                # where the old name is gone (renamed) or the new name exists.
+                if (
+                    "duplicate column" in msg
+                    or "no such column" in msg
+                    or "there is already another column" in msg
+                ):
+                    continue
+                raise
 
     @property
     def path(self) -> Path:
@@ -205,13 +227,13 @@ class UsageLog:
             entry.reasoning_tokens,
             _pick(qa, qb, "plan_type"),
             _pick(qa, qb, "active_limit"),
-            qb.primary_used_percent if qb is not None else None,
-            qa.primary_used_percent if qa is not None else None,
-            qb.secondary_used_percent if qb is not None else None,
-            qa.secondary_used_percent if qa is not None else None,
-            qa.primary_reset_at if qa is not None else None,
-            qa.secondary_reset_at if qa is not None else None,
-            qa.primary_over_secondary_limit_percent if qa is not None else None,
+            qb.five_hourly_used_percent if qb is not None else None,
+            qa.five_hourly_used_percent if qa is not None else None,
+            qb.weekly_used_percent if qb is not None else None,
+            qa.weekly_used_percent if qa is not None else None,
+            qa.five_hourly_reset_at if qa is not None else None,
+            qa.weekly_reset_at if qa is not None else None,
+            qa.five_hourly_over_weekly_limit_percent if qa is not None else None,
             _pick(qa, qb, "credits_balance"),
             _bool_to_int(qa.credits_has_credits if qa is not None else None),
             _bool_to_int(qa.credits_unlimited if qa is not None else None),
@@ -232,10 +254,10 @@ class UsageLog:
                     prompt_tokens, completion_tokens, total_tokens,
                     cached_tokens, reasoning_tokens,
                     plan_type, active_limit,
-                    primary_used_percent_before, primary_used_percent_after,
-                    secondary_used_percent_before, secondary_used_percent_after,
-                    primary_reset_at, secondary_reset_at,
-                    primary_over_secondary_limit_percent,
+                    five_hourly_used_percent_before, five_hourly_used_percent_after,
+                    weekly_used_percent_before, weekly_used_percent_after,
+                    five_hourly_reset_at, weekly_reset_at,
+                    five_hourly_over_weekly_limit_percent,
                     credits_balance, credits_has_credits, credits_unlimited,
                     quota_reset_crossover,
                     requested_model, requested_reasoning_effort, routing_mode
@@ -298,13 +320,13 @@ def _is_reset_crossover(
         return False
     # Either window resetting during the request looks like post < pre.
     return (
-        before.primary_used_percent is not None
-        and after.primary_used_percent is not None
-        and after.primary_used_percent < before.primary_used_percent
+        before.five_hourly_used_percent is not None
+        and after.five_hourly_used_percent is not None
+        and after.five_hourly_used_percent < before.five_hourly_used_percent
     ) or (
-        before.secondary_used_percent is not None
-        and after.secondary_used_percent is not None
-        and after.secondary_used_percent < before.secondary_used_percent
+        before.weekly_used_percent is not None
+        and after.weekly_used_percent is not None
+        and after.weekly_used_percent < before.weekly_used_percent
     )
 
 

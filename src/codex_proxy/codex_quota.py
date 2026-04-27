@@ -10,9 +10,11 @@ class CodexQuotaSnapshot:
     """Per-account quota state extracted from upstream `/responses` headers.
 
     Every response from the ChatGPT backend includes `x-codex-*` headers that
-    report the account's 5-hour ("primary") and weekly ("secondary") usage
-    percentages, reset times, and plan metadata. This dataclass captures a
-    single such snapshot.
+    report the account's 5-hour and weekly usage percentages, reset times, and
+    plan metadata. Upstream calls these "primary" (5h) and "secondary" (weekly)
+    in the header names; we use the more direct `five_hourly_*` / `weekly_*`
+    names internally because "primary/secondary" is ambiguous (the user has
+    multiple physical accounts also referred to that way).
 
     Differences between two snapshots on the same backend describe the cost,
     in Codex-quota-percent, of whatever requests happened between them.
@@ -20,15 +22,15 @@ class CodexQuotaSnapshot:
 
     plan_type: str | None
     active_limit: str | None
-    primary_used_percent: int | None
-    secondary_used_percent: int | None
-    primary_window_minutes: int | None
-    secondary_window_minutes: int | None
-    primary_reset_at: int | None
-    secondary_reset_at: int | None
-    primary_reset_after_seconds: int | None
-    secondary_reset_after_seconds: int | None
-    primary_over_secondary_limit_percent: int | None
+    five_hourly_used_percent: int | None
+    weekly_used_percent: int | None
+    five_hourly_window_minutes: int | None
+    weekly_window_minutes: int | None
+    five_hourly_reset_at: int | None
+    weekly_reset_at: int | None
+    five_hourly_reset_after_seconds: int | None
+    weekly_reset_after_seconds: int | None
+    five_hourly_over_weekly_limit_percent: int | None
     credits_balance: str | None
     credits_has_credits: bool | None
     credits_unlimited: bool | None
@@ -42,6 +44,9 @@ def parse_codex_headers(headers: Mapping[str, str]) -> CodexQuotaSnapshot | None
     come from the ChatGPT backend). When at least one `x-codex-*` field is
     present, a snapshot is returned with nulls for any fields that were absent
     or malformed — the caller decides how to handle partial data.
+
+    Header names use upstream's "primary"/"secondary" wording; our snapshot
+    fields rename them to `five_hourly_*` / `weekly_*` for clarity.
     """
     lowered = {k.lower(): v for k, v in headers.items()}
     if not any(k.startswith("x-codex-") for k in lowered):
@@ -49,15 +54,15 @@ def parse_codex_headers(headers: Mapping[str, str]) -> CodexQuotaSnapshot | None
     return CodexQuotaSnapshot(
         plan_type=_str(lowered, "x-codex-plan-type"),
         active_limit=_str(lowered, "x-codex-active-limit"),
-        primary_used_percent=_int(lowered, "x-codex-primary-used-percent"),
-        secondary_used_percent=_int(lowered, "x-codex-secondary-used-percent"),
-        primary_window_minutes=_int(lowered, "x-codex-primary-window-minutes"),
-        secondary_window_minutes=_int(lowered, "x-codex-secondary-window-minutes"),
-        primary_reset_at=_int(lowered, "x-codex-primary-reset-at"),
-        secondary_reset_at=_int(lowered, "x-codex-secondary-reset-at"),
-        primary_reset_after_seconds=_int(lowered, "x-codex-primary-reset-after-seconds"),
-        secondary_reset_after_seconds=_int(lowered, "x-codex-secondary-reset-after-seconds"),
-        primary_over_secondary_limit_percent=_int(
+        five_hourly_used_percent=_int(lowered, "x-codex-primary-used-percent"),
+        weekly_used_percent=_int(lowered, "x-codex-secondary-used-percent"),
+        five_hourly_window_minutes=_int(lowered, "x-codex-primary-window-minutes"),
+        weekly_window_minutes=_int(lowered, "x-codex-secondary-window-minutes"),
+        five_hourly_reset_at=_int(lowered, "x-codex-primary-reset-at"),
+        weekly_reset_at=_int(lowered, "x-codex-secondary-reset-at"),
+        five_hourly_reset_after_seconds=_int(lowered, "x-codex-primary-reset-after-seconds"),
+        weekly_reset_after_seconds=_int(lowered, "x-codex-secondary-reset-after-seconds"),
+        five_hourly_over_weekly_limit_percent=_int(
             lowered, "x-codex-primary-over-secondary-limit-percent"
         ),
         credits_balance=_str(lowered, "x-codex-credits-balance"),

@@ -797,15 +797,15 @@ def _quota_to_dict(q: Any) -> dict[str, Any] | None:
     return {
         "plan_type": q.plan_type,
         "active_limit": q.active_limit,
-        "primary_used_percent": q.primary_used_percent,
-        "secondary_used_percent": q.secondary_used_percent,
-        "primary_window_minutes": q.primary_window_minutes,
-        "secondary_window_minutes": q.secondary_window_minutes,
-        "primary_reset_at": q.primary_reset_at,
-        "secondary_reset_at": q.secondary_reset_at,
-        "primary_reset_after_seconds": q.primary_reset_after_seconds,
-        "secondary_reset_after_seconds": q.secondary_reset_after_seconds,
-        "primary_over_secondary_limit_percent": q.primary_over_secondary_limit_percent,
+        "five_hourly_used_percent": q.five_hourly_used_percent,
+        "weekly_used_percent": q.weekly_used_percent,
+        "five_hourly_window_minutes": q.five_hourly_window_minutes,
+        "weekly_window_minutes": q.weekly_window_minutes,
+        "five_hourly_reset_at": q.five_hourly_reset_at,
+        "weekly_reset_at": q.weekly_reset_at,
+        "five_hourly_reset_after_seconds": q.five_hourly_reset_after_seconds,
+        "weekly_reset_after_seconds": q.weekly_reset_after_seconds,
+        "five_hourly_over_weekly_limit_percent": q.five_hourly_over_weekly_limit_percent,
         "credits_balance": q.credits_balance,
         "credits_has_credits": q.credits_has_credits,
         "credits_unlimited": q.credits_unlimited,
@@ -894,10 +894,9 @@ def _evaluate_diagnostic(backend_id: str, handle: CallHandle, model: str) -> dic
     checks = {
         "http_2xx": handle.upstream_status is not None and 200 <= handle.upstream_status < 300,
         "quota_headers_present": quota is not None,
-        "primary_used_percent_present": quota is not None
-        and quota.primary_used_percent is not None,
-        "secondary_used_percent_present": quota is not None
-        and quota.secondary_used_percent is not None,
+        "five_hourly_used_percent_present": quota is not None
+        and quota.five_hourly_used_percent is not None,
+        "weekly_used_percent_present": quota is not None and quota.weekly_used_percent is not None,
         "response_completed_event_present": completed is not None,
         "usage_block_present": isinstance(usage_block, dict),
     }

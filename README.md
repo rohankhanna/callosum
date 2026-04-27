@@ -671,10 +671,10 @@ When `[usage_log] path = "..."` is set, every backend call is recorded as a row 
 | `request_bytes`, `response_bytes` | sizes |
 | `prompt_tokens`, `completion_tokens`, `total_tokens`, `cached_tokens`, `reasoning_tokens` | parsed from upstream `response.usage` (terminal `response.completed` event for streams) |
 | `plan_type`, `active_limit` | from `x-codex-plan-type`, `x-codex-active-limit` |
-| `primary_used_percent_before` / `_after` | the 5-hour-window quota state immediately before and after the call. `before` is null on the first call to a given backend. |
-| `secondary_used_percent_before` / `_after` | same for the weekly window |
-| `primary_reset_at`, `secondary_reset_at` | unix ts when each window resets |
-| `primary_over_secondary_limit_percent` | upstream-reported overage signal |
+| `five_hourly_used_percent_before` / `_after` | the 5-hour-window quota state immediately before and after the call. `before` is null on the first call to a given backend. (Upstream calls this "primary"; we name it for what it is.) |
+| `weekly_used_percent_before` / `_after` | same for the weekly window. (Upstream calls this "secondary".) |
+| `five_hourly_reset_at`, `weekly_reset_at` | unix ts when each window resets |
+| `five_hourly_over_weekly_limit_percent` | upstream-reported overage signal |
 | `credits_balance`, `credits_has_credits`, `credits_unlimited` | credits state |
 | `quota_reset_crossover` | `1` if `_after < _before` (a window reset fired during the call); exclude from training |
 
@@ -696,11 +696,11 @@ SELECT
   COUNT(*) AS calls,
   AVG(prompt_tokens) AS avg_prompt,
   AVG(completion_tokens) AS avg_completion,
-  AVG(primary_used_percent_after - primary_used_percent_before) AS avg_d_primary_pct,
-  AVG(secondary_used_percent_after - secondary_used_percent_before) AS avg_d_secondary_pct
+  AVG(five_hourly_used_percent_after - five_hourly_used_percent_before) AS avg_d_5h_pct,
+  AVG(weekly_used_percent_after - weekly_used_percent_before) AS avg_d_weekly_pct
 FROM requests
 WHERE status = 200 AND quota_reset_crossover = 0
-  AND primary_used_percent_before IS NOT NULL
+  AND five_hourly_used_percent_before IS NOT NULL
 GROUP BY model, reasoning_effort;
 ```
 
@@ -714,8 +714,8 @@ Each invocation makes one tiny streaming request per non-cooldown backend (promp
 | --- | --- |
 | `http_2xx` | URL or auth flow change (401, 404, 5xx from upstream) |
 | `quota_headers_present` | `x-codex-*` headers removed or renamed |
-| `primary_used_percent_present` | the 5-hour-window quota field disappeared |
-| `secondary_used_percent_present` | the weekly quota field disappeared |
+| `five_hourly_used_percent_present` | the 5-hour-window quota field disappeared |
+| `weekly_used_percent_present` | the weekly quota field disappeared |
 | `response_completed_event_present` | SSE terminal event renamed or restructured |
 | `usage_block_present` | `response.completed.response.usage` shape changed |
 
@@ -742,7 +742,7 @@ For systemd users, prefer a `systemd.timer` over cron — easier to inspect via 
 
 - **Auth.json refresh-chain caveat.** The proxy reads `auth.json` directly and owns the OAuth refresh chain for that account. Every successful refresh produces a new refresh token and writes it back to the file. If anything else (e.g. your normal `codex` usage on the same account) refreshes against the same auth file in parallel, whichever side rotates first invalidates the other. **Either dedicate an account to the proxy, or route your own Codex usage through the proxy too** (using the [Codex CLI Option A](#option-a--codex_proxy-as-the-global-default-recommended-for-single-point-of-auth-setups) global-default setup).
 - **Body capture is sensitive data.** With `capture_bodies = true`, prompts and responses are stored on disk in cleartext (after zlib decompression). Treat the database file as sensitive; `chmod 600` is a sensible baseline. Flip `capture_bodies = false` once you've collected enough corpus to model consumption; turn it back on whenever Codex updates its models.
-- **Quota-percent granularity.** `primary_used_percent` and `secondary_used_percent` are integer percentages reported by the upstream. Single small calls often show `Δ = 0`. Aggregate across many calls for a useful signal.
+- **Quota-percent granularity.** `five_hourly_used_percent` and `weekly_used_percent` are integer percentages reported by the upstream (over the wire as `x-codex-primary-used-percent` and `x-codex-secondary-used-percent` respectively). Single small calls often show `Δ = 0`. Aggregate across many calls for a useful signal.
 - **No log rotation.** The usage-log SQLite file grows append-only. Archive manually when it gets large.
 - **Localhost only.** The proxy binds `127.0.0.1`. If you need to expose it to other machines, front it with TLS (Caddy / nginx) and rely on `[auth]` for access control.
 - **One worker.** uvicorn defaults to one worker; the SQLite databases are not safe across multiple worker processes. Don't increase `--workers`.

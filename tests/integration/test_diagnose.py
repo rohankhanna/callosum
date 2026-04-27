@@ -131,7 +131,7 @@ def test_diagnose_flags_missing_quota_headers(tmp_path: Path) -> None:
     [bd] = body["backends"]
     assert bd["ok"] is False
     assert "quota_headers_present" in bd["failed_checks"]
-    assert "primary_used_percent_present" in bd["failed_checks"]
+    assert "five_hourly_used_percent_present" in bd["failed_checks"]
 
 
 def test_diagnose_flags_missing_response_completed_event(tmp_path: Path) -> None:

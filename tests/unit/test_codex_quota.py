@@ -28,13 +28,13 @@ def test_parses_full_header_set_from_real_response() -> None:
     assert snap is not None
     assert snap.plan_type == "plus"
     assert snap.active_limit == "premium"
-    assert snap.primary_used_percent == 1
-    assert snap.secondary_used_percent == 53
-    assert snap.primary_window_minutes == 300
-    assert snap.secondary_window_minutes == 10080
-    assert snap.primary_reset_at == 1777057648
-    assert snap.secondary_reset_at == 1777440478
-    assert snap.primary_over_secondary_limit_percent == 0
+    assert snap.five_hourly_used_percent == 1
+    assert snap.weekly_used_percent == 53
+    assert snap.five_hourly_window_minutes == 300
+    assert snap.weekly_window_minutes == 10080
+    assert snap.five_hourly_reset_at == 1777057648
+    assert snap.weekly_reset_at == 1777440478
+    assert snap.five_hourly_over_weekly_limit_percent == 0
     assert snap.credits_has_credits is False
     assert snap.credits_unlimited is False
     assert snap.credits_balance is None  # empty string becomes None
@@ -44,21 +44,21 @@ def test_parses_full_header_set_from_real_response() -> None:
 def test_partial_headers_fill_in_nulls() -> None:
     snap = parse_codex_headers({"x-codex-primary-used-percent": "42"})
     assert snap is not None
-    assert snap.primary_used_percent == 42
-    assert snap.secondary_used_percent is None
+    assert snap.five_hourly_used_percent == 42
+    assert snap.weekly_used_percent is None
     assert snap.plan_type is None
 
 
 def test_malformed_integers_become_null() -> None:
     snap = parse_codex_headers({"x-codex-primary-used-percent": "not-a-number"})
     assert snap is not None
-    assert snap.primary_used_percent is None
+    assert snap.five_hourly_used_percent is None
 
 
 def test_case_insensitive_header_names() -> None:
     snap = parse_codex_headers({"X-Codex-Primary-Used-Percent": "7"})
     assert snap is not None
-    assert snap.primary_used_percent == 7
+    assert snap.five_hourly_used_percent == 7
 
 
 def test_bool_parses_true_false_and_numeric() -> None:
