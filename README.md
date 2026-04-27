@@ -1,6 +1,6 @@
 # codex-proxy
 
-A small local HTTP proxy that sits in front of multiple Codex Plus/Pro authentications and rotates across them. One endpoint on `127.0.0.1`, many `auth.json` vaults behind it. When one account is rate-limited or otherwise unavailable, the proxy sends the next request to another.
+A small local HTTP proxy that sits in front of multiple Codex Plus/Pro authentications and rotates across them. One endpoint on `127.0.0.1`, many `auth.json` vaults behind it. When one account is rate-limited or otherwise unavailable, the proxy sends the next request to another. When *all* of them are weekly-exhausted, the proxy can optionally fall back to free-tier OpenRouter models so you keep working at a slower pace until your weekly resets ([details](#auto-fallback-to-openrouter-free-tier)).
 
 It is deliberately a less-than-intelligent router. It does not summarise, retry mid-stream, synthesise continuity, or do anything fancier than "pick an account that can serve this request, and if it fails, try the next one." The OpenAI-compatible routes (`/v1/responses` and `/v1/chat/completions`) exist so your normal Codex-speaking clients can point at this proxy without knowing anything changed.
 
@@ -643,6 +643,31 @@ five_hourly_pause_pct = 95.0
 ```
 
 All `synthetic_*` defaults are 0, which keeps the cold-start fallback off. The weekly controller activates automatically once a backend has served at least one request and produced a quota snapshot — so on a fresh deploy with all-zero config, no synthetics fire until organic traffic establishes a quota baseline, then the weekly controller takes over.
+
+## Auto-fallback to OpenRouter free tier
+
+When all your Codex backends are weekly-exhausted, you don't have to stop working — set an `OPENROUTER_API_KEY` env var and the proxy will auto-register a free-tier OpenRouter backend that handles overflow at a "snail's pace." No TOML edits, no manual model selection.
+
+```bash
+export OPENROUTER_API_KEY=sk-or-v1-...
+uv run python -m codex_proxy
+```
+
+What you get:
+
+- The proxy fetches OpenRouter's `/api/v1/models` catalog at startup (and refreshes hourly), filters to entries where both prompt and completion pricing are 0, and exposes them as a routable backend.
+- The OpenRouter backend reports a deliberately tiny `remaining_fraction` (0.001) so the selector keeps preferring your Codex backends whenever they're viable. It only picks OpenRouter when every Codex backend is in cooldown after a 429.
+- It also "shadow-advertises" every Codex model name from your `[[backends]]` config, so a request asking for `model-a0e7` still routes when Codex is exhausted — the OpenRouter backend internally substitutes the best free model that matches the request's needs (context length, tool support, code-friendliness).
+- For `/v1/responses` requests, the OpenRouter backend translates to `/v1/chat/completions` on the way out and back, since OpenRouter doesn't natively support the Responses API.
+
+**Per-request model selection** scores candidates by:
+
+1. Tool-call support (required if the request body has `tools` set).
+2. Context length ≥ approximate input token budget.
+3. Code-friendliness heuristic (higher score for `model-a0f3-coder`, `model-a0e2-coder`, `model-a0g1-3.3`, `model-a0e2-v3` family names — the patterns that tend to least-drama existing codebases).
+4. Larger context length wins ties.
+
+The chosen model id appears in the response and in the usage log's `model` column, so you can see exactly what was used for each call. If you don't like the choice, set a more specific model in your client (the OpenRouter id, e.g. `model-a0g3/model-a0f3-coder-32b-instruct:free`); the proxy will pass it through unchanged.
 
 ## Sticky session header (`X-Codex-Session-Id`)
 

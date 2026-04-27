@@ -7,7 +7,7 @@ from typing import Any, Literal, Protocol
 from codex_proxy.codex_quota import CodexQuotaSnapshot
 from codex_proxy.sse_tee import ResponsesStreamSummary
 
-BackendKind = Literal["codex_auth_vault"]
+BackendKind = Literal["codex_auth_vault", "openrouter_free"]
 HealthReason = Literal["ok", "rate_limited", "auth_invalid", "network", "unknown"]
 
 
@@ -46,7 +46,15 @@ class CallHandle:
 class Backend(Protocol):
     id: str
     kind: BackendKind
-    advertised_models: frozenset[str]
+
+    @property
+    def advertised_models(self) -> frozenset[str]:
+        """The set of model names this backend will accept. Implementations
+        may set it as a plain attribute (Codex backends, fakes — static after
+        construction) or compute it dynamically (the OpenRouter free backend
+        recomputes from a periodically-refreshed catalog).
+        """
+        ...
 
     async def health(self) -> HealthStatus: ...
 

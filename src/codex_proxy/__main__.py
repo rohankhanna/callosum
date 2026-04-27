@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 import uvicorn
@@ -8,6 +9,7 @@ import uvicorn
 from codex_proxy.app import create_app
 from codex_proxy.auth import AuthService
 from codex_proxy.auth_db import AuthDB
+from codex_proxy.backends.openrouter_free import OpenRouterFreeBackend
 from codex_proxy.config import build_backends, load_config
 from codex_proxy.usage_log import UsageLog
 
@@ -28,6 +30,21 @@ def main() -> None:
 
     cfg = load_config(args.config)
     backends = build_backends(cfg)
+    # Auto-register OpenRouter free-tier as a fallback backend if the user
+    # has set OPENROUTER_API_KEY. No TOML edit required — the backend
+    # auto-discovers models from OpenRouter's catalog and picks per request.
+    # Shadow-advertise the union of Codex model names so OpenRouter inherits
+    # the routing pool when Codex is in cooldown.
+    openrouter_key = os.environ.get("OPENROUTER_API_KEY")
+    if openrouter_key:
+        shadow_models = frozenset({m for bc in cfg.backends for m in bc.models})
+        backends.append(
+            OpenRouterFreeBackend(
+                id="openrouter-free",
+                api_key=openrouter_key,
+                shadow_models=shadow_models,
+            )
+        )
     usage_log = (
         UsageLog(cfg.usage_log.path, capture_bodies=cfg.usage_log.capture_bodies)
         if cfg.usage_log.path is not None
