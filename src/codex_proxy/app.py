@@ -20,6 +20,7 @@ from codex_proxy.auth import (
 )
 from codex_proxy.auth_db import ApiKey, Session
 from codex_proxy.backend import Backend, CallHandle
+from codex_proxy.cell_grid import VIRTUAL_MODELS
 from codex_proxy.config import AutoRouterConfig
 from codex_proxy.errors import RETRYABLE, BackendError, ErrorClass
 from codex_proxy.router import ExploiterRouter, ExplorerRouter
@@ -875,7 +876,19 @@ async def _diagnose_backend(backend: Backend) -> dict[str, Any]:
             "reason": "backend in cooldown; not probed",
             "cooldown_until_ts": usage.cooldown_until_ts,
         }
-    model = sorted(backend.advertised_models)[0]
+    # Pick a real model for the probe — skip virtual selectors like
+    # `auto-fallback`/`auto-learning`, which would route through the picker
+    # rather than exercise the upstream contract directly.
+    real_models = sorted(m for m in backend.advertised_models if m not in VIRTUAL_MODELS)
+    if not real_models:
+        return {
+            "id": backend.id,
+            "ok": False,
+            "skipped": False,
+            "stage": "config",
+            "reason": "backend advertises only virtual models",
+        }
+    model = real_models[0]
     handle = CallHandle()
     body = {
         "model": model,
@@ -903,7 +916,7 @@ async def _diagnose_backend(backend: Backend) -> dict[str, Any]:
             "reason": exc.message or exc.classification,
             "model": model,
         }
-    return _evaluate_diagnostic(backend.id, handle, model)
+    return _evaluate_diagnostic(backend.id, handle, model, kind=backend.kind)
 
 
 async def _run_startup_smoke_test(backends_list: Sequence[Backend]) -> None:
@@ -961,8 +974,22 @@ def _log_smoke_result(result: dict[str, Any]) -> None:
     logger.warning("  [%s] FAILED — %s", backend_id, " ".join(bits))
 
 
-def _evaluate_diagnostic(backend_id: str, handle: CallHandle, model: str) -> dict[str, Any]:
-    """Pure check over a CallHandle from a successful diagnostic request."""
+def _evaluate_diagnostic(
+    backend_id: str, handle: CallHandle, model: str, *, kind: str = "codex_auth_vault"
+) -> dict[str, Any]:
+    """Per-backend-kind check over a CallHandle from a diagnostic request.
+
+    `codex_auth_vault` backends require Codex-shape contract guarantees —
+    quota headers + Responses-API SSE terminal events. Non-Codex backends
+    (e.g. `openrouter_free`) only need to confirm a 2xx came back; they
+    don't carry Codex-specific headers and the contract definition differs.
+    """
+    if kind == "codex_auth_vault":
+        return _evaluate_codex_diagnostic(backend_id, handle, model)
+    return _evaluate_generic_diagnostic(backend_id, handle, model)
+
+
+def _evaluate_codex_diagnostic(backend_id: str, handle: CallHandle, model: str) -> dict[str, Any]:
     summary = handle.stream_summary
     completed = summary.completed_response if summary is not None else None
     usage_block = completed.get("usage") if isinstance(completed, dict) else None
@@ -976,6 +1003,28 @@ def _evaluate_diagnostic(backend_id: str, handle: CallHandle, model: str) -> dic
         "response_completed_event_present": completed is not None,
         "usage_block_present": isinstance(usage_block, dict),
     }
+    failed = [name for name, ok in checks.items() if not ok]
+    return {
+        "id": backend_id,
+        "ok": not failed,
+        "skipped": False,
+        "stage": "evaluate",
+        "model": model,
+        "checks": checks,
+        "failed_checks": failed,
+        "upstream_status": handle.upstream_status,
+    }
+
+
+def _evaluate_generic_diagnostic(backend_id: str, handle: CallHandle, model: str) -> dict[str, Any]:
+    """For non-Codex backends, the smoke test only verifies the upstream
+    contract minimum: did we get a 2xx and does the stream summary indicate
+    something came back?
+    """
+    http_2xx = handle.upstream_status is not None and 200 <= handle.upstream_status < 300
+    summary = handle.stream_summary
+    saw_completed = summary is not None and summary.completed_response is not None
+    checks = {"http_2xx": http_2xx, "stream_yielded_response": saw_completed}
     failed = [name for name, ok in checks.items() if not ok]
     return {
         "id": backend_id,
