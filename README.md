@@ -583,7 +583,31 @@ The selector only routes a request when at least one backend advertises the requ
 
 **`/reasoning` works for free.** Codex CLI sends the chosen level as `reasoning.effort` in the request body. The proxy passes it through unchanged on `/v1/responses`. Picked levels show up in the usage log's `reasoning_effort` column for later analysis.
 
-**Smart auto-router (Phase 4, future).** The end goal is a router inside the proxy that picks `(model, reasoning_effort)` per request to maximize outcome quality per quota cost. It is predicated on (a) a cost model trained on the corpus the usage log is collecting now, (b) some signal of outcome quality (evals or task-completion labels), and (c) the routing policy itself. When it ships it lives inside the proxy, so every client speaking OpenAI shapes — Codex CLI, Hermes, Aider — gets it transparently with zero client-side change. Not yet built; planned after the corpus matures.
+**Auto-routing virtual models (`auto-learning`, `auto`).** Two virtual model names short-circuit the picker. Any client that can name a model — Codex CLI's `/model`, Hermes' `model.default`, Aider's `--model`, a curl with `"model": "..."` — can opt in.
+
+- **`auto-learning`** — explorer. Each request is rewritten to the (model, reasoning_effort) cell with the fewest successful samples in the usage log so the corpus fills evenly across the 16-cell grid (4 models × 4 reasoning levels — see `src/codex_proxy/cell_grid.py`). Round-robin v1; ties break in cell-grid order. Stateless: every call rereads coverage, so concurrent calls converge.
+- **`auto`** — exploiter. Reserved for the cost-optimal router that picks the cell with the lowest expected Δquota per request. Currently returns `503 NotTrained` with an explanatory message until the cost model is fit on the explorer's corpus.
+
+The rewrite happens before the selector, so backends do **not** need to advertise `auto-learning` / `auto` — they only need to advertise the real grid models. Each request's `requested_model`, `requested_reasoning_effort`, and `routing_mode` are recorded in the usage log alongside the served `model` / `reasoning_effort`, so post-hoc analysis can separate router-driven samples from user-driven ones.
+
+Inspect cell coverage:
+
+```bash
+sqlite3 ~/.local/state/codex-proxy/requests.sqlite \
+  "SELECT model, reasoning_effort, COUNT(*) FROM requests
+   WHERE routing_mode = 'auto-learning' AND status = 200
+   GROUP BY model, reasoning_effort ORDER BY 1, 2"
+```
+
+Enable it:
+
+```bash
+# Codex CLI: edit ~/.codex/config.toml top-level
+model = "auto-learning"
+
+# Hermes
+hermes config set model.default auto-learning
+```
 
 ## Sticky session header (`X-Codex-Session-Id`)
 

@@ -44,12 +44,15 @@ CREATE TABLE IF NOT EXISTS requests (
     credits_balance TEXT,
     credits_has_credits INTEGER,
     credits_unlimited INTEGER,
-    quota_reset_crossover INTEGER NOT NULL DEFAULT 0
+    quota_reset_crossover INTEGER NOT NULL DEFAULT 0,
+    requested_model TEXT,
+    requested_reasoning_effort TEXT,
+    routing_mode TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_requests_ts_start ON requests(ts_start);
 CREATE INDEX IF NOT EXISTS idx_requests_backend_id ON requests(backend_id);
--- user_id / api_key_id indexes live in _MIGRATIONS so they run AFTER the
--- ALTER-TABLE that adds the columns on pre-existing v1 databases.
+-- user_id, api_key_id, requested_*, routing_mode indexes live in _MIGRATIONS so
+-- they run AFTER the ALTER-TABLE that adds the columns on pre-existing databases.
 
 CREATE TABLE IF NOT EXISTS request_bodies (
     request_id INTEGER PRIMARY KEY REFERENCES requests(id) ON DELETE CASCADE,
@@ -67,6 +70,19 @@ _MIGRATIONS = [
     "ALTER TABLE requests ADD COLUMN api_key_id INTEGER",
     "CREATE INDEX IF NOT EXISTS idx_requests_user_id ON requests(user_id)",
     "CREATE INDEX IF NOT EXISTS idx_requests_api_key_id ON requests(api_key_id)",
+    # Router (auto-learning / auto) columns. requested_* is what the client asked for
+    # before any router rewrote the body; the existing model + reasoning_effort columns
+    # continue to mean what was actually served upstream.
+    "ALTER TABLE requests ADD COLUMN requested_model TEXT",
+    "ALTER TABLE requests ADD COLUMN requested_reasoning_effort TEXT",
+    "ALTER TABLE requests ADD COLUMN routing_mode TEXT",
+    # Backfill: pre-router rows had no rewriting, so served == requested.
+    "UPDATE requests SET requested_model = model WHERE requested_model IS NULL",
+    "UPDATE requests SET requested_reasoning_effort = reasoning_effort"
+    " WHERE requested_reasoning_effort IS NULL",
+    "UPDATE requests SET routing_mode = 'pass-through' WHERE routing_mode IS NULL",
+    "CREATE INDEX IF NOT EXISTS idx_requests_routing_mode ON requests(routing_mode)",
+    "CREATE INDEX IF NOT EXISTS idx_requests_served_cell ON requests(model, reasoning_effort)",
 ]
 
 
@@ -99,6 +115,13 @@ class UsageLogEntry:
     # Multi-tenant attribution. Both null in single-operator mode (no auth db).
     user_id: int | None = None
     api_key_id: int | None = None
+    # Router fields. requested_* is what the client sent before any virtual-model
+    # rewriting; the existing model/reasoning_effort columns continue to mean what
+    # was actually served upstream. routing_mode is one of:
+    # 'pass-through' | 'auto-learning' | 'auto'.
+    requested_model: str | None = None
+    requested_reasoning_effort: str | None = None
+    routing_mode: str | None = None
 
 
 class UsageLog:
@@ -193,6 +216,9 @@ class UsageLog:
             _bool_to_int(qa.credits_has_credits if qa is not None else None),
             _bool_to_int(qa.credits_unlimited if qa is not None else None),
             1 if crossover else 0,
+            entry.requested_model,
+            entry.requested_reasoning_effort,
+            entry.routing_mode,
         )
         with self._lock:
             cursor = self._conn.execute(
@@ -211,12 +237,13 @@ class UsageLog:
                     primary_reset_at, secondary_reset_at,
                     primary_over_secondary_limit_percent,
                     credits_balance, credits_has_credits, credits_unlimited,
-                    quota_reset_crossover
+                    quota_reset_crossover,
+                    requested_model, requested_reasoning_effort, routing_mode
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?
+                    ?, ?, ?, ?, ?
                 )
                 """,
                 row,

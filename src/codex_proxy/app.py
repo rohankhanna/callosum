@@ -20,6 +20,7 @@ from codex_proxy.auth import (
 from codex_proxy.auth_db import ApiKey, Session
 from codex_proxy.backend import Backend, CallHandle
 from codex_proxy.errors import RETRYABLE, BackendError, ErrorClass
+from codex_proxy.router import ExploiterRouter, ExplorerRouter
 from codex_proxy.selector import select
 from codex_proxy.session import SessionRegistry
 from codex_proxy.usage_log import UsageLog, UsageLogEntry
@@ -66,6 +67,8 @@ def create_app(
     backends_list: list[Backend] = list(backends)
     pin_state = PinState()
     session_registry = sessions if sessions is not None else SessionRegistry()
+    explorer = ExplorerRouter(usage_log_path=usage_log.path if usage_log is not None else None)
+    exploiter = ExploiterRouter(usage_log_path=usage_log.path if usage_log is not None else None)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -184,6 +187,8 @@ def create_app(
             pin_state=pin_state,
             session_registry=session_registry,
             usage_log=usage_log,
+            explorer=explorer,
+            exploiter=exploiter,
             nonstream=lambda b, p, h: b.chat_completions(p, h),
             stream=lambda b, p, h: b.chat_completions_stream(p, h),
         )
@@ -198,6 +203,8 @@ def create_app(
             pin_state=pin_state,
             session_registry=session_registry,
             usage_log=usage_log,
+            explorer=explorer,
+            exploiter=exploiter,
             nonstream=lambda b, p, h: b.responses(p, h),
             stream=lambda b, p, h: b.responses_stream(p, h),
         )
@@ -214,9 +221,29 @@ async def _dispatch_route(
     pin_state: PinState,
     session_registry: SessionRegistry,
     usage_log: UsageLog | None,
+    explorer: ExplorerRouter,
+    exploiter: ExploiterRouter,
     nonstream: NonstreamCall,
     stream: StreamCall,
 ) -> Any:
+    requested_model = _require_model(body)
+    requested_reasoning = _extract_reasoning_effort(body)
+    routing_mode = "pass-through"
+    # Virtual model rewrite. The body is mutated in place so the downstream
+    # selector and backend see the resolved (model, reasoning) pair.
+    if requested_model == "auto-learning":
+        decision = explorer.choose()
+        body["model"] = decision.cell.model
+        body.setdefault("reasoning", {})["effort"] = decision.cell.reasoning_effort
+        routing_mode = "auto-learning"
+    elif requested_model == "auto":
+        try:
+            decision = exploiter.choose(model_hint=None)
+        except ExploiterRouter.NotTrained as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        body["model"] = decision.cell.model
+        body.setdefault("reasoning", {})["effort"] = decision.cell.reasoning_effort
+        routing_mode = "auto"
     model = _require_model(body)
     pinned = pin_state.get()
     active = _active_pool(backends_list, pinned)
@@ -238,6 +265,9 @@ async def _dispatch_route(
             call=stream,
             user_id=user_id,
             api_key_id=api_key_id,
+            requested_model=requested_model,
+            requested_reasoning_effort=requested_reasoning,
+            routing_mode=routing_mode,
         )
     return await _dispatch_nonstream(
         body,
@@ -251,6 +281,9 @@ async def _dispatch_route(
         call=nonstream,
         user_id=user_id,
         api_key_id=api_key_id,
+        requested_model=requested_model,
+        requested_reasoning_effort=requested_reasoning,
+        routing_mode=routing_mode,
     )
 
 
@@ -297,6 +330,9 @@ async def _dispatch_nonstream(
     call: NonstreamCall,
     user_id: int | None = None,
     api_key_id: int | None = None,
+    requested_model: str | None = None,
+    requested_reasoning_effort: str | None = None,
+    routing_mode: str = "pass-through",
 ) -> dict[str, Any]:
     excluded: set[str] = set()
     last_error: BackendError | None = None
@@ -330,6 +366,9 @@ async def _dispatch_nonstream(
                 resp_body=None,
                 user_id=user_id,
                 api_key_id=api_key_id,
+                requested_model=requested_model,
+                requested_reasoning_effort=requested_reasoning_effort,
+                routing_mode=routing_mode,
             )
             last_error = exc
             if exc.classification not in RETRYABLE:
@@ -353,6 +392,9 @@ async def _dispatch_nonstream(
             resp_body=result,
             user_id=user_id,
             api_key_id=api_key_id,
+            requested_model=requested_model,
+            requested_reasoning_effort=requested_reasoning_effort,
+            routing_mode=routing_mode,
         )
         return result
     raise _no_viable(model=model, last_error=last_error)
@@ -371,6 +413,9 @@ async def _dispatch_stream(
     call: StreamCall,
     user_id: int | None = None,
     api_key_id: int | None = None,
+    requested_model: str | None = None,
+    requested_reasoning_effort: str | None = None,
+    routing_mode: str = "pass-through",
 ) -> StreamingResponse:
     excluded: set[str] = set()
     last_error: BackendError | None = None
@@ -405,6 +450,9 @@ async def _dispatch_stream(
                 resp_body=None,
                 user_id=user_id,
                 api_key_id=api_key_id,
+                requested_model=requested_model,
+                requested_reasoning_effort=requested_reasoning_effort,
+                routing_mode=routing_mode,
             )
             _remember_binding(session_registry, session_id, backend.id)
             return StreamingResponse(_empty_iter(), media_type="text/event-stream")
@@ -425,6 +473,9 @@ async def _dispatch_stream(
                 resp_body=None,
                 user_id=user_id,
                 api_key_id=api_key_id,
+                requested_model=requested_model,
+                requested_reasoning_effort=requested_reasoning_effort,
+                routing_mode=routing_mode,
             )
             last_error = exc
             if exc.classification not in RETRYABLE:
@@ -445,6 +496,9 @@ async def _dispatch_stream(
                 ts_start=ts_start,
                 user_id=user_id,
                 api_key_id=api_key_id,
+                requested_model=requested_model,
+                requested_reasoning_effort=requested_reasoning_effort,
+                routing_mode=routing_mode,
             ),
             media_type="text/event-stream",
         )
@@ -475,6 +529,9 @@ async def _log_on_complete(
     ts_start: float,
     user_id: int | None = None,
     api_key_id: int | None = None,
+    requested_model: str | None = None,
+    requested_reasoning_effort: str | None = None,
+    routing_mode: str = "pass-through",
 ) -> AsyncIterator[bytes]:
     """Pass-through wrapper that writes the usage log row when the stream ends.
 
@@ -499,6 +556,9 @@ async def _log_on_complete(
         resp_body=None,  # for streams the raw body lives in handle.stream_summary
         user_id=user_id,
         api_key_id=api_key_id,
+        requested_model=requested_model,
+        requested_reasoning_effort=requested_reasoning_effort,
+        routing_mode=routing_mode,
     )
 
 
@@ -518,6 +578,9 @@ def _log_attempt(
     resp_body: dict[str, Any] | None,
     user_id: int | None = None,
     api_key_id: int | None = None,
+    requested_model: str | None = None,
+    requested_reasoning_effort: str | None = None,
+    routing_mode: str = "pass-through",
 ) -> None:
     if usage_log is None:
         return
@@ -562,6 +625,9 @@ def _log_attempt(
         upstream_headers=dict(handle.upstream_headers) if handle.upstream_headers else None,
         user_id=user_id,
         api_key_id=api_key_id,
+        requested_model=requested_model,
+        requested_reasoning_effort=requested_reasoning_effort,
+        routing_mode=routing_mode,
     )
     usage_log.record(entry)
 

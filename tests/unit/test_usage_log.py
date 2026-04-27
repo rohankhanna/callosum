@@ -160,3 +160,99 @@ def test_null_quota_yields_null_columns_but_not_crossover(tmp_path: Path) -> Non
     ).fetchone()
     assert row == (None, None, None, 0)
     log.close()
+
+
+def test_router_fields_persist(tmp_path: Path) -> None:
+    """Variation/routing fields round-trip cleanly. requested_* captures the
+    client's intent before the explorer router rewrote the body; model and
+    reasoning_effort columns continue to mean what was actually served.
+    """
+    log = UsageLog(tmp_path / "u.sqlite")
+    # Auto-learning request: client asked for 'auto-learning', proxy served
+    # model-a0c3 at low reasoning to fill that cell.
+    rowid = log.record(
+        _entry(
+            model="model-a0c3",
+            reasoning_effort="low",
+            requested_model="auto-learning",
+            requested_reasoning_effort=None,
+            routing_mode="auto-learning",
+        )
+    )
+    conn = sqlite3.connect(tmp_path / "u.sqlite")
+    row = conn.execute(
+        """
+        SELECT model, reasoning_effort, requested_model,
+               requested_reasoning_effort, routing_mode
+        FROM requests WHERE id = ?
+        """,
+        (rowid,),
+    ).fetchone()
+    assert row == ("model-a0c3", "low", "auto-learning", None, "auto-learning")
+    log.close()
+
+
+def test_pass_through_request_records_requested_equals_served(tmp_path: Path) -> None:
+    log = UsageLog(tmp_path / "u.sqlite")
+    rowid = log.record(
+        _entry(
+            model="model-a0e7",
+            reasoning_effort="xhigh",
+            requested_model="model-a0e7",
+            requested_reasoning_effort="xhigh",
+            routing_mode="pass-through",
+        )
+    )
+    conn = sqlite3.connect(tmp_path / "u.sqlite")
+    row = conn.execute(
+        "SELECT model, requested_model, routing_mode FROM requests WHERE id = ?",
+        (rowid,),
+    ).fetchone()
+    assert row == ("model-a0e7", "model-a0e7", "pass-through")
+    log.close()
+
+
+def test_migration_backfills_existing_rows(tmp_path: Path) -> None:
+    """Open a v1-style DB (no router columns), insert a row directly via
+    raw SQL, then re-open via UsageLog so the migration runs. Backfill should
+    populate requested_* from served_* and routing_mode='pass-through'.
+    """
+    db_path = tmp_path / "u.sqlite"
+    # Create a minimal v1-shape table by hand, simulating a pre-router DB.
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts_start REAL NOT NULL, ts_end REAL NOT NULL, latency_ms INTEGER NOT NULL,
+            route TEXT NOT NULL, stream INTEGER NOT NULL, session_id TEXT,
+            backend_id TEXT NOT NULL, model TEXT, reasoning_effort TEXT,
+            status INTEGER NOT NULL, classification TEXT,
+            request_bytes INTEGER, response_bytes INTEGER,
+            prompt_tokens INTEGER, completion_tokens INTEGER, total_tokens INTEGER,
+            cached_tokens INTEGER, reasoning_tokens INTEGER,
+            plan_type TEXT, active_limit TEXT,
+            primary_used_percent_before INTEGER, primary_used_percent_after INTEGER,
+            secondary_used_percent_before INTEGER, secondary_used_percent_after INTEGER,
+            primary_reset_at INTEGER, secondary_reset_at INTEGER,
+            primary_over_secondary_limit_percent INTEGER,
+            credits_balance TEXT, credits_has_credits INTEGER, credits_unlimited INTEGER,
+            quota_reset_crossover INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO requests (ts_start, ts_end, latency_ms, route, stream,"
+        " backend_id, model, reasoning_effort, status, classification)"
+        " VALUES (1000.0, 1000.5, 500, 'responses', 1, 'primary', 'model-a0e7', 'xhigh', 200, 'ok')"
+    )
+    conn.commit()
+    conn.close()
+    # Now reopen via UsageLog — migration runs.
+    log = UsageLog(db_path)
+    log.close()
+    conn = sqlite3.connect(db_path)
+    row = conn.execute(
+        "SELECT requested_model, requested_reasoning_effort, routing_mode FROM requests"
+    ).fetchone()
+    assert row == ("model-a0e7", "xhigh", "pass-through")
