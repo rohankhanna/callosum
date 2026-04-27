@@ -610,26 +610,39 @@ model = "auto-learning"
 hermes config set model.default auto-learning
 ```
 
-Enable the synthetic background tier in the proxy's `config.toml`:
+The synthetic worker has two controllers:
+
+**Primary — weekly-exhaustion controller.** Per backend, every tick: read the latest `CodexQuotaSnapshot`, project human burn (last 7d organic rate × safety margin), and fire enough synthetics to land weekly at `weekly_target_pct` by reset. Honors the invariant that paid-monthly weekly capacity is never wasted. Pauses on an account when 5h is near-exhausted (would just 429-loop) or weekly is already past target.
+
+**Fallback — cold-start.** Per backend with no quota snapshot yet (fresh deploy), uses the simple floor + pct-of-organic + hard-ceiling target. Same hard ceiling caps the weekly controller as a safety net.
+
+Tune in the proxy's `config.toml`:
 
 ```toml
 [auto_router]
-# Minimum synthetics fired per UTC day, regardless of organic volume.
-# Guarantees corpus velocity on quiet days. Default 0 (worker disabled).
+# Cold-start fallback bounds (used when no per-account quota snapshot exists yet).
 synthetic_floor_per_day = 50
-
-# Synthetics may grow up to this fraction of today's organic volume.
-# Keeps the corpus from being dominated by synthetic prompts on busy days.
 synthetic_pct_of_organic = 0.05
-
-# Absolute cap — quota safety net.
 synthetic_hard_ceiling_per_day = 200
-
-# How often the worker wakes to check whether to fire another synthetic.
 synthetic_check_interval_seconds = 300
+
+# Weekly-exhaustion controller knobs.
+# Estimated cost of one synthetic, in weekly% points. Hand-set v1; learned
+# by the cost model in v2.
+pct_per_synthetic_estimate = 0.1
+# How far back to look when projecting human burn (hours). 168 = 7 days.
+prediction_window_hours = 168
+# Multiplier on projected human burn — errs toward leaving the human room.
+prediction_safety_margin = 1.20
+# Per-tick cap on synthetics fired (spreads connection load).
+max_synthetics_per_tick = 10
+# Stop firing on an account once weekly_used_percent crosses this.
+weekly_target_pct = 95.0
+# Pause firing on an account when 5h-used crosses this.
+five_hourly_pause_pct = 95.0
 ```
 
-Effective per-day target ≈ `min(hard_ceiling, max(floor, ceil(pct * organic)))`. The worker fires at most one synthetic per tick, so high pct + low interval don't burst — the rate is paced by `synthetic_check_interval_seconds`. All defaults are 0, which keeps the worker off until you opt in.
+All `synthetic_*` defaults are 0, which keeps the cold-start fallback off. The weekly controller activates automatically once a backend has served at least one request and produced a quota snapshot — so on a fresh deploy with all-zero config, no synthetics fire until organic traffic establishes a quota baseline, then the weekly controller takes over.
 
 ## Sticky session header (`X-Codex-Session-Id`)
 

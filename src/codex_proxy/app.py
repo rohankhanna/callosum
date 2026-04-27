@@ -79,10 +79,11 @@ def create_app(
 
     auto_cfg = auto_router_config if auto_router_config is not None else AutoRouterConfig()
 
-    async def _synthetic_dispatch(body: dict[str, Any]) -> Any:
-        # The topper calls dispatch directly — no Request, no auth attribution.
-        # Routes through /v1/responses' call shape since the prompt corpus is
-        # Responses-API-flavored.
+    async def _synthetic_dispatch(body: dict[str, Any], backend_id: str) -> Any:
+        # The topper calls dispatch directly — no Request, no auth attribution,
+        # and pinned to the backend the controller picked (the natural selector
+        # ranks by 5h capacity, which isn't the same as "weekly headroom that
+        # won't be human-consumed in time"). Routes through the responses path.
         return await _dispatch_internal(
             body,
             route_name="responses",
@@ -98,11 +99,13 @@ def create_app(
             session_id=None,
             user_id=None,
             api_key_id=None,
+            forced_backend_id=backend_id,
         )
 
     topper = SyntheticTopper(
         cfg=auto_cfg,
         usage_log_path=usage_log.path if usage_log is not None else None,
+        backends=backends_list,
         dispatch=_synthetic_dispatch,
     )
 
@@ -309,9 +312,14 @@ async def _dispatch_internal(
     session_id: str | None,
     user_id: int | None,
     api_key_id: int | None,
+    forced_backend_id: str | None = None,
 ) -> Any:
     """Dispatch core, no Request dependency. Used by the HTTP entry-points and
     by the synthetic-request worker.
+
+    `forced_backend_id` constrains the selector to a single backend (the
+    synthetic worker uses this to land synthetics on the account it picked).
+    HTTP entry-points never set it.
     """
     requested_model = _require_model(body)
     requested_reasoning = _extract_reasoning_effort(body)
@@ -339,6 +347,13 @@ async def _dispatch_internal(
     model = _require_model(body)
     pinned = pin_state.get()
     active = _active_pool(backends_list, pinned)
+    if forced_backend_id is not None:
+        active = [b for b in active if b.id == forced_backend_id]
+        if not active:
+            raise HTTPException(
+                status_code=503,
+                detail=f"forced backend {forced_backend_id!r} not in active pool",
+            )
     preferred_id = session_registry.get(session_id) if session_id is not None else None
     if body.get("stream") is True:
         return await _dispatch_stream(

@@ -55,30 +55,53 @@ class AuthConfig(BaseModel):
 
 
 class AutoRouterConfig(BaseModel):
-    """Background synthetic-request topper for the auto-learning explorer.
+    """Background synthetic-request worker for the auto-learning explorer.
 
-    Synthetic requests SUPPLEMENT organic auto-learning traffic; they never
-    replace it. Two bounds, both active simultaneously:
+    The PRIMARY controller is per-account weekly-exhaustion: every tick,
+    for each account, fire synthetics at the rate that lands weekly at
+    100% by reset, given projected human burn (last N hours of organic
+    rate × safety margin). This honors the invariant "weekly capacity
+    is never wasted" since paid-monthly weekly slots can't be regained.
 
-    - `synthetic_floor_per_day`: minimum synthetics fired per UTC day, regardless
-      of organic volume. Guarantees corpus velocity on quiet days.
-    - `synthetic_pct_of_organic`: synthetics may grow up to this fraction of
-      today's organic volume. Keeps the corpus from being dominated by
-      synthetic prompts on busy days.
-    - `synthetic_hard_ceiling_per_day`: absolute upper bound — quota safety net.
+    The FALLBACK controller is the original floor + pct + ceiling logic.
+    It runs only when no quota snapshot is available yet (cold start —
+    backend hasn't served a request yet, so we don't know weekly state),
+    or as an absolute safety cap.
 
-    Effective target per day ≈ min(hard_ceiling, max(floor, ceil(pct * organic))).
-
-    All defaults are 0 (worker disabled). Set non-zero values to enable.
+    All synthetic_* defaults are 0 (worker disabled). Set non-zero values
+    to enable — either the floor (cold-start mode) or just plug it in and
+    let the weekly-exhaustion controller do its thing once quota snapshots
+    arrive.
     """
 
     model_config = ConfigDict(extra="forbid")
 
+    # Cold-start fallback bounds (used when no quota_snapshot is available).
     synthetic_floor_per_day: int = 0
     synthetic_pct_of_organic: float = 0.0
     synthetic_hard_ceiling_per_day: int = 0
     # How often the worker wakes to check whether to fire another synthetic.
     synthetic_check_interval_seconds: int = 300
+
+    # Weekly-exhaustion controller knobs. Sensible defaults baked in.
+    # `pct_per_synthetic_estimate`: cost of one synthetic request, in weekly%
+    # points. Hand-set v1; learned by the cost model in v2.
+    pct_per_synthetic_estimate: float = 0.1
+    # `prediction_window_hours`: how far back to look when estimating organic
+    # burn rate per account. 168h = 7d.
+    prediction_window_hours: int = 168
+    # `prediction_safety_margin`: multiplier on projected human burn so the
+    # controller errs toward leaving the human room (1.20 = +20%).
+    prediction_safety_margin: float = 1.20
+    # Per-tick cap on synthetics fired (one tick interval). Spreads connection
+    # load even if the math says fire many.
+    max_synthetics_per_tick: int = 10
+    # Stop firing on an account once weekly_used_percent crosses this — close
+    # enough to 100 that we don't risk a 429 on a real human request.
+    weekly_target_pct: float = 95.0
+    # Pause firing on an account when 5h is near-exhausted (otherwise we'd
+    # 429-loop until the 5h window rolls).
+    five_hourly_pause_pct: float = 95.0
 
 
 class BackendConfig(BaseModel):

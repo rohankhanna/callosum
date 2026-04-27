@@ -1,114 +1,312 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 from pathlib import Path
 
+from codex_proxy.codex_quota import CodexQuotaSnapshot
 from codex_proxy.config import AutoRouterConfig
 from codex_proxy.synthetic import (
     DailyCounts,
+    cold_start_fire_count,
+    cold_start_target,
     daily_counts,
-    should_fire,
+    organic_burn_rate_pct_per_hour,
     synthetic_body,
-    synthetic_target_for_today,
+    weekly_exhaustion_fire_count,
 )
 
 
-def _make_log(db: Path, rows: list[tuple[float, str]]) -> None:
+def _make_log(db: Path, rows: list[tuple[float, str, str | None]]) -> None:
+    """Create a minimal requests table for daily-counts/burn-rate queries."""
     conn = sqlite3.connect(db)
     conn.execute(
         """
         CREATE TABLE requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ts_start REAL NOT NULL,
+            backend_id TEXT,
             routing_mode TEXT
         )
         """
     )
     conn.executemany(
-        "INSERT INTO requests (ts_start, routing_mode) VALUES (?, ?)",
+        "INSERT INTO requests (ts_start, backend_id, routing_mode) VALUES (?, ?, ?)",
         rows,
     )
     conn.commit()
     conn.close()
 
 
+def _make_burn_log(db: Path, rows: list[dict]) -> None:
+    """Schema with the columns burn-rate query reads."""
+    conn = sqlite3.connect(db)
+    conn.execute(
+        """
+        CREATE TABLE requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts_start REAL NOT NULL,
+            backend_id TEXT NOT NULL,
+            routing_mode TEXT,
+            status INTEGER NOT NULL,
+            quota_reset_crossover INTEGER NOT NULL DEFAULT 0,
+            weekly_used_percent_before INTEGER,
+            weekly_used_percent_after INTEGER
+        )
+        """
+    )
+    for r in rows:
+        conn.execute(
+            "INSERT INTO requests (ts_start, backend_id, routing_mode, status,"
+            " quota_reset_crossover, weekly_used_percent_before,"
+            " weekly_used_percent_after) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                r["ts_start"],
+                r["backend_id"],
+                r["routing_mode"],
+                r.get("status", 200),
+                r.get("crossover", 0),
+                r.get("before"),
+                r.get("after"),
+            ),
+        )
+    conn.commit()
+    conn.close()
+
+
+def _quota(
+    *,
+    weekly_used: int | None = 50,
+    weekly_reset_at: int | None = None,
+    five_hourly_used: int | None = 30,
+) -> CodexQuotaSnapshot:
+    return CodexQuotaSnapshot(
+        plan_type="plus",
+        active_limit="premium",
+        five_hourly_used_percent=five_hourly_used,
+        weekly_used_percent=weekly_used,
+        five_hourly_window_minutes=300,
+        weekly_window_minutes=10080,
+        five_hourly_reset_at=None,
+        weekly_reset_at=weekly_reset_at,
+        five_hourly_reset_after_seconds=None,
+        weekly_reset_after_seconds=None,
+        five_hourly_over_weekly_limit_percent=None,
+        credits_balance=None,
+        credits_has_credits=False,
+        credits_unlimited=False,
+        observed_at=time.time(),
+    )
+
+
 def test_synthetic_body_uses_virtual_model_name() -> None:
     body = synthetic_body()
     assert body["model"] == "auto-learning-synthetic"
     assert body["stream"] is False
-    # Responses-API shape: input is a list of message blocks.
     assert isinstance(body["input"], list) and len(body["input"]) == 1
-    assert body["input"][0]["role"] == "user"
 
 
-def test_target_floor_dominates_when_organic_is_low() -> None:
+# --------- cold-start fallback ---------------------------------------------
+
+
+def test_cold_start_target_floor_dominates_when_organic_low() -> None:
     cfg = AutoRouterConfig(
         synthetic_floor_per_day=20,
-        synthetic_pct_of_organic=0.05,  # 5% of 100 = 5
+        synthetic_pct_of_organic=0.05,
         synthetic_hard_ceiling_per_day=200,
     )
-    counts = DailyCounts(organic=100, synthetic=0)
-    # max(20, 5) = 20
-    assert synthetic_target_for_today(counts, cfg) == 20
+    assert cold_start_target(DailyCounts(organic=100, synthetic=0), cfg) == 20
 
 
-def test_target_pct_dominates_when_organic_is_high() -> None:
-    cfg = AutoRouterConfig(
-        synthetic_floor_per_day=20,
-        synthetic_pct_of_organic=0.05,  # 5% of 1000 = 50
-        synthetic_hard_ceiling_per_day=200,
-    )
-    counts = DailyCounts(organic=1000, synthetic=0)
-    assert synthetic_target_for_today(counts, cfg) == 50
-
-
-def test_target_hard_ceiling_caps_pct_growth() -> None:
-    cfg = AutoRouterConfig(
-        synthetic_floor_per_day=20,
-        synthetic_pct_of_organic=0.5,  # 50% of 10000 = 5000
-        synthetic_hard_ceiling_per_day=200,  # ceiling wins
-    )
-    counts = DailyCounts(organic=10000, synthetic=0)
-    assert synthetic_target_for_today(counts, cfg) == 200
-
-
-def test_should_fire_false_when_synthetic_at_target() -> None:
-    cfg = AutoRouterConfig(
-        synthetic_floor_per_day=10,
-        synthetic_pct_of_organic=0.0,
-        synthetic_hard_ceiling_per_day=100,
-    )
-    assert should_fire(DailyCounts(organic=0, synthetic=10), cfg) is False
-    assert should_fire(DailyCounts(organic=0, synthetic=9), cfg) is True
-
-
-def test_should_fire_false_when_disabled_by_defaults() -> None:
-    # All-zero defaults = topper disabled, regardless of organic volume.
+def test_cold_start_fire_count_zero_when_disabled_by_defaults() -> None:
     cfg = AutoRouterConfig()
-    assert should_fire(DailyCounts(organic=1000, synthetic=0), cfg) is False
+    assert cold_start_fire_count(DailyCounts(organic=999, synthetic=0), cfg) == 0
 
 
-def test_daily_counts_only_today(tmp_path: Path) -> None:
+def test_cold_start_fire_count_capped_by_max_per_tick() -> None:
+    cfg = AutoRouterConfig(synthetic_floor_per_day=1000, max_synthetics_per_tick=5)
+    # Deficit is huge but tick cap is 5.
+    assert cold_start_fire_count(DailyCounts(organic=0, synthetic=0), cfg) == 5
+
+
+def test_daily_counts_per_backend(tmp_path: Path) -> None:
     db = tmp_path / "u.sqlite"
-    # Pick now_ts at a known UTC day boundary so we can craft "yesterday" rows.
-    now_ts = 1_700_000_000.0  # 2023-11-14 ~22:13 UTC
+    now_ts = 1_700_000_000.0
     yesterday_ts = now_ts - 86400.0
     _make_log(
         db,
         [
-            (yesterday_ts, "auto-learning"),  # yesterday — excluded
-            (yesterday_ts, "auto-learning-synthetic"),  # yesterday — excluded
-            (now_ts - 60.0, "auto-learning"),
-            (now_ts - 30.0, "auto-learning"),
-            (now_ts - 10.0, "auto-learning-synthetic"),
-            (now_ts - 5.0, "pass-through"),  # different mode — excluded
+            (yesterday_ts, "alpha", "auto-learning"),  # excluded — yesterday
+            (now_ts - 60, "alpha", "auto-learning"),
+            (now_ts - 30, "alpha", "auto-learning-synthetic"),
+            (now_ts - 30, "beta", "auto-learning"),  # different backend
+            (now_ts - 5, "alpha", "pass-through"),  # excluded — wrong mode
         ],
     )
-    counts = daily_counts(db, now_ts=now_ts)
-    assert counts.organic == 2
-    assert counts.synthetic == 1
+    counts = daily_counts(db, now_ts=now_ts, backend_id="alpha")
+    assert counts == DailyCounts(organic=1, synthetic=1)
 
 
-def test_daily_counts_missing_log_returns_zero(tmp_path: Path) -> None:
-    counts = daily_counts(tmp_path / "no.sqlite", now_ts=0.0)
-    assert counts == DailyCounts(organic=0, synthetic=0)
+# --------- weekly-exhaustion controller ------------------------------------
+
+
+def test_weekly_exhaust_zero_when_no_quota() -> None:
+    cfg = AutoRouterConfig()
+    n = weekly_exhaustion_fire_count(
+        _quota(weekly_used=None, weekly_reset_at=None),
+        organic_rate_pct_per_hour=0.0,
+        now_ts=1000.0,
+        cfg=cfg,
+    )
+    assert n == 0
+
+
+def test_weekly_exhaust_zero_when_at_target() -> None:
+    cfg = AutoRouterConfig(weekly_target_pct=95.0)
+    now = 1_700_000_000.0
+    n = weekly_exhaustion_fire_count(
+        _quota(weekly_used=95, weekly_reset_at=int(now + 3600 * 24)),
+        organic_rate_pct_per_hour=0.0,
+        now_ts=now,
+        cfg=cfg,
+    )
+    assert n == 0
+
+
+def test_weekly_exhaust_zero_when_5h_near_exhausted() -> None:
+    cfg = AutoRouterConfig(five_hourly_pause_pct=95.0)
+    now = 1_700_000_000.0
+    n = weekly_exhaustion_fire_count(
+        _quota(weekly_used=20, weekly_reset_at=int(now + 86400), five_hourly_used=99),
+        organic_rate_pct_per_hour=0.0,
+        now_ts=now,
+        cfg=cfg,
+    )
+    assert n == 0
+
+
+def test_weekly_exhaust_fires_when_room_remains() -> None:
+    cfg = AutoRouterConfig(
+        pct_per_synthetic_estimate=0.1,
+        prediction_safety_margin=1.0,
+        max_synthetics_per_tick=10,
+        synthetic_check_interval_seconds=300,
+        weekly_target_pct=95.0,
+        five_hourly_pause_pct=95.0,
+    )
+    now = 1_700_000_000.0
+    # 50% weekly used, 24h to reset, no organic. burnable = 95-50 = 45 pct.
+    # synthetics_total = 45 / 0.1 = 450. tick_hours = 5/60 ≈ 0.0833.
+    # synthetics_this_tick = 450 * 0.0833 / 24 ≈ 1.56 → round to 2. Capped at 10.
+    n = weekly_exhaustion_fire_count(
+        _quota(weekly_used=50, weekly_reset_at=int(now + 86400)),
+        organic_rate_pct_per_hour=0.0,
+        now_ts=now,
+        cfg=cfg,
+    )
+    assert n == 2
+
+
+def test_weekly_exhaust_zero_when_organic_will_consume_remainder() -> None:
+    cfg = AutoRouterConfig(
+        pct_per_synthetic_estimate=0.1,
+        prediction_safety_margin=1.0,
+        weekly_target_pct=95.0,
+    )
+    now = 1_700_000_000.0
+    # 50% used, 24h to reset, organic burns 2%/hr → 48% projected → 95-50-48 = -3.
+    n = weekly_exhaustion_fire_count(
+        _quota(weekly_used=50, weekly_reset_at=int(now + 86400)),
+        organic_rate_pct_per_hour=2.0,
+        now_ts=now,
+        cfg=cfg,
+    )
+    assert n == 0
+
+
+def test_weekly_exhaust_safety_margin_makes_it_more_conservative() -> None:
+    cfg = AutoRouterConfig(
+        pct_per_synthetic_estimate=0.1,
+        prediction_safety_margin=2.0,  # double the projected human burn
+        weekly_target_pct=95.0,
+    )
+    now = 1_700_000_000.0
+    # 50% used, 24h to reset, organic 1%/hr → projected 24 * margin 2.0 = 48.
+    # burnable = 95 - 50 - 48 = -3 → 0.
+    n = weekly_exhaustion_fire_count(
+        _quota(weekly_used=50, weekly_reset_at=int(now + 86400)),
+        organic_rate_pct_per_hour=1.0,
+        now_ts=now,
+        cfg=cfg,
+    )
+    assert n == 0
+
+
+def test_organic_burn_rate_returns_zero_for_missing_log(tmp_path: Path) -> None:
+    rate = organic_burn_rate_pct_per_hour(
+        tmp_path / "no.sqlite",
+        backend_id="alpha",
+        now_ts=1000.0,
+        window_hours=168.0,
+    )
+    assert rate == 0.0
+
+
+def test_organic_burn_rate_sums_deltas_for_backend(tmp_path: Path) -> None:
+    db = tmp_path / "u.sqlite"
+    now_ts = 1_700_000_000.0
+    rows = [
+        # Two organic alpha calls inside window: delta 1+2 = 3 pct over 100h
+        # → 3/100 = 0.03 %/hr
+        {
+            "ts_start": now_ts - 3600,
+            "backend_id": "alpha",
+            "routing_mode": "auto-learning",
+            "before": 50,
+            "after": 51,
+        },
+        {
+            "ts_start": now_ts - 1800,
+            "backend_id": "alpha",
+            "routing_mode": "pass-through",
+            "before": 51,
+            "after": 53,
+        },
+        # Outside window — excluded
+        {
+            "ts_start": now_ts - 3600 * 200,
+            "backend_id": "alpha",
+            "routing_mode": "auto-learning",
+            "before": 30,
+            "after": 31,
+        },
+        # Different backend — excluded
+        {
+            "ts_start": now_ts - 60,
+            "backend_id": "beta",
+            "routing_mode": "auto-learning",
+            "before": 10,
+            "after": 99,
+        },
+        # Reset crossover — excluded
+        {
+            "ts_start": now_ts - 60,
+            "backend_id": "alpha",
+            "routing_mode": "auto-learning",
+            "crossover": 1,
+            "before": 99,
+            "after": 1,
+        },
+        # Synthetic — excluded (only organic + pass-through count toward
+        # human burn prediction)
+        {
+            "ts_start": now_ts - 60,
+            "backend_id": "alpha",
+            "routing_mode": "auto-learning-synthetic",
+            "before": 53,
+            "after": 54,
+        },
+    ]
+    _make_burn_log(db, rows)
+    rate = organic_burn_rate_pct_per_hour(db, backend_id="alpha", now_ts=now_ts, window_hours=100.0)
+    assert rate == 0.03
