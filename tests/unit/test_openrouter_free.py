@@ -10,6 +10,7 @@ from codex_proxy.backends.openrouter_free import (
     OpenRouterFreeBackend,
     _approx_token_budget,
     _code_score,
+    _is_blocked_provider,
     _is_free,
 )
 from codex_proxy.errors import BackendError
@@ -54,9 +55,71 @@ def test_is_free_false_when_either_nonzero() -> None:
 
 
 def test_code_score_picks_highest_matching_pattern() -> None:
-    assert _code_score("model-a0g3/model-a0g3-2.5-coder-32b-instruct:free") >= 100
-    assert _code_score("meta-model-a0g1/model-a0a5:free") >= 70
+    assert _code_score("meta-model-a0g1/model-a0a5:free") >= 100
+    assert _code_score("meta-model-a0g1/model-a0g1-3.1-405b-instruct:free") >= 95
+    assert _code_score("nousresearch/hermes-3-model-a0g1-3.1-70b:free") >= 70
     assert _code_score("totally-unknown/random:free") == 0
+
+
+def test_blocked_providers_filtered_from_catalog() -> None:
+    """Operator preference: no Chinese-origin cloud models in the free pool."""
+    assert _is_blocked_provider("model-a0g3/model-a0f3-coder-32b-instruct:free") is True
+    assert _is_blocked_provider("model-a0e2/model-a0e2-coder-v2:free") is True
+    assert _is_blocked_provider("01-ai/yi-large:free") is True
+    assert _is_blocked_provider("thudm/glm-4-9b:free") is True
+    assert _is_blocked_provider("bytedance/doubao-pro:free") is True
+    # Non-Chinese providers must NOT be blocked.
+    assert _is_blocked_provider("meta-model-a0g1/model-a0a5:free") is False
+    assert _is_blocked_provider("mistralai/mistral-large:free") is False
+    assert _is_blocked_provider("google/model-a0d5-2-27b:free") is False
+    assert _is_blocked_provider("nousresearch/hermes-3:free") is False
+
+
+async def test_blocked_provider_excluded_from_picker() -> None:
+    """Even if Qwen2.5-Coder is in the OpenRouter free catalog, the picker
+    must never select it — the operator preference excludes it at parse time.
+    """
+    catalog = _catalog_payload(
+        _entry(id="model-a0g3/model-a0f3-coder-32b:free", context_length=128_000, supports_tools=True),
+        _entry(
+            id="meta-model-a0g1/model-a0a5:free",
+            context_length=32_000,
+            supports_tools=True,
+        ),
+    )
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path.endswith("/models"):
+            return httpx.Response(200, json=catalog)
+        body = json.loads(req.content)
+        # Even though model-a0g3 has bigger context, it's blocked; model-a0g1 wins.
+        assert body["model"] == "meta-model-a0g1/model-a0a5:free"
+        return httpx.Response(
+            200,
+            json={
+                "id": "x",
+                "model": body["model"],
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+
+    backend = OpenRouterFreeBackend(
+        id="or", api_key="sk-or-test", transport=httpx.MockTransport(handler)
+    )
+    try:
+        await backend.chat_completions(
+            {"model": "model-a0e7", "messages": [{"role": "user", "content": "hi"}]}
+        )
+        # Confirm the catalog filter actually dropped the blocked entry.
+        assert "model-a0g3/model-a0f3-coder-32b:free" not in backend.advertised_models
+    finally:
+        await backend.aclose()
 
 
 def test_approx_token_budget_floors_at_1024() -> None:
@@ -85,7 +148,9 @@ async def test_advertised_models_is_empty_until_catalog_fetched() -> None:
 
 async def test_picks_highest_code_score_when_multiple_free_models_available() -> None:
     catalog = _catalog_payload(
-        _entry(id="model-a0g3/model-a0f3-coder-32b:free", context_length=32_000, supports_tools=True),
+        _entry(
+            id="meta-model-a0g1/model-a0a5:free", context_length=32_000, supports_tools=True
+        ),
         _entry(id="meta-model-a0g1/model-a0g1-3.1-8b:free", context_length=8000, supports_tools=True),
         _entry(id="bad-pricing/expensive", context_length=128_000, supports_tools=True, free=False),
     )
@@ -94,8 +159,8 @@ async def test_picks_highest_code_score_when_multiple_free_models_available() ->
         if req.url.path.endswith("/models"):
             return httpx.Response(200, json=catalog)
         body = json.loads(req.content)
-        # The picker should have rewritten the model to the model-a0g3-coder one.
-        assert body["model"] == "model-a0g3/model-a0f3-coder-32b:free"
+        # The picker should have rewritten the model to model-a0g1-3.3 (highest score).
+        assert body["model"] == "meta-model-a0g1/model-a0a5:free"
         return httpx.Response(
             200,
             json={
@@ -118,7 +183,7 @@ async def test_picks_highest_code_score_when_multiple_free_models_available() ->
         result = await backend.chat_completions(
             {"model": "model-a0e7", "messages": [{"role": "user", "content": "hi"}]}
         )
-        assert result["model"] == "model-a0g3/model-a0f3-coder-32b:free"
+        assert result["model"] == "meta-model-a0g1/model-a0a5:free"
     finally:
         await backend.aclose()
 
@@ -126,7 +191,9 @@ async def test_picks_highest_code_score_when_multiple_free_models_available() ->
 async def test_filters_out_non_tool_supporting_models_when_request_has_tools() -> None:
     catalog = _catalog_payload(
         _entry(id="big-model-no-tools/free:free", context_length=200_000, supports_tools=False),
-        _entry(id="model-a0g3/model-a0f3-coder-32b:free", context_length=32_000, supports_tools=True),
+        _entry(
+            id="meta-model-a0g1/model-a0a5:free", context_length=32_000, supports_tools=True
+        ),
     )
 
     def handler(req: httpx.Request) -> httpx.Response:
@@ -135,7 +202,7 @@ async def test_filters_out_non_tool_supporting_models_when_request_has_tools() -
         body = json.loads(req.content)
         # Even though the no-tools model has bigger context, the picker must
         # exclude it because the request has tools.
-        assert body["model"] == "model-a0g3/model-a0f3-coder-32b:free"
+        assert body["model"] == "meta-model-a0g1/model-a0a5:free"
         return httpx.Response(
             200,
             json={
@@ -167,7 +234,7 @@ async def test_filters_out_non_tool_supporting_models_when_request_has_tools() -
 
 
 async def test_advertised_models_includes_shadow_set() -> None:
-    catalog = _catalog_payload(_entry(id="model-a0g3/model-a0f3-coder-32b:free"))
+    catalog = _catalog_payload(_entry(id="meta-model-a0g1/model-a0a5:free"))
     backend = OpenRouterFreeBackend(
         id="or",
         api_key="sk-or-test",
@@ -186,7 +253,7 @@ async def test_advertised_models_includes_shadow_set() -> None:
         adv = backend.advertised_models
         assert "model-a0e7" in adv
         assert "model-a0c3" in adv
-        assert "model-a0g3/model-a0f3-coder-32b:free" in adv
+        assert "meta-model-a0g1/model-a0a5:free" in adv
         assert "auto-fallback" in adv
     finally:
         await backend.aclose()
@@ -212,7 +279,9 @@ async def test_responses_translates_to_chat_and_back() -> None:
     """Hermes/codex CLI calls /v1/responses; OpenRouter doesn't support it.
     The backend must translate request → chat-completions, response → Responses-API.
     """
-    catalog = _catalog_payload(_entry(id="model-a0g3/model-a0f3-coder-32b:free", supports_tools=True))
+    catalog = _catalog_payload(
+        _entry(id="meta-model-a0g1/model-a0a5:free", supports_tools=True)
+    )
 
     def handler(req: httpx.Request) -> httpx.Response:
         if req.url.path.endswith("/models"):

@@ -38,24 +38,44 @@ DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 # without hammering OpenRouter.
 DEFAULT_CATALOG_REFRESH_S = 3600.0
 
+# Provider prefixes whose models are excluded from the free-pool catalog.
+# Operator preference: no Chinese-origin models from cloud providers
+# (OpenRouter is cloud). If a separate "local models" backend ships later,
+# it can apply different rules — this exclusion is OpenRouter-specific.
+_BLOCKED_PROVIDER_PREFIXES: frozenset[str] = frozenset(
+    {
+        "model-a0g3",  # Alibaba
+        "model-a0e2",  # DeepSeek
+        "01-ai",  # 01.AI (Yi)
+        "baichuan-inc",
+        "thudm",  # Tsinghua/Zhipu (ChatGLM, GLM)
+        "zhipu",
+        "zhipuai",
+        "internlm",
+        "shanghai-ai-laboratory",
+        "bytedance",  # Doubao
+        "tencent",  # Hunyuan
+        "minimax",
+        "stepfun",
+        "moonshot",  # Kimi
+        "moonshotai",
+        "yi",
+    }
+)
+
 # Heuristic ranking for "least drama on a codebase." Higher score = preferred.
 # Patterns are case-insensitive substrings on the normalized model id, where
-# normalization collapses runs of `-`/`.` so `model-a0f3-coder` and `model-a0g3-2.5-coder`
-# and `qwen2-5-coder` all match the same family pattern.
+# normalization collapses runs of `-`/`.`/`_` so version-formatting variations
+# all match the same family pattern.
 _CODE_FRIENDLY_PATTERNS: tuple[tuple[str, int], ...] = (
-    ("qwen25coder", 100),
-    ("qwencoder", 95),
-    ("deepseekcoder", 90),
-    ("deepseekv3", 85),
-    ("deepseekr1", 80),
-    ("llama33", 70),
-    ("llama31405b", 75),
-    ("llama3170b", 65),
-    ("llama318b", 30),
-    ("gemma2", 35),
-    ("mistrallarge", 60),
-    ("mistralnemo", 40),
-    ("hermes", 50),
+    ("llama33", 100),
+    ("llama31405b", 95),
+    ("llama3170b", 90),
+    ("mistrallarge", 85),
+    ("gemma2", 75),
+    ("hermes", 70),
+    ("llama318b", 60),
+    ("mistralnemo", 55),
 )
 
 
@@ -302,6 +322,8 @@ def _parse_model_entry(entry: Any) -> FreeModel | None:
     model_id = entry.get("id")
     if not isinstance(model_id, str) or not model_id:
         return None
+    if _is_blocked_provider(model_id):
+        return None
     pricing = entry.get("pricing") if isinstance(entry.get("pricing"), dict) else {}
     if not _is_free(pricing):
         return None
@@ -316,6 +338,14 @@ def _parse_model_entry(entry: Any) -> FreeModel | None:
         supports_vision=supports_vision,
         code_score=score,
     )
+
+
+def _is_blocked_provider(model_id: str) -> bool:
+    """OpenRouter ids are formatted `provider/model:tag`. Reject if the provider
+    prefix is on the blocklist (case-insensitive).
+    """
+    provider = model_id.split("/", 1)[0].lower() if "/" in model_id else model_id.lower()
+    return provider in _BLOCKED_PROVIDER_PREFIXES
 
 
 def _is_free(pricing: Any) -> bool:

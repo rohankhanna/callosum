@@ -664,8 +664,10 @@ What you get:
 
 1. Tool-call support (required if the request body has `tools` set).
 2. Context length ≥ approximate input token budget.
-3. Code-friendliness heuristic (higher score for `model-a0f3-coder`, `model-a0e2-coder`, `model-a0g1-3.3`, `model-a0e2-v3` family names — the patterns that tend to least-drama existing codebases).
+3. Code-friendliness heuristic (higher score for `model-a0g1-3.3`, `model-a0g1-3.1-405b`, `mistral-large`, `model-a0d5-2`, `hermes` family names — the patterns that tend to least-drama existing codebases).
 4. Larger context length wins ties.
+
+**Provider exclusion**: Chinese-origin cloud providers are filtered out of the catalog at parse time — Qwen, DeepSeek, Yi (01.AI), ChatGLM/GLM (Zhipu), InternLM, Doubao (ByteDance), Hunyuan (Tencent), MiniMax, Stepfun, Moonshot, Baichuan. This is operator preference for cloud-routed models; if a separate local-models backend ships later, it can apply different rules. See `_BLOCKED_PROVIDER_PREFIXES` in `src/codex_proxy/backends/openrouter_free.py`.
 
 The chosen model id appears in the response and in the usage log's `model` column, so you can see exactly what was used for each call. If you don't like the choice, set a more specific model in your client (the OpenRouter id, e.g. `model-a0g3/model-a0f3-coder-32b-instruct:free`); the proxy will pass it through unchanged.
 
