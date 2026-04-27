@@ -25,6 +25,12 @@ class ServerConfig(BaseModel):
     port: int = 8765
     client_auth_token_env: str | None = None
     control_auth_token_env: str | None = None
+    # On startup, probe each non-cooldown backend with one minimal upstream
+    # call so the operator sees auth health (or weekly-exhaustion, or any
+    # other backend issue) immediately in the launch log instead of finding
+    # out via failed user requests later. Each probe burns a few hundred
+    # tokens of quota — disable if you restart often.
+    startup_smoke_test: bool = True
 
 
 class StateConfig(BaseModel):

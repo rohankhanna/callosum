@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
@@ -26,6 +27,8 @@ from codex_proxy.selector import select
 from codex_proxy.session import SessionRegistry
 from codex_proxy.synthetic import SyntheticTopper
 from codex_proxy.usage_log import UsageLog, UsageLogEntry
+
+logger = logging.getLogger("codex_proxy.startup")
 
 # Clients opt into sticky routing by sending this header. When absent, every
 # request is a fresh selection. There is no server-side "session mode" knob.
@@ -66,6 +69,7 @@ def create_app(
     usage_log: UsageLog | None = None,
     auth_service: AuthService | None = None,
     auto_router_config: AutoRouterConfig | None = None,
+    startup_smoke_test: bool = False,
 ) -> FastAPI:
     backends_list: list[Backend] = list(backends)
     pin_state = PinState()
@@ -111,6 +115,8 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        if startup_smoke_test and backends_list:
+            await _run_startup_smoke_test(backends_list)
         topper.start()
         try:
             yield
@@ -898,6 +904,61 @@ async def _diagnose_backend(backend: Backend) -> dict[str, Any]:
             "model": model,
         }
     return _evaluate_diagnostic(backend.id, handle, model)
+
+
+async def _run_startup_smoke_test(backends_list: Sequence[Backend]) -> None:
+    """Probe each non-cooldown backend with one minimal upstream call so the
+    operator sees auth health (or quota exhaustion, or any other backend
+    issue) immediately in the launch log. Doesn't fail startup — just logs.
+
+    Reuses _diagnose_backend so the smoke test and the on-demand
+    /diagnose/upstream endpoint share contract definitions.
+    """
+    logger.info("startup smoke test: probing %d backend(s)", len(backends_list))
+    results = []
+    for backend in backends_list:
+        try:
+            result = await _diagnose_backend(backend)
+        except Exception as exc:
+            logger.exception("startup smoke test: backend %r raised", backend.id)
+            results.append(
+                {"id": backend.id, "ok": False, "stage": "exception", "reason": str(exc)}
+            )
+            continue
+        results.append(result)
+        _log_smoke_result(result)
+    n_ok = sum(1 for r in results if r.get("ok"))
+    n_skipped = sum(1 for r in results if r.get("skipped"))
+    n_failed = len(results) - n_ok - n_skipped
+    logger.info(
+        "startup smoke test: %d ok, %d skipped (cooldown), %d failed",
+        n_ok - n_skipped,  # 'ok' counts skipped too in _diagnose_backend's contract
+        n_skipped,
+        n_failed,
+    )
+
+
+def _log_smoke_result(result: dict[str, Any]) -> None:
+    """One human-readable line per backend smoke test result."""
+    backend_id = result.get("id", "?")
+    if result.get("skipped"):
+        logger.info("  [%s] SKIPPED — %s", backend_id, result.get("reason", "in cooldown"))
+        return
+    if result.get("ok"):
+        upstream = result.get("upstream_status")
+        logger.info("  [%s] OK — upstream %s", backend_id, upstream)
+        return
+    stage = result.get("stage", "?")
+    classification = result.get("classification")
+    status_code = result.get("status_code")
+    reason = result.get("reason") or result.get("failed_checks") or "(no reason)"
+    bits = [f"stage={stage}"]
+    if classification is not None:
+        bits.append(f"class={classification}")
+    if status_code is not None:
+        bits.append(f"status={status_code}")
+    bits.append(f"detail={reason}")
+    logger.warning("  [%s] FAILED — %s", backend_id, " ".join(bits))
 
 
 def _evaluate_diagnostic(backend_id: str, handle: CallHandle, model: str) -> dict[str, Any]:

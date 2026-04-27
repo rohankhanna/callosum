@@ -47,6 +47,7 @@ def main() -> None:
             usage_log=usage_log,
             auth_service=auth_service,
             auto_router_config=cfg.auto_router,
+            startup_smoke_test=cfg.server.startup_smoke_test,
         ),
         host=host,
         port=port,
