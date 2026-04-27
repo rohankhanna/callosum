@@ -19,10 +19,12 @@ from codex_proxy.auth import (
 )
 from codex_proxy.auth_db import ApiKey, Session
 from codex_proxy.backend import Backend, CallHandle
+from codex_proxy.config import AutoRouterConfig
 from codex_proxy.errors import RETRYABLE, BackendError, ErrorClass
 from codex_proxy.router import ExploiterRouter, ExplorerRouter
 from codex_proxy.selector import select
 from codex_proxy.session import SessionRegistry
+from codex_proxy.synthetic import SyntheticTopper
 from codex_proxy.usage_log import UsageLog, UsageLogEntry
 
 # Clients opt into sticky routing by sending this header. When absent, every
@@ -63,18 +65,54 @@ def create_app(
     sessions: SessionRegistry | None = None,
     usage_log: UsageLog | None = None,
     auth_service: AuthService | None = None,
+    auto_router_config: AutoRouterConfig | None = None,
 ) -> FastAPI:
     backends_list: list[Backend] = list(backends)
     pin_state = PinState()
     session_registry = sessions if sessions is not None else SessionRegistry()
     explorer = ExplorerRouter(usage_log_path=usage_log.path if usage_log is not None else None)
+    synthetic_explorer = ExplorerRouter(
+        usage_log_path=usage_log.path if usage_log is not None else None,
+        routing_mode="auto-learning-synthetic",
+    )
     exploiter = ExploiterRouter(usage_log_path=usage_log.path if usage_log is not None else None)
+
+    auto_cfg = auto_router_config if auto_router_config is not None else AutoRouterConfig()
+
+    async def _synthetic_dispatch(body: dict[str, Any]) -> Any:
+        # The topper calls dispatch directly — no Request, no auth attribution.
+        # Routes through /v1/responses' call shape since the prompt corpus is
+        # Responses-API-flavored.
+        return await _dispatch_internal(
+            body,
+            route_name="responses",
+            backends_list=backends_list,
+            pin_state=pin_state,
+            session_registry=session_registry,
+            usage_log=usage_log,
+            explorer=explorer,
+            synthetic_explorer=synthetic_explorer,
+            exploiter=exploiter,
+            nonstream=lambda b, p, h: b.responses(p, h),
+            stream=lambda b, p, h: b.responses_stream(p, h),
+            session_id=None,
+            user_id=None,
+            api_key_id=None,
+        )
+
+    topper = SyntheticTopper(
+        cfg=auto_cfg,
+        usage_log_path=usage_log.path if usage_log is not None else None,
+        dispatch=_synthetic_dispatch,
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        topper.start()
         try:
             yield
         finally:
+            await topper.stop()
             for backend in backends_list:
                 await backend.aclose()
             if usage_log is not None:
@@ -188,6 +226,7 @@ def create_app(
             session_registry=session_registry,
             usage_log=usage_log,
             explorer=explorer,
+            synthetic_explorer=synthetic_explorer,
             exploiter=exploiter,
             nonstream=lambda b, p, h: b.chat_completions(p, h),
             stream=lambda b, p, h: b.chat_completions_stream(p, h),
@@ -204,6 +243,7 @@ def create_app(
             session_registry=session_registry,
             usage_log=usage_log,
             explorer=explorer,
+            synthetic_explorer=synthetic_explorer,
             exploiter=exploiter,
             nonstream=lambda b, p, h: b.responses(p, h),
             stream=lambda b, p, h: b.responses_stream(p, h),
@@ -222,10 +262,57 @@ async def _dispatch_route(
     session_registry: SessionRegistry,
     usage_log: UsageLog | None,
     explorer: ExplorerRouter,
+    synthetic_explorer: ExplorerRouter,
     exploiter: ExploiterRouter,
     nonstream: NonstreamCall,
     stream: StreamCall,
 ) -> Any:
+    """HTTP entry-point. Pulls session_id + api_key off the Request, then
+    hands off to _dispatch_internal for the rewrite + dispatch logic.
+    """
+    pinned_now = pin_state.get()
+    session_id = _session_id_from_request(request, pinned=pinned_now)
+    api_key: ApiKey | None = getattr(request.state, "api_key", None)
+    user_id = api_key.user_id if api_key is not None else None
+    api_key_id = api_key.id if api_key is not None else None
+    return await _dispatch_internal(
+        body,
+        route_name=route_name,
+        backends_list=backends_list,
+        pin_state=pin_state,
+        session_registry=session_registry,
+        usage_log=usage_log,
+        explorer=explorer,
+        synthetic_explorer=synthetic_explorer,
+        exploiter=exploiter,
+        nonstream=nonstream,
+        stream=stream,
+        session_id=session_id,
+        user_id=user_id,
+        api_key_id=api_key_id,
+    )
+
+
+async def _dispatch_internal(
+    body: dict[str, Any],
+    *,
+    route_name: str,
+    backends_list: Sequence[Backend],
+    pin_state: PinState,
+    session_registry: SessionRegistry,
+    usage_log: UsageLog | None,
+    explorer: ExplorerRouter,
+    synthetic_explorer: ExplorerRouter,
+    exploiter: ExploiterRouter,
+    nonstream: NonstreamCall,
+    stream: StreamCall,
+    session_id: str | None,
+    user_id: int | None,
+    api_key_id: int | None,
+) -> Any:
+    """Dispatch core, no Request dependency. Used by the HTTP entry-points and
+    by the synthetic-request worker.
+    """
     requested_model = _require_model(body)
     requested_reasoning = _extract_reasoning_effort(body)
     routing_mode = "pass-through"
@@ -236,6 +323,11 @@ async def _dispatch_route(
         body["model"] = decision.cell.model
         body.setdefault("reasoning", {})["effort"] = decision.cell.reasoning_effort
         routing_mode = "auto-learning"
+    elif requested_model == "auto-learning-synthetic":
+        decision = synthetic_explorer.choose()
+        body["model"] = decision.cell.model
+        body.setdefault("reasoning", {})["effort"] = decision.cell.reasoning_effort
+        routing_mode = "auto-learning-synthetic"
     elif requested_model == "auto":
         try:
             decision = exploiter.choose(model_hint=None)
@@ -247,11 +339,7 @@ async def _dispatch_route(
     model = _require_model(body)
     pinned = pin_state.get()
     active = _active_pool(backends_list, pinned)
-    session_id = _session_id_from_request(request, pinned=pinned)
     preferred_id = session_registry.get(session_id) if session_id is not None else None
-    api_key: ApiKey | None = getattr(request.state, "api_key", None)
-    user_id = api_key.user_id if api_key is not None else None
-    api_key_id = api_key.id if api_key is not None else None
     if body.get("stream") is True:
         return await _dispatch_stream(
             body,

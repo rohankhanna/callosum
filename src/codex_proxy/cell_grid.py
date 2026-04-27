@@ -17,7 +17,11 @@ DEFAULT_MODELS: tuple[str, ...] = (
     "model-a0e6",
 )
 
-VIRTUAL_MODELS: frozenset[str] = frozenset({"auto-learning", "auto"})
+# Virtual model names a client can pick to opt into router behavior.
+# - "auto-learning":           organic round-robin explorer
+# - "auto-learning-synthetic": synthetic background topper (separate coverage tier)
+# - "auto":                    cost-optimal exploiter (returns 503 NotTrained)
+VIRTUAL_MODELS: frozenset[str] = frozenset({"auto-learning", "auto-learning-synthetic", "auto"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,11 +64,20 @@ def build_cells(
     return [Cell(model=m, reasoning_effort=r) for m in models for r in reasoning_levels]
 
 
-def coverage_from_db(usage_log_path: Path, cells: list[Cell]) -> CellCoverage:
-    """Query usage_log for sample counts per cell where routing_mode = 'auto-learning'.
+def coverage_from_db(
+    usage_log_path: Path,
+    cells: list[Cell],
+    *,
+    routing_mode: str = "auto-learning",
+) -> CellCoverage:
+    """Query usage_log for sample counts per cell where routing_mode matches.
 
     Only counts successful requests (status = 200) — failed requests don't help
     fit a cost model. Cells with zero samples are present in the dict with value 0.
+
+    `routing_mode` selects which tier to count: 'auto-learning' (organic) is the
+    default; 'auto-learning-synthetic' counts the background-topper tier
+    independently so the two tiers don't double-count each other.
     """
     counts: dict[Cell, int] = dict.fromkeys(cells, 0)
     if not usage_log_path.exists():
@@ -74,8 +87,9 @@ def coverage_from_db(usage_log_path: Path, cells: list[Cell]) -> CellCoverage:
         rows = conn.execute(
             "SELECT model, reasoning_effort, COUNT(*)"
             " FROM requests"
-            " WHERE routing_mode = 'auto-learning' AND status = 200"
-            " GROUP BY model, reasoning_effort"
+            " WHERE routing_mode = ? AND status = 200"
+            " GROUP BY model, reasoning_effort",
+            (routing_mode,),
         ).fetchall()
     finally:
         conn.close()

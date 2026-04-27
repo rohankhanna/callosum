@@ -54,6 +54,33 @@ class AuthConfig(BaseModel):
     session_ttl_seconds: int = 1800
 
 
+class AutoRouterConfig(BaseModel):
+    """Background synthetic-request topper for the auto-learning explorer.
+
+    Synthetic requests SUPPLEMENT organic auto-learning traffic; they never
+    replace it. Two bounds, both active simultaneously:
+
+    - `synthetic_floor_per_day`: minimum synthetics fired per UTC day, regardless
+      of organic volume. Guarantees corpus velocity on quiet days.
+    - `synthetic_pct_of_organic`: synthetics may grow up to this fraction of
+      today's organic volume. Keeps the corpus from being dominated by
+      synthetic prompts on busy days.
+    - `synthetic_hard_ceiling_per_day`: absolute upper bound — quota safety net.
+
+    Effective target per day ≈ min(hard_ceiling, max(floor, ceil(pct * organic))).
+
+    All defaults are 0 (worker disabled). Set non-zero values to enable.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    synthetic_floor_per_day: int = 0
+    synthetic_pct_of_organic: float = 0.0
+    synthetic_hard_ceiling_per_day: int = 0
+    # How often the worker wakes to check whether to fire another synthetic.
+    synthetic_check_interval_seconds: int = 300
+
+
 class BackendConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -71,6 +98,7 @@ class Config(BaseModel):
     state: StateConfig = Field(default_factory=StateConfig)
     usage_log: UsageLogConfig = Field(default_factory=UsageLogConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
+    auto_router: AutoRouterConfig = Field(default_factory=AutoRouterConfig)
     backends: list[BackendConfig] = Field(default_factory=list)
 
 

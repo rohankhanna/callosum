@@ -42,7 +42,12 @@ def main() -> None:
     host = args.host if args.host is not None else cfg.server.host
     port = args.port if args.port is not None else cfg.server.port
     uvicorn.run(
-        create_app(backends=backends, usage_log=usage_log, auth_service=auth_service),
+        create_app(
+            backends=backends,
+            usage_log=usage_log,
+            auth_service=auth_service,
+            auto_router_config=cfg.auto_router,
+        ),
         host=host,
         port=port,
     )

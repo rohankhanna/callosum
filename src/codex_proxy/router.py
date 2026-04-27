@@ -30,10 +30,21 @@ class ExplorerRouter:
 
     Stateless — every choose() reads current coverage from the usage_log so
     decisions reflect the latest data, including from concurrent calls.
+
+    `routing_mode` selects which tier of samples to count when computing
+    coverage. Organic ('auto-learning') and synthetic ('auto-learning-synthetic')
+    keep independent coverage so neither tier advances the other's least-
+    sampled query.
     """
 
-    def __init__(self, usage_log_path: Path | None) -> None:
+    def __init__(
+        self,
+        usage_log_path: Path | None,
+        *,
+        routing_mode: str = "auto-learning",
+    ) -> None:
         self._usage_log_path = usage_log_path
+        self._routing_mode = routing_mode
         self._cells = build_cells()
 
     @property
@@ -43,7 +54,7 @@ class ExplorerRouter:
     def choose(self) -> RouterDecision:
         """Return the cell to vary into for the next auto-learning request."""
         coverage = (
-            coverage_from_db(self._usage_log_path, self._cells)
+            coverage_from_db(self._usage_log_path, self._cells, routing_mode=self._routing_mode)
             if self._usage_log_path is not None
             else None
         )
