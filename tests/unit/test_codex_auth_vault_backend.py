@@ -132,18 +132,26 @@ async def test_rate_limited_response_classifies_and_records_cooldown(tmp_path: P
 
 
 async def test_auth_invalid_triggers_when_upstream_401(tmp_path: Path) -> None:
+    """Upstream 401 → backend force-refreshes the vault. If the refresh ALSO
+    fails (refresh_token revoked), surface auth_invalid. The test models the
+    end-state worst case: both upstream and refresh return 401.
+    """
     auth_path = tmp_path / "auth.json"
     _write_auth_json(auth_path)
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def upstream_handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={"error": {"code": "invalid_token"}})
 
-    vault = _make_vault(auth_path)
+    def vault_handler(request: httpx.Request) -> httpx.Response:
+        # Refresh endpoint also rejects — refresh_token is dead.
+        return httpx.Response(401, json={"error": {"message": "refresh invalid"}})
+
+    vault = AuthVault(path=auth_path, transport=httpx.MockTransport(vault_handler))
     backend = CodexAuthVaultBackend(
         id="vault-a",
         vault=vault,
         advertised_models=frozenset({"model-a0d0"}),
-        transport=httpx.MockTransport(handler),
+        transport=httpx.MockTransport(upstream_handler),
     )
     try:
         with pytest.raises(BackendError) as excinfo:
@@ -151,6 +159,64 @@ async def test_auth_invalid_triggers_when_upstream_401(tmp_path: Path) -> None:
                 {"model": "model-a0d0", "messages": [{"role": "user", "content": "hi"}]}
             )
         assert excinfo.value.classification == "auth_invalid"
+    finally:
+        await backend.aclose()
+
+
+async def test_upstream_401_triggers_force_refresh_and_retries(tmp_path: Path) -> None:
+    """Healthy refresh path: upstream returns 401 once → backend force-refreshes
+    the vault (gets new access_token) → retries upstream → 200. The retry path
+    is what unblocks server-side token revocations.
+    """
+    auth_path = tmp_path / "auth.json"
+    _write_auth_json(auth_path, access_token="stale-access")
+
+    upstream_calls: list[str] = []
+
+    def upstream_handler(request: httpx.Request) -> httpx.Response:
+        upstream_calls.append(request.headers.get("Authorization", ""))
+        if len(upstream_calls) == 1:
+            return httpx.Response(401, json={"error": {"code": "invalid_token"}})
+        return httpx.Response(
+            200,
+            json={
+                "id": "resp-ok",
+                "model": "model-a0d0",
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "ok"}],
+                    }
+                ],
+            },
+        )
+
+    def vault_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "fresh-access",
+                "refresh_token": "fresh-refresh",
+                "id_token": None,
+            },
+        )
+
+    vault = AuthVault(path=auth_path, transport=httpx.MockTransport(vault_handler))
+    backend = CodexAuthVaultBackend(
+        id="vault-a",
+        vault=vault,
+        advertised_models=frozenset({"model-a0d0"}),
+        transport=httpx.MockTransport(upstream_handler),
+    )
+    try:
+        result = await backend.chat_completions(
+            {"model": "model-a0d0", "messages": [{"role": "user", "content": "hi"}]}
+        )
+        assert "choices" in result
+        # First call used the stale token; second used the fresh one.
+        assert upstream_calls[0] == "Bearer stale-access"
+        assert upstream_calls[1] == "Bearer fresh-access"
     finally:
         await backend.aclose()
 

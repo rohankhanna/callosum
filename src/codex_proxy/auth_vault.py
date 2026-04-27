@@ -60,7 +60,7 @@ class AuthVault:
         self._refresh_url = refresh_url or os.environ.get(REFRESH_URL_ENV) or DEFAULT_REFRESH_URL
         self._client_id = client_id or os.environ.get(REFRESH_CLIENT_ID_ENV) or DEFAULT_CLIENT_ID
         self._lock = asyncio.Lock()
-        self._cached = _read_tokens_from_disk(path)
+        self._cached, self._cached_mtime = _read_tokens_with_mtime(path)
 
     @property
     def path(self) -> Path:
@@ -70,9 +70,27 @@ class AuthVault:
         """Return cached tokens without refreshing or reading disk."""
         return self._cached
 
+    def _reload_if_changed_on_disk(self) -> None:
+        """If auth.json's mtime is newer than what we last read, refresh the
+        cache from disk. Lets operator vault rotations (codex login, file copy)
+        propagate to a running proxy without a restart.
+        """
+        try:
+            current_mtime = self._path.stat().st_mtime
+        except OSError:
+            return
+        if self._cached_mtime is None or current_mtime > self._cached_mtime:
+            tokens, mtime = _read_tokens_with_mtime(self._path)
+            if tokens is not None:
+                self._cached = tokens
+                self._cached_mtime = mtime
+
     async def current(self, *, now: float | None = None) -> AuthTokens:
         """Return tokens, refreshing if close to expiry."""
-        tokens = self._cached or _read_tokens_from_disk(self._path)
+        self._reload_if_changed_on_disk()
+        tokens = self._cached
+        if tokens is None:
+            tokens, self._cached_mtime = _read_tokens_with_mtime(self._path)
         if tokens is None:
             raise BackendError(
                 classification="auth_invalid",
@@ -86,7 +104,10 @@ class AuthVault:
         return tokens
 
     async def force_refresh(self) -> AuthTokens:
-        tokens = self._cached or _read_tokens_from_disk(self._path)
+        self._reload_if_changed_on_disk()
+        tokens = self._cached
+        if tokens is None:
+            tokens, self._cached_mtime = _read_tokens_with_mtime(self._path)
         if tokens is None:
             raise BackendError(
                 classification="auth_invalid",
@@ -103,6 +124,10 @@ class AuthVault:
             refreshed = await self._request_refresh(tokens.refresh_token)
             _write_tokens_to_disk(self._path, refreshed)
             self._cached = refreshed
+            try:
+                self._cached_mtime = self._path.stat().st_mtime
+            except OSError:
+                self._cached_mtime = None
             return refreshed
 
     async def _request_refresh(self, refresh_token: str) -> AuthTokens:
@@ -176,6 +201,17 @@ def _should_refresh(tokens: AuthTokens, now: float) -> bool:
     if tokens.access_token_exp is None:
         return False
     return tokens.access_token_exp - now <= REFRESH_SAFETY_WINDOW_S
+
+
+def _read_tokens_with_mtime(path: Path) -> tuple[AuthTokens | None, float | None]:
+    """Read tokens AND capture mtime atomically — caller uses mtime to decide
+    whether the cache needs refresh on subsequent calls.
+    """
+    try:
+        mtime: float | None = path.stat().st_mtime
+    except OSError:
+        mtime = None
+    return _read_tokens_from_disk(path), mtime
 
 
 def _read_tokens_from_disk(path: Path) -> AuthTokens | None:

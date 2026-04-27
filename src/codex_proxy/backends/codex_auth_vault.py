@@ -138,55 +138,76 @@ class CodexAuthVaultBackend:
         self, body: dict[str, Any], handle: CallHandle | None = None
     ) -> dict[str, Any]:
         # Body is already in Responses-API shape; forward verbatim.
-        tokens = await self._vault.current()
-        headers = self._build_headers(tokens.access_token, tokens.account_id)
+        # Try once; on upstream 401 (server-side token revocation, not
+        # JWT-exp expiry), force-refresh and retry once with new tokens.
         if handle is not None:
             handle.quota_before = self._last_quota
-        try:
-            response = await self._client.post(
-                f"{self._base_url}/responses",
-                json=body,
-                headers=headers,
+        for attempt in (1, 2):
+            tokens = (
+                await self._vault.current() if attempt == 1 else await self._vault.force_refresh()
             )
-        except httpx.HTTPError as exc:
-            raise BackendError(classification="transient", message=str(exc)) from exc
-        self._apply_response_to_handle(response.headers, response.status_code, handle)
-        if response.status_code >= 400:
-            err = error_from_response(response)
-            self._apply_error_to_usage(err)
-            raise err
-        return cast(dict[str, Any], response.json())
+            headers = self._build_headers(tokens.access_token, tokens.account_id)
+            try:
+                response = await self._client.post(
+                    f"{self._base_url}/responses",
+                    json=body,
+                    headers=headers,
+                )
+            except httpx.HTTPError as exc:
+                raise BackendError(classification="transient", message=str(exc)) from exc
+            if attempt == 1 and response.status_code == 401:
+                # Don't apply this response to the handle/quota — it's a
+                # transient artifact of stale credentials, not the call result.
+                continue
+            self._apply_response_to_handle(response.headers, response.status_code, handle)
+            if response.status_code >= 400:
+                err = error_from_response(response)
+                self._apply_error_to_usage(err)
+                raise err
+            return cast(dict[str, Any], response.json())
+        # Unreachable: loop either returns or raises on attempt 2.
+        raise BackendError(classification="auth_invalid", message="auth retry exhausted")
 
     async def responses_stream(
         self, body: dict[str, Any], handle: CallHandle | None = None
     ) -> AsyncIterator[bytes]:
-        tokens = await self._vault.current()
-        headers = self._build_headers(
-            tokens.access_token, tokens.account_id, accept_event_stream=True
-        )
         if handle is not None:
             handle.quota_before = self._last_quota
-        try:
-            stream_ctx = self._client.stream(
-                "POST",
-                f"{self._base_url}/responses",
-                json=body,
-                headers=headers,
+        # Open the stream; on upstream 401 in the response headers, close and
+        # restart with refreshed tokens. We can only retry before any chunk
+        # has been yielded — once streaming starts, we're committed.
+        for attempt in (1, 2):
+            tokens = (
+                await self._vault.current() if attempt == 1 else await self._vault.force_refresh()
             )
-            async with stream_ctx as response:
-                self._apply_response_to_handle(response.headers, response.status_code, handle)
-                if response.status_code >= 400:
-                    await response.aread()
-                    err = error_from_response(response)
-                    self._apply_error_to_usage(err)
-                    raise err
-                collector = ResponsesStreamCollector(response.aiter_bytes())
-                async for chunk in collector.iter_through():
-                    yield chunk
-                if handle is not None:
-                    handle.stream_summary = collector.summary
-        except httpx.HTTPError as exc:
-            raise BackendError(classification="transient", message=str(exc)) from exc
+            headers = self._build_headers(
+                tokens.access_token, tokens.account_id, accept_event_stream=True
+            )
+            try:
+                stream_ctx = self._client.stream(
+                    "POST",
+                    f"{self._base_url}/responses",
+                    json=body,
+                    headers=headers,
+                )
+                async with stream_ctx as response:
+                    if attempt == 1 and response.status_code == 401:
+                        await response.aread()
+                        continue  # retry with refresh
+                    self._apply_response_to_handle(response.headers, response.status_code, handle)
+                    if response.status_code >= 400:
+                        await response.aread()
+                        err = error_from_response(response)
+                        self._apply_error_to_usage(err)
+                        raise err
+                    collector = ResponsesStreamCollector(response.aiter_bytes())
+                    async for chunk in collector.iter_through():
+                        yield chunk
+                    if handle is not None:
+                        handle.stream_summary = collector.summary
+                    return
+            except httpx.HTTPError as exc:
+                raise BackendError(classification="transient", message=str(exc)) from exc
 
     async def aclose(self) -> None:
         if self._owns_client:

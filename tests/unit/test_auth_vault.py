@@ -159,6 +159,40 @@ async def test_force_refresh_rotates_tokens_on_disk(tmp_path: Path) -> None:
         await vault.aclose()
 
 
+async def test_current_reloads_when_disk_mtime_changes(tmp_path: Path) -> None:
+    """Operator vault rotation (codex login + cp into vault, file copy, etc.)
+    bumps auth.json mtime. Vault must reload from disk on next call without
+    requiring a process restart.
+    """
+    path = tmp_path / "auth.json"
+    _write_auth_json(path, access_token="cached-1", refresh_token="cached-1")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no network expected; this test exercises disk reload only")
+
+    vault = AuthVault(path=path, transport=httpx.MockTransport(handler))
+    try:
+        # First call returns the original tokens.
+        first = await vault.current(now=0.0)
+        assert first.access_token == "cached-1"
+
+        # Operator rewrites auth.json with new tokens. Bump mtime explicitly so
+        # the test isn't sensitive to filesystem mtime granularity.
+        _write_auth_json(path, access_token="rotated-2", refresh_token="rotated-2")
+        st = path.stat()
+        import os
+
+        os.utime(path, (st.st_atime, st.st_mtime + 1.0))
+
+        # Next call should return the rotated tokens — no force_refresh, no
+        # network — purely a cache reload triggered by mtime change.
+        second = await vault.current(now=0.0)
+        assert second.access_token == "rotated-2"
+        assert second.refresh_token == "rotated-2"
+    finally:
+        await vault.aclose()
+
+
 async def test_account_id_extracted_from_id_token_when_absent_from_tokens_block(
     tmp_path: Path,
 ) -> None:
