@@ -21,6 +21,8 @@ into Responses-API shape.
 from __future__ import annotations
 
 import json
+import math
+import re
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -63,26 +65,9 @@ _BLOCKED_PROVIDER_PREFIXES: frozenset[str] = frozenset(
     }
 )
 
-# Heuristic ranking for "least drama on a codebase." Higher score = preferred.
-# Patterns are case-insensitive substrings on the normalized model id, where
-# normalization collapses runs of `-`/`.`/`_` so version-formatting variations
-# all match the same family pattern.
-_CODE_FRIENDLY_PATTERNS: tuple[tuple[str, int], ...] = (
-    ("llama33", 100),
-    ("llama31405b", 95),
-    ("llama3170b", 90),
-    ("mistrallarge", 85),
-    ("gemma2", 75),
-    ("hermes", 70),
-    ("llama318b", 60),
-    ("mistralnemo", 55),
-)
-
-
-def _normalize_model_id(model_id: str) -> str:
-    """Strip dashes/dots/underscores so version-formatting variations all match
-    the same family pattern."""
-    return "".join(c for c in model_id.lower() if c.isalnum())
+# Code-keyword detection — model ids/names containing these substrings get
+# a "this is a code-tuned model" bonus. Generic, applies to any provider.
+_CODE_KEYWORDS: tuple[str, ...] = ("coder", "-code-", " code ", "starcoder", "codellama")
 
 
 @dataclass(frozen=True, slots=True)
@@ -316,7 +301,7 @@ class OpenRouterFreeBackend:
         return candidates[0]
 
 
-def _parse_model_entry(entry: Any) -> FreeModel | None:
+def _parse_model_entry(entry: Any, *, now_ts: float | None = None) -> FreeModel | None:
     if not isinstance(entry, dict):
         return None
     model_id = entry.get("id")
@@ -330,7 +315,7 @@ def _parse_model_entry(entry: Any) -> FreeModel | None:
     context_length = _coerce_int(entry.get("context_length"), default=4096)
     supports_tools = _supports_tools(entry)
     supports_vision = _supports_vision(entry)
-    score = _code_score(model_id)
+    score = _score_model(entry, now_ts=now_ts if now_ts is not None else time.time())
     return FreeModel(
         id=model_id,
         context_length=context_length,
@@ -398,13 +383,82 @@ def _coerce_int(v: Any, *, default: int) -> int:
         return default
 
 
-def _code_score(model_id: str) -> int:
-    normalized = _normalize_model_id(model_id)
+def _score_model(entry: dict[str, Any], *, now_ts: float) -> int:
+    """Score a catalog entry by features extracted from its metadata, NOT by
+    matching specific model family names. New families released to the free
+    tier get scored on their own merits the moment they appear in the catalog.
+
+    Components (all derived from per-entry data, never from a hardcoded family
+    list except the generic "code"-keyword bonus):
+
+    - Context length: log-scale bonus (more context → bigger window for
+      reading codebases).
+    - Parameter count parsed from the model id (e.g. `model-a0c2` → 70B):
+      log-scale, bigger = better with diminishing returns.
+    - Instruct-tuned bonus: presence of `architecture.instruct_type` indicates
+      the model is chat/instruction-tuned, not a base model. Base models are
+      poor for code workflows.
+    - Tool support: presence of `tools` / `tool_choice` in
+      `supported_parameters` (matters for agentic workflows).
+    - Recency: newer `created` timestamp → higher score, decaying over months.
+    - Generic code-keyword bonus: model id/name contains `coder`/`code`/etc.
+    """
     score = 0
-    for pattern, points in _CODE_FRIENDLY_PATTERNS:
-        if pattern in normalized:
-            score = max(score, points)
+
+    # Context length, log-scale, capped at +40.
+    ctx = _coerce_int(entry.get("context_length"), default=4096)
+    if ctx > 4096:
+        score += min(40, max(0, int(math.log2(ctx / 4096) * 10)))
+
+    # Parameter count, log-scale, capped at +40.
+    param_count_b = _parse_param_count_billions(str(entry.get("id", "")))
+    if param_count_b > 0:
+        # log2(70B) ≈ 6.13, *5 = ~30; log2(405B) ≈ 8.66, *5 = ~43 → capped at 40.
+        score += min(40, max(0, int(math.log2(param_count_b) * 5)))
+
+    # Instruct-tuned bonus.
+    arch = entry.get("architecture")
+    if isinstance(arch, dict) and arch.get("instruct_type"):
+        score += 20
+
+    # Tool support.
+    sup = entry.get("supported_parameters")
+    if isinstance(sup, list) and any(s in sup for s in ("tools", "tool_choice")):
+        score += 20
+
+    # Recency: 30 points if released in the last 30 days, decaying linearly to
+    # 0 at 360 days. Older models still useful but not preferred.
+    created = entry.get("created")
+    if isinstance(created, (int, float)) and created > 0:
+        days_old = max(0.0, (now_ts - float(created)) / 86400.0)
+        score += max(0, 30 - int(days_old / 12))
+
+    # Generic code-keyword bonus (substring match on id and name).
+    name_lower = (str(entry.get("id", "")) + " " + str(entry.get("name", ""))).lower()
+    if any(kw in name_lower for kw in _CODE_KEYWORDS):
+        score += 30
+
     return score
+
+
+_PARAM_COUNT_RE = re.compile(r"(?<![a-z0-9])(\d+(?:\.\d+)?)\s*b\b", re.IGNORECASE)
+
+
+def _parse_param_count_billions(model_id: str) -> float:
+    """Extract parameter count in billions from a model id, e.g.
+    `meta-model-a0g1/model-a0a5:free` → 70.0,
+    `mistralai/mistral-7b-instruct:free`     → 7.0,
+    `nousresearch/hermes-3:free`             → 0.0 (no clear count).
+    """
+    matches = _PARAM_COUNT_RE.findall(model_id)
+    if not matches:
+        return 0.0
+    # If multiple matches (e.g. "model-a0c2" has both "3" not matched and
+    # "70" matched), take the largest — biggest plausible param count.
+    try:
+        return max(float(m) for m in matches)
+    except ValueError:
+        return 0.0
 
 
 def _approx_token_budget(body: dict[str, Any]) -> int:

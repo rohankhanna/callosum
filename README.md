@@ -660,14 +660,23 @@ What you get:
 - It also "shadow-advertises" every Codex model name from your `[[backends]]` config, so a request asking for `model-a0e7` still routes when Codex is exhausted — the OpenRouter backend internally substitutes the best free model that matches the request's needs (context length, tool support, code-friendliness).
 - For `/v1/responses` requests, the OpenRouter backend translates to `/v1/chat/completions` on the way out and back, since OpenRouter doesn't natively support the Responses API.
 
-**Per-request model selection** scores candidates by:
+**Per-request model selection** scores candidates dynamically from each catalog entry's metadata — no hardcoded family list. New free-tier models get scored on their own merits the moment they appear in OpenRouter's catalog.
 
-1. Tool-call support (required if the request body has `tools` set).
+Required filters:
+
+1. Tool-call support — required if the request body has `tools` set.
 2. Context length ≥ approximate input token budget.
-3. Code-friendliness heuristic (higher score for `model-a0g1-3.3`, `model-a0g1-3.1-405b`, `mistral-large`, `model-a0d5-2`, `hermes` family names — the patterns that tend to least-drama existing codebases).
-4. Larger context length wins ties.
 
-**Provider exclusion**: Chinese-origin cloud providers are filtered out of the catalog at parse time — Qwen, DeepSeek, Yi (01.AI), ChatGLM/GLM (Zhipu), InternLM, Doubao (ByteDance), Hunyuan (Tencent), MiniMax, Stepfun, Moonshot, Baichuan. This is operator preference for cloud-routed models; if a separate local-models backend ships later, it can apply different rules. See `_BLOCKED_PROVIDER_PREFIXES` in `src/codex_proxy/backends/openrouter_free.py`.
+Score components (all derived from per-entry features, applied to whatever's in the catalog right now):
+
+- **Context length** (log-scale, capped at +40): bigger context = more room for codebase reading.
+- **Parameter count** parsed from the model id, e.g. `model-a0c2` → 70B (log-scale, capped at +40): bigger model with diminishing returns.
+- **Instruct-tuned bonus** (+20): presence of `architecture.instruct_type` indicates chat/instruction-tuning, not a base model.
+- **Tool support** (+20): `tools` or `tool_choice` in `supported_parameters`.
+- **Recency** (up to +30): newer `created` timestamp wins, decaying linearly to 0 over ~360 days.
+- **Code-keyword bonus** (+30): generic substring match for `coder`, `code`, `starcoder`, `codellama` in id or display name — applies to any provider, not a specific list.
+
+**Provider exclusion**: Chinese-origin cloud providers are filtered out of the catalog at parse time — Qwen, DeepSeek, Yi (01.AI), ChatGLM/GLM (Zhipu), InternLM, Doubao (ByteDance), Hunyuan (Tencent), MiniMax, Stepfun, Moonshot, Baichuan. Operator preference for cloud-routed models; if a separate local-models backend ships later, it can apply different rules. See `_BLOCKED_PROVIDER_PREFIXES` in `src/codex_proxy/backends/openrouter_free.py`.
 
 The chosen model id appears in the response and in the usage log's `model` column, so you can see exactly what was used for each call. If you don't like the choice, set a more specific model in your client (the OpenRouter id, e.g. `model-a0g3/model-a0f3-coder-32b-instruct:free`); the proxy will pass it through unchanged.
 

@@ -9,9 +9,11 @@ import pytest
 from codex_proxy.backends.openrouter_free import (
     OpenRouterFreeBackend,
     _approx_token_budget,
-    _code_score,
     _is_blocked_provider,
     _is_free,
+    _parse_model_entry,
+    _parse_param_count_billions,
+    _score_model,
 )
 from codex_proxy.errors import BackendError
 
@@ -54,11 +56,83 @@ def test_is_free_false_when_either_nonzero() -> None:
     assert _is_free(None) is False
 
 
-def test_code_score_picks_highest_matching_pattern() -> None:
-    assert _code_score("meta-model-a0g1/model-a0a5:free") >= 100
-    assert _code_score("meta-model-a0g1/model-a0g1-3.1-405b-instruct:free") >= 95
-    assert _code_score("nousresearch/hermes-3-model-a0g1-3.1-70b:free") >= 70
-    assert _code_score("totally-unknown/random:free") == 0
+def test_param_count_parses_from_model_id() -> None:
+    assert _parse_param_count_billions("meta-model-a0g1/model-a0a5:free") == 70.0
+    assert _parse_param_count_billions("meta-model-a0g1/model-a0g1-3.1-405b-instruct:free") == 405.0
+    assert _parse_param_count_billions("mistralai/mistral-7b-instruct:free") == 7.0
+    # No clear billion-suffix → 0.0.
+    assert _parse_param_count_billions("nousresearch/hermes-3:free") == 0.0
+    assert _parse_param_count_billions("totally-unknown/random:free") == 0.0
+
+
+def test_score_model_rewards_size_and_recency() -> None:
+    """A bigger, newer, instruct-tuned model with tools must out-score a
+    smaller, older, base-only model — without naming any specific family.
+    """
+    big_new = {
+        "id": "some-org/megamodel-405b-instruct:free",
+        "context_length": 131_072,
+        "architecture": {"instruct_type": "chatml"},
+        "supported_parameters": ["tools", "tool_choice", "max_tokens"],
+        "created": 1_777_000_000,  # very recent
+    }
+    small_old = {
+        "id": "other-org/tinymodel-7b:free",
+        "context_length": 4096,
+        "architecture": {},
+        "supported_parameters": ["max_tokens"],
+        "created": 1_700_000_000,  # ~9 months earlier
+    }
+    now = 1_777_500_000
+    assert _score_model(big_new, now_ts=now) > _score_model(small_old, now_ts=now)
+
+
+def test_score_model_includes_code_keyword_bonus() -> None:
+    """A generic code-keyword bonus applies to ANY family — no provider list."""
+    coder = {
+        "id": "newprovider/some-coder-30b:free",
+        "context_length": 32_000,
+        "architecture": {"instruct_type": "x"},
+        "supported_parameters": ["tools"],
+    }
+    same_size_no_coder = {
+        "id": "newprovider/some-30b:free",
+        "context_length": 32_000,
+        "architecture": {"instruct_type": "x"},
+        "supported_parameters": ["tools"],
+    }
+    assert _score_model(coder, now_ts=0) > _score_model(same_size_no_coder, now_ts=0)
+
+
+def test_parse_model_entry_filters_blocked_provider() -> None:
+    qwen_entry = {
+        "id": "model-a0g3/model-a0f3-coder-32b:free",
+        "context_length": 128_000,
+        "pricing": {"prompt": "0", "completion": "0"},
+        "supported_parameters": ["tools"],
+    }
+    assert _parse_model_entry(qwen_entry) is None
+
+
+def test_parse_model_entry_unknown_brand_new_family_still_scores() -> None:
+    """Whole point of dynamic scoring: a brand-new model family that didn't
+    exist when this code was written should score competitively if its
+    metadata is good — without anyone editing a hardcoded family list.
+    """
+    new_entry = {
+        "id": "totally-new-org/zenith-100b-instruct:free",
+        "name": "Zenith 100B Instruct",
+        "context_length": 200_000,
+        "pricing": {"prompt": "0", "completion": "0"},
+        "architecture": {"instruct_type": "chatml"},
+        "supported_parameters": ["tools", "tool_choice"],
+        "created": 1_777_000_000,
+    }
+    parsed = _parse_model_entry(new_entry, now_ts=1_777_500_000)
+    assert parsed is not None
+    # Score should be substantial: big context (40), big params (~33),
+    # instruct (20), tools (20), recent (~30) → north of 100.
+    assert parsed.code_score > 100
 
 
 def test_blocked_providers_filtered_from_catalog() -> None:
