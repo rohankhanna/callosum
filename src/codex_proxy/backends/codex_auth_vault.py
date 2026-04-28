@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -23,6 +24,12 @@ RESPONSES_BETA_HEADER_VALUE = "responses=v1"
 # lineup changes monthly (and trending toward weekly per operator), so an
 # hourly refresh keeps us current without hammering the upstream.
 DEFAULT_MODELS_REFRESH_S = 3600.0
+
+# The /backend-api/codex/models endpoint requires a `client_version` query
+# parameter or it 400s. Value mimics the codex CLI's format. The upstream
+# doesn't appear to validate the exact value, just that one is present —
+# a recognizable codex-cli version keeps the request unambiguous.
+MODELS_CLIENT_VERSION_PARAM = "0.122.0"
 
 
 class CodexAuthVaultBackend:
@@ -111,11 +118,25 @@ class CodexAuthVaultBackend:
         try:
             response = await self._client.get(
                 f"{self._base_url}/models",
+                params={"client_version": MODELS_CLIENT_VERSION_PARAM},
                 headers=self._build_headers(tokens.access_token, tokens.account_id),
             )
         except httpx.HTTPError:
             return
         if response.status_code != 200:
+            # Log the upstream's complaint so future operators can debug
+            # without instrumenting the code. Best-effort still: don't raise.
+            detail = ""
+            try:
+                detail = response.text[:200]
+            except Exception:
+                detail = "(no body)"
+            logging.getLogger("codex_proxy.backend").warning(
+                "models discovery failed for backend %r: HTTP %d %s",
+                self.id,
+                response.status_code,
+                detail,
+            )
             return
         try:
             payload = response.json()
