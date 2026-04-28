@@ -69,6 +69,7 @@ def main() -> None:
             auth_service=auth_service,
             auto_router_config=cfg.auto_router,
             startup_smoke_test=cfg.server.startup_smoke_test,
+            smoke_test_interval_seconds=cfg.server.smoke_test_interval_seconds,
         ),
         host=host,
         port=port,

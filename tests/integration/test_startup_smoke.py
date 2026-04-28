@@ -75,3 +75,70 @@ def test_startup_smoke_test_no_backends_is_silent(caplog: pytest.LogCaptureFixtu
         [r.getMessage() for r in caplog.records if r.name == "codex_proxy.startup"],
     )
     assert msgs == [], f"empty backend list should not trigger smoke test, got: {msgs}"
+
+
+# --------- periodic re-runs --------------------------------------------------
+
+
+import asyncio  # noqa: E402
+
+from codex_proxy.app import _PeriodicSmokeTester  # noqa: E402
+
+
+async def test_periodic_smoke_tester_fires_after_interval(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Wait for one tick, confirm a 'periodic smoke test cycle' message lands
+    in the log, then stop cleanly.
+    """
+    caplog.set_level(logging.INFO, logger="codex_proxy.startup")
+    tester = _PeriodicSmokeTester(backends=[_backend(id="alpha")], interval_s=1)
+    tester.start()
+    try:
+        # Wait long enough for at least one tick to fire and log.
+        for _ in range(40):
+            await asyncio.sleep(0.1)
+            if any(
+                "periodic smoke test cycle" in r.getMessage()
+                for r in caplog.records
+                if r.name == "codex_proxy.startup"
+            ):
+                break
+        msgs = [r.getMessage() for r in caplog.records if r.name == "codex_proxy.startup"]
+        assert any("periodic smoke test cycle" in m for m in msgs), (
+            f"expected a periodic cycle log within 4s, got: {msgs}"
+        )
+    finally:
+        await tester.stop()
+
+
+async def test_periodic_smoke_tester_disabled_when_interval_zero(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """interval_s=0 means start() is a no-op; no background task is spawned."""
+    caplog.set_level(logging.INFO, logger="codex_proxy.startup")
+    tester = _PeriodicSmokeTester(backends=[_backend(id="alpha")], interval_s=0)
+    tester.start()
+    try:
+        await asyncio.sleep(0.2)  # give it a chance to misbehave
+        msgs = [r.getMessage() for r in caplog.records if r.name == "codex_proxy.startup"]
+        assert not any("periodic smoke test cycle" in m for m in msgs), (
+            f"expected no cycles when disabled, got: {msgs}"
+        )
+        assert not tester.enabled
+    finally:
+        await tester.stop()
+
+
+async def test_periodic_smoke_tester_stops_cleanly_mid_wait(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A long interval should still let stop() return promptly — the tester's
+    sleep is interruptible by the stop event, not a fixed-duration sleep.
+    """
+    caplog.set_level(logging.INFO, logger="codex_proxy.startup")
+    tester = _PeriodicSmokeTester(backends=[_backend(id="alpha")], interval_s=3600)
+    tester.start()
+    await asyncio.sleep(0.1)  # let the task park on the wait
+    # If stop() blocks for the full 3600s, this test would time out.
+    await asyncio.wait_for(tester.stop(), timeout=2.0)

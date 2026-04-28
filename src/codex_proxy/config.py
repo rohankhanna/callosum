@@ -31,6 +31,13 @@ class ServerConfig(BaseModel):
     # out via failed user requests later. Each probe burns a few hundred
     # tokens of quota — disable if you restart often.
     startup_smoke_test: bool = True
+    # In addition to the startup pass, re-run the smoke test on this interval
+    # so operators see live backend state without restarting (e.g. when a
+    # weekly window resets or auth gets refreshed externally). Set to 0 to
+    # disable the periodic re-run; the startup pass still happens. Default
+    # 3600 (1h) — matches the model-list refresh cadence and keeps quota cost
+    # bounded.
+    smoke_test_interval_seconds: int = 3600
 
 
 class StateConfig(BaseModel):

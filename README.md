@@ -445,12 +445,16 @@ host = "127.0.0.1"
 port = 8765
 client_auth_token_env  = "CODEX_PROXY_CLIENT_TOKEN"   # optional
 control_auth_token_env = "CODEX_PROXY_CONTROL_TOKEN"  # optional
+startup_smoke_test = true                              # optional, default true
+smoke_test_interval_seconds = 3600                     # optional, default 3600 (1h)
 ```
 
 - `host` — bind address. Default `127.0.0.1`. Do not expose on `0.0.0.0` unless you understand the threat model.
 - `port` — TCP port. Default `8765`.
 - `client_auth_token_env` — if set, `/v1/*` requires `Authorization: Bearer <value of this env var>`. Ignored when `[auth]` is also set (the multi-tenant flow is the more flexible replacement).
 - `control_auth_token_env` — if set, `/status` and `/control/*` require the same.
+- `startup_smoke_test` — when true (default), the proxy probes each non-cooldown backend with one minimal upstream call at launch and logs OK/SKIPPED/FAILED so the operator sees auth and quota state immediately. Each probe burns a few hundred tokens of quota.
+- `smoke_test_interval_seconds` — when > 0 (default 3600), the smoke test re-runs on this interval so the operator sees live state changes (weekly resets, auth refreshes, model catalog churn) without restarting the proxy. Set to 0 to disable the periodic re-run; the startup pass still happens.
 
 ### `[state]`
 

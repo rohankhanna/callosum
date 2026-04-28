@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -71,6 +73,7 @@ def create_app(
     auth_service: AuthService | None = None,
     auto_router_config: AutoRouterConfig | None = None,
     startup_smoke_test: bool = False,
+    smoke_test_interval_seconds: int = 0,
 ) -> FastAPI:
     backends_list: list[Backend] = list(backends)
     pin_state = PinState()
@@ -113,6 +116,10 @@ def create_app(
         backends=backends_list,
         dispatch=_synthetic_dispatch,
     )
+    smoke_tester = _PeriodicSmokeTester(
+        backends=backends_list,
+        interval_s=smoke_test_interval_seconds,
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -130,9 +137,11 @@ def create_app(
         if startup_smoke_test and backends_list:
             await _run_startup_smoke_test(backends_list)
         topper.start()
+        smoke_tester.start()
         try:
             yield
         finally:
+            await smoke_tester.stop()
             await topper.stop()
             for backend in backends_list:
                 await backend.aclose()
@@ -862,8 +871,12 @@ def _path_requires_api_key(path: str) -> bool:
     return path.startswith("/v1/") or path.startswith("/diagnose/")
 
 
-# Tiny prompt the diagnostic uses. Kept short to limit quota burn.
+# Tiny prompt + instructions the diagnostic uses. Kept short to limit quota
+# burn. The Codex Responses API requires `instructions` to be present and
+# non-empty; an absent or empty value gets rejected with "Instructions are
+# required" upstream.
 _DIAGNOSE_PROMPT = "say only: ok"
+_DIAGNOSE_INSTRUCTIONS = "You are a smoke-test probe. Reply minimally."
 
 
 async def _diagnose_backend(backend: Backend) -> dict[str, Any]:
@@ -903,6 +916,7 @@ async def _diagnose_backend(backend: Backend) -> dict[str, Any]:
     handle = CallHandle()
     body = {
         "model": model,
+        "instructions": _DIAGNOSE_INSTRUCTIONS,
         "input": [
             {
                 "type": "message",
@@ -928,6 +942,58 @@ async def _diagnose_backend(backend: Backend) -> dict[str, Any]:
             "model": model,
         }
     return _evaluate_diagnostic(backend.id, handle, model, kind=backend.kind)
+
+
+class _PeriodicSmokeTester:
+    """Background asyncio task that re-runs the smoke test on a fixed interval
+    so operators see live backend state (weekly resets, auth refreshes, model
+    catalog churn) without restarting the proxy.
+
+    The startup pass runs synchronously in `lifespan` before connections are
+    accepted, so the operator sees current state immediately on launch. This
+    class only handles the recurring follow-up ticks. interval_s=0 disables.
+    """
+
+    def __init__(self, *, backends: Sequence[Backend], interval_s: int) -> None:
+        self._backends = list(backends)
+        self._interval_s = interval_s
+        self._task: asyncio.Task[None] | None = None
+        self._stop = asyncio.Event()
+
+    @property
+    def enabled(self) -> bool:
+        return self._interval_s > 0 and bool(self._backends)
+
+    def start(self) -> None:
+        if not self.enabled:
+            return
+        if self._task is not None:
+            return
+        self._task = asyncio.create_task(self._run(), name="periodic-smoke-test")
+
+    async def stop(self) -> None:
+        self._stop.set()
+        if self._task is not None:
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
+            self._task = None
+
+    async def _run(self) -> None:
+        while not self._stop.is_set():
+            # Sleep BEFORE the first periodic tick. The startup pass already
+            # ran synchronously; the first re-run should land an interval later.
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=self._interval_s)
+            except TimeoutError:
+                pass
+            else:
+                # Stop event fired during the wait → exit cleanly.
+                return
+            try:
+                logger.info("periodic smoke test cycle")
+                await _run_startup_smoke_test(self._backends)
+            except Exception:
+                logger.exception("periodic smoke test cycle failed")
 
 
 async def _run_startup_smoke_test(backends_list: Sequence[Backend]) -> None:
