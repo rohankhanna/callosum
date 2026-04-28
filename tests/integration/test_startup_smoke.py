@@ -52,6 +52,9 @@ def test_startup_smoke_test_runs_on_each_backend(caplog: pytest.LogCaptureFixtur
 
 
 def test_startup_smoke_test_can_be_disabled(caplog: pytest.LogCaptureFixture) -> None:
+    """When the smoke test is disabled, no smoke-test lines appear (the
+    'loaded N backend(s)' roster warning is unrelated and may still fire).
+    """
     caplog.set_level(logging.INFO, logger="codex_proxy.startup")
     backend = _backend(id="alpha")
     app = create_app(backends=[backend], startup_smoke_test=False)
@@ -60,10 +63,16 @@ def test_startup_smoke_test_can_be_disabled(caplog: pytest.LogCaptureFixture) ->
         pass
 
     msgs = [r.getMessage() for r in caplog.records if r.name == "codex_proxy.startup"]
-    assert msgs == [], f"expected no smoke-test logs when disabled, got: {msgs}"
+    assert not any("startup smoke test" in m or "[alpha]" in m for m in msgs), (
+        f"expected no smoke-test lines when disabled, got: {msgs}"
+    )
 
 
 def test_startup_smoke_test_no_backends_is_silent(caplog: pytest.LogCaptureFixture) -> None:
+    """With zero backends, the smoke test loop must not fire (the roster
+    warning may still log "loaded 0 backend(s): (none)" — that's intentional
+    and orthogonal).
+    """
     caplog.set_level(logging.INFO, logger="codex_proxy.startup")
     app = create_app(backends=[], startup_smoke_test=True)
 
@@ -74,7 +83,9 @@ def test_startup_smoke_test_no_backends_is_silent(caplog: pytest.LogCaptureFixtu
         list[str],
         [r.getMessage() for r in caplog.records if r.name == "codex_proxy.startup"],
     )
-    assert msgs == [], f"empty backend list should not trigger smoke test, got: {msgs}"
+    assert not any("startup smoke test" in m for m in msgs), (
+        f"empty backend list should not trigger smoke test, got: {msgs}"
+    )
 
 
 # --------- periodic re-runs --------------------------------------------------

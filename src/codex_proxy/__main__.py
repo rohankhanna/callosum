@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 from pathlib import Path
 
@@ -19,6 +20,13 @@ def _default_config_path() -> Path:
 
 
 def main() -> None:
+    # Ensure our `codex_proxy.startup` logger emits INFO + WARNING to stdout.
+    # Without this, the root logger defaults to WARNING and the smoke-test
+    # OK/SKIPPED lines get silently dropped — operator only sees FAILED.
+    logging.getLogger("codex_proxy.startup").setLevel(logging.INFO)
+    if not logging.getLogger().handlers:
+        logging.basicConfig(level=logging.INFO, format="%(levelname)s:  %(message)s")
+
     parser = argparse.ArgumentParser(prog="codex-proxy")
     parser.add_argument("--config", type=Path, default=_default_config_path())
     parser.add_argument("--host", default=None)

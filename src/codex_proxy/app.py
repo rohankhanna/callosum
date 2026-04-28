@@ -123,6 +123,11 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        # Make the loaded-backend roster trivially greppable in the launch log
+        # so operators can see at a glance whether OPENROUTER_API_KEY etc. were
+        # picked up by the process they actually launched.
+        ids = ", ".join(b.id for b in backends_list) if backends_list else "(none)"
+        logger.warning("loaded %d backend(s): %s", len(backends_list), ids)
         # Refresh dynamic model lists for backends that support it BEFORE the
         # smoke test runs — that way the smoke test probes models the upstream
         # actually still serves, not stale TOML names. Best-effort: any
