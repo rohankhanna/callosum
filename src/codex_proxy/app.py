@@ -250,6 +250,49 @@ def create_app(
         all_ok = all(r["ok"] for r in results if not r.get("skipped"))
         return {"ok": all_ok, "backends": results}
 
+    @app.get("/v1/models")
+    async def list_models() -> dict[str, Any]:
+        """OpenAI-compatible models catalog: union of every backend's
+        advertised_models, deduplicated and sorted. Without this endpoint,
+        clients like hermes auto-probe a dozen URL shapes per connection
+        looking for the catalog (causing 404 spam in the proxy log).
+        """
+        # Use the live `advertised_models` property each call so dynamic
+        # discovery and the OpenRouter shadow set are reflected as they
+        # update — never serve a stale snapshot.
+        seen: set[str] = set()
+        for backend in backends_list:
+            for m in backend.advertised_models:
+                seen.add(m)
+        now_ts = int(time.time())
+        return {
+            "object": "list",
+            "data": [
+                {
+                    "id": model_id,
+                    "object": "model",
+                    "created": now_ts,
+                    "owned_by": "codex-proxy",
+                }
+                for model_id in sorted(seen)
+            ],
+        }
+
+    @app.get("/v1/models/{model_id:path}")
+    async def get_model(model_id: str) -> dict[str, Any]:
+        """OpenAI-compatible single-model lookup. Returns 404 when the model
+        isn't advertised by any backend.
+        """
+        for backend in backends_list:
+            if model_id in backend.advertised_models:
+                return {
+                    "id": model_id,
+                    "object": "model",
+                    "created": int(time.time()),
+                    "owned_by": "codex-proxy",
+                }
+        raise HTTPException(status_code=404, detail=f"model {model_id!r} not found")
+
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         return await _dispatch_route(
