@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import uuid
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any, cast
 
 import httpx
@@ -26,10 +28,39 @@ RESPONSES_BETA_HEADER_VALUE = "responses=v1"
 DEFAULT_MODELS_REFRESH_S = 3600.0
 
 # The /backend-api/codex/models endpoint requires a `client_version` query
-# parameter or it 400s. Value mimics the codex CLI's format. The upstream
-# doesn't appear to validate the exact value, just that one is present —
-# a recognizable codex-cli version keeps the request unambiguous.
-MODELS_CLIENT_VERSION_PARAM = "0.122.0"
+# parameter or it 400s. We resolve this dynamically per-call via
+# `_resolve_codex_client_version()` so the param tracks the operator's
+# installed codex CLI without manual edits when codex updates. Hardcoded
+# only as a last-resort fallback when neither env nor the codex version
+# file is available.
+_DEFAULT_CLIENT_VERSION = "0.125.0"
+
+
+def _resolve_codex_client_version() -> str:
+    """Return the value to use for the `client_version` query param.
+
+    Resolution order (first hit wins):
+
+    1. `CODEX_CLIENT_VERSION` env var — operator override / pinning.
+    2. `~/.codex/version.json`'s `latest_version` field — set by the
+       codex CLI's auto-update check, so it tracks the local install.
+    3. `_DEFAULT_CLIENT_VERSION` — known-working fallback.
+
+    Best-effort: any IO/parse error falls through, never raises.
+    """
+    override = os.environ.get("CODEX_CLIENT_VERSION")
+    if override:
+        return override
+    try:
+        path = Path.home() / ".codex" / "version.json"
+        with path.open("r") as f:
+            payload = json.load(f)
+        version = payload.get("latest_version") if isinstance(payload, dict) else None
+        if isinstance(version, str) and version:
+            return version
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+    return _DEFAULT_CLIENT_VERSION
 
 
 class CodexAuthVaultBackend:
@@ -118,7 +149,7 @@ class CodexAuthVaultBackend:
         try:
             response = await self._client.get(
                 f"{self._base_url}/models",
-                params={"client_version": MODELS_CLIENT_VERSION_PARAM},
+                params={"client_version": _resolve_codex_client_version()},
                 headers=self._build_headers(tokens.access_token, tokens.account_id),
             )
         except httpx.HTTPError:
@@ -151,7 +182,27 @@ class CodexAuthVaultBackend:
         return HealthStatus(available=True, reason="ok")
 
     async def usage_snapshot(self) -> UsageSnapshot:
-        return self._usage
+        # Derive `weekly_exhausted` from the most recent upstream quota snapshot
+        # so the selector demotes accounts at/near their weekly cap before
+        # spending another real request finding out via 429. Threshold is 99%
+        # rather than 100% because the upstream's reported percent is integer-
+        # truncated, and any further organic burn while we wait pushes us
+        # over the next request's quota threshold.
+        weekly_exhausted = self._usage.weekly_exhausted
+        if (
+            self._last_quota is not None
+            and self._last_quota.weekly_used_percent is not None
+            and self._last_quota.weekly_used_percent >= 99
+        ):
+            weekly_exhausted = True
+        if weekly_exhausted == self._usage.weekly_exhausted:
+            return self._usage
+        return UsageSnapshot(
+            remaining_fraction=self._usage.remaining_fraction,
+            cooldown_until_ts=self._usage.cooldown_until_ts,
+            weekly_exhausted=weekly_exhausted,
+            probed_at_ts=self._usage.probed_at_ts,
+        )
 
     async def quota_snapshot(self) -> Any:  # CodexQuotaSnapshot | None
         return self._last_quota

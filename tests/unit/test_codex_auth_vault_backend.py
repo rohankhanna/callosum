@@ -7,7 +7,12 @@ import httpx
 import pytest
 
 from codex_proxy.auth_vault import AuthVault
-from codex_proxy.backends.codex_auth_vault import CodexAuthVaultBackend
+from codex_proxy.backends.codex_auth_vault import (
+    _DEFAULT_CLIENT_VERSION,
+    CodexAuthVaultBackend,
+    _resolve_codex_client_version,
+)
+from codex_proxy.codex_quota import CodexQuotaSnapshot
 from codex_proxy.errors import BackendError
 
 
@@ -509,3 +514,123 @@ async def test_refresh_advertised_models_handles_data_shape(tmp_path: Path) -> N
         assert backend.advertised_models == frozenset({"model-a0d8"})
     finally:
         await backend.aclose()
+
+
+# ---------- weekly-exhaustion derivation from quota snapshot ----------------
+
+
+def _make_quota(weekly_used_percent: int | None) -> CodexQuotaSnapshot:
+    """Construct a minimal CodexQuotaSnapshot with the field that drives the
+    weekly-exhausted derivation; other fields are best-effort defaults.
+    """
+    return CodexQuotaSnapshot(
+        plan_type="plus",
+        active_limit="premium",
+        five_hourly_used_percent=10,
+        weekly_used_percent=weekly_used_percent,
+        five_hourly_window_minutes=300,
+        weekly_window_minutes=10080,
+        five_hourly_reset_at=None,
+        weekly_reset_at=None,
+        five_hourly_reset_after_seconds=None,
+        weekly_reset_after_seconds=None,
+        five_hourly_over_weekly_limit_percent=None,
+        credits_balance=None,
+        credits_has_credits=False,
+        credits_unlimited=False,
+        observed_at=0.0,
+    )
+
+
+async def test_usage_snapshot_marks_weekly_exhausted_from_quota(tmp_path: Path) -> None:
+    """When upstream quota reports weekly_used_percent >= 99, usage_snapshot
+    must surface weekly_exhausted=True so the selector demotes this backend
+    before spending another real request to learn it the hard way.
+    """
+    auth_path = tmp_path / "auth.json"
+    _write_auth_json(auth_path)
+    vault = _make_vault(auth_path)
+    backend = CodexAuthVaultBackend(
+        id="vault-a",
+        vault=vault,
+        advertised_models=frozenset({"model-a0e7"}),
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})),
+    )
+    try:
+        # No quota seen yet: weekly_exhausted defaults to False.
+        snap = await backend.usage_snapshot()
+        assert snap.weekly_exhausted is False
+
+        # Simulate a recent upstream call that came back with weekly=99.
+        backend._last_quota = _make_quota(weekly_used_percent=99)  # type: ignore[attr-defined]
+        snap = await backend.usage_snapshot()
+        assert snap.weekly_exhausted is True
+
+        # 100 should also be marked exhausted.
+        backend._last_quota = _make_quota(weekly_used_percent=100)  # type: ignore[attr-defined]
+        snap = await backend.usage_snapshot()
+        assert snap.weekly_exhausted is True
+
+        # Below the threshold: not exhausted.
+        backend._last_quota = _make_quota(weekly_used_percent=85)  # type: ignore[attr-defined]
+        snap = await backend.usage_snapshot()
+        assert snap.weekly_exhausted is False
+
+        # Missing percent value: don't infer either way.
+        backend._last_quota = _make_quota(weekly_used_percent=None)  # type: ignore[attr-defined]
+        snap = await backend.usage_snapshot()
+        assert snap.weekly_exhausted is False
+    finally:
+        await backend.aclose()
+
+
+# ---------- dynamic codex client_version resolution -------------------------
+
+
+def test_client_version_reads_from_codex_version_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When ~/.codex/version.json exists with a `latest_version` string, the
+    helper returns that value (not the hardcoded default).
+    """
+    monkeypatch.delenv("CODEX_CLIENT_VERSION", raising=False)
+    home = tmp_path / "home"
+    (home / ".codex").mkdir(parents=True)
+    (home / ".codex" / "version.json").write_text(
+        json.dumps({"latest_version": "0.999.0", "last_checked_at": "2026-04-29T00:00:00Z"})
+    )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    assert _resolve_codex_client_version() == "0.999.0"
+
+
+def test_client_version_falls_back_when_file_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No ~/.codex/version.json (and no env override) → hardcoded default."""
+    monkeypatch.delenv("CODEX_CLIENT_VERSION", raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    assert _resolve_codex_client_version() == _DEFAULT_CLIENT_VERSION
+
+
+def test_client_version_env_override_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Env var beats both the file and the default — operator can pin."""
+    home = tmp_path / "home"
+    (home / ".codex").mkdir(parents=True)
+    (home / ".codex" / "version.json").write_text(json.dumps({"latest_version": "0.999.0"}))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setenv("CODEX_CLIENT_VERSION", "9.9.9-pinned")
+    assert _resolve_codex_client_version() == "9.9.9-pinned"
+
+
+def test_client_version_falls_back_when_file_malformed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Malformed JSON or missing `latest_version` field → hardcoded default."""
+    monkeypatch.delenv("CODEX_CLIENT_VERSION", raising=False)
+    home = tmp_path / "home"
+    (home / ".codex").mkdir(parents=True)
+    (home / ".codex" / "version.json").write_text("{not valid json")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    assert _resolve_codex_client_version() == _DEFAULT_CLIENT_VERSION
