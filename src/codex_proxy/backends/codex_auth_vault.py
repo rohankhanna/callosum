@@ -19,6 +19,11 @@ from codex_proxy.state import StateStore
 DEFAULT_BASE_URL = "https://chatgpt.com/backend-api/codex"
 RESPONSES_BETA_HEADER_VALUE = "responses=v1"
 
+# How long to keep a fetched model catalog before refreshing. The Codex model
+# lineup changes monthly (and trending toward weekly per operator), so an
+# hourly refresh keeps us current without hammering the upstream.
+DEFAULT_MODELS_REFRESH_S = 3600.0
+
 
 class CodexAuthVaultBackend:
     """Uses an on-disk Codex `auth.json` to hit the ChatGPT backend Responses API.
@@ -41,11 +46,19 @@ class CodexAuthVaultBackend:
         transport: httpx.AsyncBaseTransport | None = None,
         timeout_s: float = 60.0,
         state_store: StateStore | None = None,
+        models_refresh_s: float = DEFAULT_MODELS_REFRESH_S,
     ) -> None:
         if not advertised_models:
             raise ValueError(f"backend {id!r}: advertised_models cannot be empty")
         self.id = id
-        self.advertised_models = advertised_models
+        # `_static_advertised_models` is the operator's TOML override / cold-
+        # start fallback. `_dynamic_advertised_models` is what we last fetched
+        # from upstream's /models endpoint (None until first fetch). The
+        # `advertised_models` property prefers dynamic when available.
+        self._static_advertised_models: frozenset[str] = advertised_models
+        self._dynamic_advertised_models: frozenset[str] | None = None
+        self._models_fetched_at: float = 0.0
+        self._models_refresh_s = models_refresh_s
         self._vault = vault
         self._base_url = base_url.rstrip("/")
         if client is not None:
@@ -68,6 +81,50 @@ class CodexAuthVaultBackend:
         self._last_quota: Any = (
             None  # CodexQuotaSnapshot | None, loose typed to avoid import cycle noise
         )
+
+    @property
+    def advertised_models(self) -> frozenset[str]:
+        """Return the most recently fetched upstream model list, falling back
+        to the operator-provided static set when we haven't fetched yet (cold
+        start) or when the fetch failed.
+        """
+        if self._dynamic_advertised_models is not None:
+            return self._dynamic_advertised_models
+        return self._static_advertised_models
+
+    async def refresh_advertised_models(self, *, now: float | None = None) -> None:
+        """Fetch the upstream model catalog for this account and update the
+        cached set. Best-effort: silently keeps the current set on any error
+        (network down, auth invalid, malformed payload). Skip if the cached
+        copy is younger than `models_refresh_s`.
+        """
+        ts = now if now is not None else time.time()
+        if (
+            self._dynamic_advertised_models is not None
+            and ts - self._models_fetched_at < self._models_refresh_s
+        ):
+            return
+        try:
+            tokens = await self._vault.current()
+        except BackendError:
+            return
+        try:
+            response = await self._client.get(
+                f"{self._base_url}/models",
+                headers=self._build_headers(tokens.access_token, tokens.account_id),
+            )
+        except httpx.HTTPError:
+            return
+        if response.status_code != 200:
+            return
+        try:
+            payload = response.json()
+        except (ValueError, json.JSONDecodeError):
+            return
+        models = _extract_model_slugs(payload)
+        if models:
+            self._dynamic_advertised_models = models
+            self._models_fetched_at = ts
 
     async def health(self) -> HealthStatus:
         return HealthStatus(available=True, reason="ok")
@@ -259,6 +316,33 @@ class CodexAuthVaultBackend:
         )
         if self._state_store is not None:
             self._state_store.save_usage(self.id, self._usage)
+
+
+def _extract_model_slugs(payload: Any) -> frozenset[str]:
+    """Pull model slug strings out of an upstream `/backend-api/codex/models`
+    response. Tolerates both the documented shape {"models": [{"slug": ...}]}
+    and the OpenAI-compatible {"data": [{"id": ...}]} shape, since the
+    upstream surface has shipped both at different times. Returns an empty
+    frozenset on anything malformed — callers treat empty as "fall back to the
+    cold-start static set."
+    """
+    if not isinstance(payload, dict):
+        return frozenset()
+    items: Any = payload.get("models")
+    if not isinstance(items, list):
+        items = payload.get("data")
+    if not isinstance(items, list):
+        return frozenset()
+    slugs: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        slug = item.get("slug")
+        if not isinstance(slug, str) or not slug:
+            slug = item.get("id")
+        if isinstance(slug, str) and slug:
+            slugs.add(slug)
+    return frozenset(slugs)
 
 
 def _require_model(body: dict[str, Any]) -> str:

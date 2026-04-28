@@ -501,11 +501,11 @@ codex_base_url = "https://chatgpt.com/backend-api/codex"   # optional
 
 - `id` — required. Used in `/status`, `/control/pin`, and session bindings.
 - `vault_path` — required. Absolute path to the account's `auth.json` (the format the Codex CLI login flow writes). Must contain a `tokens` object with `access_token` and `refresh_token`; `account_id` and `id_token` are used when present. The file is rewritten in place after each successful OAuth refresh.
-- `models` — required. Advertised model list for this account. The proxy only considers this backend for requests whose `model` is in the list.
+- `models` — required as a **cold-start fallback**. The proxy fetches the live model list for this account from upstream's `/backend-api/codex/models` at startup (and refreshes hourly), and uses *that* dynamic list in preference to whatever's in the TOML. The TOML value is what's served until the first successful upstream refresh — so it must be non-empty, but it doesn't need to be exhaustive or up to date. Codex's lineup changes monthly (and trending toward weekly), so this design means operators don't have to chase it.
 - `type` — optional. Defaults to `"codex_auth_vault"` (the only supported type).
 - `codex_base_url` — optional. Defaults to the ChatGPT backend base.
 
-To rotate across multiple accounts, declare multiple `[[backends]]` entries with different `vault_path`s and the same advertised model list.
+To rotate across multiple accounts, declare multiple `[[backends]]` entries with different `vault_path`s. The `models` cold-start values can be the same across them (or even just `["model-a0e7"]` everywhere) — each backend pulls its actual catalog at startup based on what the account has access to.
 
 ## Endpoints
 

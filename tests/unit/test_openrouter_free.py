@@ -307,6 +307,42 @@ async def test_filters_out_non_tool_supporting_models_when_request_has_tools() -
         await backend.aclose()
 
 
+async def test_advertised_models_accepts_callable_shadow_for_dynamic_propagation() -> None:
+    """When shadow_models is a callable, OpenRouter re-evaluates it on every
+    advertised_models access. This is how dynamic Codex model discovery
+    propagates here without the OpenRouter backend having to know about
+    Codex backends or refresh hooks.
+    """
+    catalog = _catalog_payload(_entry(id="meta-model-a0g1/model-a0a5:free"))
+    live_set = {"model-a0e7"}
+
+    backend = OpenRouterFreeBackend(
+        id="or",
+        api_key="sk-or-test",
+        shadow_models=lambda: frozenset(live_set),
+        transport=httpx.MockTransport(
+            lambda r: (
+                httpx.Response(200, json=catalog)
+                if r.url.path.endswith("/models")
+                else httpx.Response(200, json={})
+            )
+        ),
+    )
+    try:
+        await backend._refresh_catalog_if_stale()
+        assert "model-a0e7" in backend.advertised_models
+        assert "model-a0c3" not in backend.advertised_models
+        # Simulate a sibling Codex backend's refresh adding a new model:
+        live_set.add("model-a0c3")
+        live_set.add("model-a0b3")
+        # OpenRouter's advertised_models reflects the change without restart
+        # or any notification — it called the closure again.
+        assert "model-a0c3" in backend.advertised_models
+        assert "model-a0b3" in backend.advertised_models
+    finally:
+        await backend.aclose()
+
+
 async def test_advertised_models_includes_shadow_set() -> None:
     catalog = _catalog_payload(_entry(id="meta-model-a0g1/model-a0a5:free"))
     backend = OpenRouterFreeBackend(

@@ -366,3 +366,146 @@ async def test_construction_rejects_empty_advertised_models(tmp_path: Path) -> N
             )
     finally:
         await vault.aclose()
+
+
+# ---------- dynamic model discovery -----------------------------------------
+
+
+async def test_refresh_advertised_models_updates_cache_from_200(tmp_path: Path) -> None:
+    """A successful upstream /models response replaces the static set."""
+    auth_path = tmp_path / "auth.json"
+    _write_auth_json(auth_path)
+    vault = _make_vault(auth_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/models")
+        return httpx.Response(
+            200,
+            json={
+                "models": [
+                    {"slug": "model-a0e7", "display_name": "MODEL-A0E7"},
+                    {"slug": "model-a0c3", "display_name": "MODEL-A0G4"},
+                    {"slug": "model-a0b3", "display_name": "Brand New Model"},
+                ]
+            },
+        )
+
+    backend = CodexAuthVaultBackend(
+        id="vault-a",
+        vault=vault,
+        advertised_models=frozenset({"stale-cold-start-model"}),
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        # Before refresh: static fallback is what's advertised.
+        assert backend.advertised_models == frozenset({"stale-cold-start-model"})
+        await backend.refresh_advertised_models()
+        # After refresh: dynamic set replaces static. Includes a model the
+        # operator never wrote into TOML — that's the whole point.
+        assert backend.advertised_models == frozenset(
+            {"model-a0e7", "model-a0c3", "model-a0b3"}
+        )
+    finally:
+        await backend.aclose()
+
+
+async def test_refresh_advertised_models_silently_skips_on_4xx(tmp_path: Path) -> None:
+    """A 4xx from the upstream /models endpoint must NOT raise — backend
+    silently keeps using its static fallback set so startup doesn't crash.
+    """
+    auth_path = tmp_path / "auth.json"
+    _write_auth_json(auth_path)
+    vault = _make_vault(auth_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"error": {"message": "expired"}})
+
+    backend = CodexAuthVaultBackend(
+        id="vault-a",
+        vault=vault,
+        advertised_models=frozenset({"model-a0e7"}),
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        await backend.refresh_advertised_models()  # must not raise
+        # Cache untouched → static fallback still in use.
+        assert backend.advertised_models == frozenset({"model-a0e7"})
+    finally:
+        await backend.aclose()
+
+
+async def test_refresh_advertised_models_silently_skips_on_network_error(
+    tmp_path: Path,
+) -> None:
+    auth_path = tmp_path / "auth.json"
+    _write_auth_json(auth_path)
+    vault = _make_vault(auth_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("network down")
+
+    backend = CodexAuthVaultBackend(
+        id="vault-a",
+        vault=vault,
+        advertised_models=frozenset({"model-a0e7"}),
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        await backend.refresh_advertised_models()  # must not raise
+        assert backend.advertised_models == frozenset({"model-a0e7"})
+    finally:
+        await backend.aclose()
+
+
+async def test_refresh_advertised_models_respects_ttl(tmp_path: Path) -> None:
+    """Successive calls within models_refresh_s should NOT hit upstream
+    again — the cache TTL throttles the refresh rate.
+    """
+    auth_path = tmp_path / "auth.json"
+    _write_auth_json(auth_path)
+    vault = _make_vault(auth_path)
+    call_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        call_count["n"] += 1
+        return httpx.Response(200, json={"models": [{"slug": "model-a0e7"}]})
+
+    backend = CodexAuthVaultBackend(
+        id="vault-a",
+        vault=vault,
+        advertised_models=frozenset({"cold"}),
+        models_refresh_s=3600.0,
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        await backend.refresh_advertised_models(now=1000.0)
+        await backend.refresh_advertised_models(now=1500.0)  # within TTL
+        assert call_count["n"] == 1
+        await backend.refresh_advertised_models(now=1000.0 + 4000.0)  # past TTL
+        assert call_count["n"] == 2
+    finally:
+        await backend.aclose()
+
+
+async def test_refresh_advertised_models_handles_data_shape(tmp_path: Path) -> None:
+    """Tolerate the OpenAI-compatible {"data": [{"id": "..."}]} shape too,
+    since the upstream surface has shipped both at different times.
+    """
+    auth_path = tmp_path / "auth.json"
+    _write_auth_json(auth_path)
+    vault = _make_vault(auth_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"id": "model-a0d8"}]})
+
+    backend = CodexAuthVaultBackend(
+        id="vault-a",
+        vault=vault,
+        advertised_models=frozenset({"cold"}),
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        await backend.refresh_advertised_models()
+        assert backend.advertised_models == frozenset({"model-a0d8"})
+    finally:
+        await backend.aclose()

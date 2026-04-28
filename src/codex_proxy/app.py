@@ -116,6 +116,17 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        # Refresh dynamic model lists for backends that support it BEFORE the
+        # smoke test runs — that way the smoke test probes models the upstream
+        # actually still serves, not stale TOML names. Best-effort: any
+        # backend that fails to refresh just keeps using its cold-start set.
+        for backend in backends_list:
+            refresh = getattr(backend, "refresh_advertised_models", None)
+            if refresh is not None:
+                try:
+                    await refresh()
+                except Exception:
+                    logger.exception("startup model-list refresh failed for %r", backend.id)
         if startup_smoke_test and backends_list:
             await _run_startup_smoke_test(backends_list)
         topper.start()
@@ -1017,14 +1028,14 @@ def _evaluate_codex_diagnostic(backend_id: str, handle: CallHandle, model: str) 
 
 
 def _evaluate_generic_diagnostic(backend_id: str, handle: CallHandle, model: str) -> dict[str, Any]:
-    """For non-Codex backends, the smoke test only verifies the upstream
-    contract minimum: did we get a 2xx and does the stream summary indicate
-    something came back?
+    """For non-Codex backends the contract is much weaker — only verify a 2xx
+    came back. Stream-summary-style checks are Codex-specific (the OpenRouter
+    backend yields synthetic SSE events that don't flow through
+    ResponsesStreamCollector, so requiring stream_summary here would be a
+    false negative).
     """
     http_2xx = handle.upstream_status is not None and 200 <= handle.upstream_status < 300
-    summary = handle.stream_summary
-    saw_completed = summary is not None and summary.completed_response is not None
-    checks = {"http_2xx": http_2xx, "stream_yielded_response": saw_completed}
+    checks = {"http_2xx": http_2xx}
     failed = [name for name, ok in checks.items() if not ok]
     return {
         "id": backend_id,

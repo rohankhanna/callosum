@@ -24,7 +24,7 @@ import json
 import math
 import re
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -98,7 +98,7 @@ class OpenRouterFreeBackend:
         transport: httpx.AsyncBaseTransport | None = None,
         catalog_refresh_s: float = DEFAULT_CATALOG_REFRESH_S,
         timeout_s: float = 60.0,
-        shadow_models: frozenset[str] | None = None,
+        shadow_models: frozenset[str] | Callable[[], frozenset[str]] | None = None,
     ) -> None:
         self.id = id
         self._api_key = api_key
@@ -111,7 +111,14 @@ class OpenRouterFreeBackend:
         # at call time. The selector keeps picking Codex first whenever Codex
         # is viable, because OpenRouter's reported remaining_fraction is the
         # smallest possible (0.001).
-        self._shadow_models = shadow_models if shadow_models is not None else frozenset()
+        #
+        # `shadow_models` can be a frozenset (static, evaluated once) or a
+        # callable returning a frozenset (re-evaluated on every advertised_models
+        # access). The callable form is what __main__.py passes so that
+        # dynamic Codex model discovery propagates here without restart.
+        self._shadow_models: frozenset[str] | Callable[[], frozenset[str]] = (
+            shadow_models if shadow_models is not None else frozenset()
+        )
         if client is not None:
             self._client = client
             self._owns_client = False
@@ -134,9 +141,12 @@ class OpenRouterFreeBackend:
     @property
     def advertised_models(self) -> frozenset[str]:
         """Union of (free catalog ids) ∪ (shadow_models, e.g. Codex names) ∪
-        the virtual selector "auto-fallback".
+        the virtual selector "auto-fallback". When shadow_models is a callable,
+        it's invoked on every access so dynamic upstream catalog updates from
+        sibling backends propagate immediately.
         """
-        return frozenset(self._shadow_models | {m.id for m in self._catalog} | {"auto-fallback"})
+        shadow = self._shadow_models() if callable(self._shadow_models) else self._shadow_models
+        return frozenset(shadow | {m.id for m in self._catalog} | {"auto-fallback"})
 
     async def health(self) -> HealthStatus:
         return HealthStatus(available=True, reason="ok")
