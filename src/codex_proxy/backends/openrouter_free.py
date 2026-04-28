@@ -47,12 +47,16 @@ DEFAULT_CATALOG_REFRESH_S = 3600.0
 _BLOCKED_PROVIDER_PREFIXES: frozenset[str] = frozenset(
     {
         "model-a0g3",  # Alibaba
+        "alibaba",
         "model-a0e2",  # DeepSeek
         "01-ai",  # 01.AI (Yi)
         "baichuan-inc",
+        "baidu",  # Baidu (Ernie/Qianfan)
         "thudm",  # Tsinghua/Zhipu (ChatGLM, GLM)
         "zhipu",
         "zhipuai",
+        "z-ai",  # Zhipu's brand on OpenRouter (GLM-4.5 etc.)
+        "zai",
         "internlm",
         "shanghai-ai-laboratory",
         "bytedance",  # Doubao
@@ -62,6 +66,9 @@ _BLOCKED_PROVIDER_PREFIXES: frozenset[str] = frozenset(
         "moonshot",  # Kimi
         "moonshotai",
         "yi",
+        "inclusionai",  # Inclusion AI (Ling family, Chinese)
+        "inclusion-ai",
+        "01ai",
     }
 )
 

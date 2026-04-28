@@ -142,11 +142,20 @@ def test_blocked_providers_filtered_from_catalog() -> None:
     assert _is_blocked_provider("01-ai/yi-large:free") is True
     assert _is_blocked_provider("thudm/glm-4-9b:free") is True
     assert _is_blocked_provider("bytedance/doubao-pro:free") is True
+    # Newer additions surfaced from the live OpenRouter catalog.
+    assert _is_blocked_provider("baidu/qianfan-ocr-fast:free") is True
+    assert _is_blocked_provider("z-ai/glm-4.5-air:free") is True
+    assert _is_blocked_provider("zai/glm-4-9b:free") is True
+    assert _is_blocked_provider("inclusionai/ling-2.6-flash:free") is True
+    assert _is_blocked_provider("inclusion-ai/ling-2.6-1t:free") is True
+    assert _is_blocked_provider("alibaba/model-a0d4:free") is True
     # Non-Chinese providers must NOT be blocked.
     assert _is_blocked_provider("meta-model-a0g1/model-a0a5:free") is False
     assert _is_blocked_provider("mistralai/mistral-large:free") is False
     assert _is_blocked_provider("google/model-a0d5-2-27b:free") is False
     assert _is_blocked_provider("nousresearch/hermes-3:free") is False
+    assert _is_blocked_provider("nvidia/nemotron-nano-9b-v2:free") is False
+    assert _is_blocked_provider("liquid/lfm-2.5-1.2b-instruct:free") is False
 
 
 async def test_blocked_provider_excluded_from_picker() -> None:
