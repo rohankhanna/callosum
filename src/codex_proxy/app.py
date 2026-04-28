@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from codex_proxy import __version__
@@ -250,16 +250,10 @@ def create_app(
         all_ok = all(r["ok"] for r in results if not r.get("skipped"))
         return {"ok": all_ok, "backends": results}
 
-    @app.get("/v1/models")
-    async def list_models() -> dict[str, Any]:
-        """OpenAI-compatible models catalog: union of every backend's
-        advertised_models, deduplicated and sorted. Without this endpoint,
-        clients like hermes auto-probe a dozen URL shapes per connection
-        looking for the catalog (causing 404 spam in the proxy log).
+    def _live_catalog() -> dict[str, Any]:
+        """OpenAI-compatible model list, recomputed on each call from the
+        union of every backend's live advertised_models.
         """
-        # Use the live `advertised_models` property each call so dynamic
-        # discovery and the OpenRouter shadow set are reflected as they
-        # update — never serve a stale snapshot.
         seen: set[str] = set()
         for backend in backends_list:
             for m in backend.advertised_models:
@@ -277,6 +271,59 @@ def create_app(
                 for model_id in sorted(seen)
             ],
         }
+
+    @app.get("/v1/models")
+    async def list_models_v1() -> dict[str, Any]:
+        """OpenAI-standard catalog endpoint."""
+        return _live_catalog()
+
+    @app.get("/models")
+    async def list_models_root() -> dict[str, Any]:
+        """Some clients probe /models without the /v1 prefix."""
+        return _live_catalog()
+
+    @app.get("/api/v1/models")
+    async def list_models_api_v1() -> dict[str, Any]:
+        """Ollama-style /api/v1/models prefix some clients try."""
+        return _live_catalog()
+
+    @app.get("/api/tags", include_in_schema=False)
+    async def ollama_tags() -> dict[str, Any]:
+        """Ollama compatibility probe. Returning an empty `models: []` is
+        valid Ollama shape and signals "I'm not Ollama" without 404'ing.
+        """
+        return {"models": []}
+
+    @app.get("/version", include_in_schema=False)
+    @app.get("/api/version", include_in_schema=False)
+    async def version_probe() -> dict[str, str]:
+        """Version probe — Ollama, model-a0e0, and others all hit this path."""
+        return {"version": __version__}
+
+    @app.get("/v1/props", include_in_schema=False)
+    @app.get("/props", include_in_schema=False)
+    async def llamacpp_props() -> dict[str, Any]:
+        """model-a0e0 /props probe. Empty dict is a valid response that
+        signals "I don't speak model-a0e0" without 404'ing.
+        """
+        return {}
+
+    @app.get("/", include_in_schema=False)
+    async def root() -> dict[str, str]:
+        """Root probe — common reachability check; surface enough that an
+        operator hitting the proxy in a browser sees something useful.
+        """
+        return {
+            "service": "codex-proxy",
+            "version": __version__,
+            "docs": "/docs",
+            "status": "/status",
+        }
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon() -> Response:
+        """No favicon, but don't 404 — that just clutters the log."""
+        return Response(status_code=204)
 
     @app.get("/v1/models/{model_id:path}")
     async def get_model(model_id: str) -> dict[str, Any]:
