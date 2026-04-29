@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -42,19 +43,33 @@ class ExplorerRouter:
         usage_log_path: Path | None,
         *,
         routing_mode: str = "auto-learning",
+        cells_fn: Callable[[], list[Cell]] | None = None,
     ) -> None:
         self._usage_log_path = usage_log_path
         self._routing_mode = routing_mode
-        self._cells = build_cells()
+        # `cells_fn` is called on every choose() so the cell grid can adapt
+        # to dynamic upstream catalog discovery without restarting the proxy.
+        # Defaults to `build_cells()` (static DEFAULT_MODELS) for backward
+        # compat in tests and cold-start scenarios.
+        self._cells_fn: Callable[[], list[Cell]] = cells_fn or build_cells
 
     @property
     def cells(self) -> list[Cell]:
-        return list(self._cells)
+        """Return the current cell grid. Recomputed on each access via
+        the configured cells_fn — never returns a stale snapshot.
+        """
+        return list(self._cells_fn())
 
     def choose(self) -> RouterDecision:
         """Return the cell to vary into for the next auto-learning request."""
+        cells = self._cells_fn()
+        if not cells:
+            # No cells available (e.g. backends haven't refreshed their
+            # catalogs yet). Caller will see a clear failure rather than
+            # routing to a phantom model.
+            raise RuntimeError("explorer router has no cells; backends not yet ready")
         coverage = (
-            coverage_from_db(self._usage_log_path, self._cells, routing_mode=self._routing_mode)
+            coverage_from_db(self._usage_log_path, cells, routing_mode=self._routing_mode)
             if self._usage_log_path is not None
             else None
         )
@@ -62,10 +77,10 @@ class ExplorerRouter:
             # No usage log configured — can't observe coverage. Default to the
             # first cell so behavior is deterministic in tests.
             return RouterDecision(
-                cell=self._cells[0],
+                cell=cells[0],
                 reason="no usage_log configured; defaulting to first cell",
             )
-        chosen = coverage.least_sampled(self._cells)
+        chosen = coverage.least_sampled(cells)
         return RouterDecision(
             cell=chosen,
             reason=f"round-robin: {coverage.counts[chosen]} samples (min)",

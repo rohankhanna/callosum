@@ -22,7 +22,7 @@ from codex_proxy.auth import (
 )
 from codex_proxy.auth_db import ApiKey, Session
 from codex_proxy.backend import Backend, CallHandle
-from codex_proxy.cell_grid import VIRTUAL_MODELS
+from codex_proxy.cell_grid import VIRTUAL_MODELS, Cell, build_cells, live_completion_models
 from codex_proxy.config import AutoRouterConfig
 from codex_proxy.errors import RETRYABLE, BackendError, ErrorClass
 from codex_proxy.router import ExploiterRouter, ExplorerRouter
@@ -78,10 +78,41 @@ def create_app(
     backends_list: list[Backend] = list(backends)
     pin_state = PinState()
     session_registry = sessions if sessions is not None else SessionRegistry()
-    explorer = ExplorerRouter(usage_log_path=usage_log.path if usage_log is not None else None)
+
+    def _live_cells() -> list[Cell]:
+        """Build the auto-learning cell grid from the union of every Codex
+        backend's CURRENT advertised_models (excluding OpenRouter's shadow
+        set since OpenRouter doesn't participate in the cost-model corpus).
+
+        Filters to chat-completion-shaped ids only (skips codex-auto-review,
+        embeddings, audio, etc.) and orders strongest-model-first so any
+        ties in coverage round-robin break in favor of the more useful cell.
+
+        Recomputed on every router decision — when CodexAuthVaultBackend's
+        hourly catalog refresh discovers a new model, the cell grid follows
+        without a proxy restart. When a model is retired upstream, it drops
+        out of the grid the next time the router consults it.
+        """
+        pool: set[str] = set()
+        for b in backends_list:
+            if b.kind != "codex_auth_vault":
+                continue
+            pool.update(b.advertised_models)
+        models = live_completion_models(frozenset(pool))
+        if not models:
+            # Cold start — backends haven't populated catalogs yet, fall
+            # back to the static defaults so the router can still operate.
+            return build_cells()
+        return build_cells(models=models)
+
+    explorer = ExplorerRouter(
+        usage_log_path=usage_log.path if usage_log is not None else None,
+        cells_fn=_live_cells,
+    )
     synthetic_explorer = ExplorerRouter(
         usage_log_path=usage_log.path if usage_log is not None else None,
         routing_mode="auto-learning-synthetic",
+        cells_fn=_live_cells,
     )
     exploiter = ExploiterRouter(usage_log_path=usage_log.path if usage_log is not None else None)
 

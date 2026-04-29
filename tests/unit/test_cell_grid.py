@@ -10,6 +10,9 @@ from codex_proxy.cell_grid import (
     CellCoverage,
     build_cells,
     coverage_from_db,
+    is_completion_model,
+    live_completion_models,
+    model_strength_key,
 )
 
 
@@ -90,3 +93,80 @@ def test_coverage_only_counts_auto_learning_successes(tmp_path: Path) -> None:
     # Cells not appearing in the data are zero, not missing.
     assert cov.counts[Cell(model="model-a0e6", reasoning_effort="medium")] == 0
     assert cov.total_samples() == 5
+
+
+# ---------- completion-model filter + strength ordering ---------------------
+
+
+def test_is_completion_model_accepts_chat_targets() -> None:
+    assert is_completion_model("model-a0e7") is True
+    assert is_completion_model("model-a0c3") is True
+    assert is_completion_model("model-a0b8") is True
+    assert is_completion_model("model-a0e6") is True
+
+
+def test_is_completion_model_rejects_special_purpose() -> None:
+    # codex-auto-review is the canonical reason this filter exists.
+    assert is_completion_model("codex-auto-review") is False
+    assert is_completion_model("text-embedding-3-small") is False
+    assert is_completion_model("model-a0a7") is False
+    assert is_completion_model("not-a-model") is False
+    assert is_completion_model("") is False
+
+
+def test_model_strength_key_orders_strongest_first() -> None:
+    """Lower key = stronger. Higher major.minor wins; among same version,
+    full > codex > mini.
+    """
+    models = [
+        "model-a0e6",
+        "model-a0e7",
+        "model-a0c3",
+        "model-a0b8",
+        "model-a0b9",
+        "codex-auto-review",  # non-completion, should sort to end
+    ]
+    sorted_models = sorted(models, key=model_strength_key)
+    assert sorted_models[0] == "model-a0e7"  # strongest
+    assert sorted_models[1] == "model-a0b9"  # same version, full > codex
+    assert sorted_models[2] == "model-a0c3"  # same version, mini last
+    assert sorted_models[3] == "model-a0b8"
+    assert sorted_models[4] == "model-a0e6"
+    assert sorted_models[-1] == "codex-auto-review"  # non-completion at end
+
+
+def test_live_completion_models_filters_and_sorts() -> None:
+    """Given a backend's advertised_models pool, return only completion-style
+    ids in strongest-first order.
+    """
+    pool = frozenset(
+        {
+            "model-a0e7",
+            "model-a0e6",
+            "model-a0c3",
+            "model-a0b8",
+            "codex-auto-review",  # excluded — not a completion target
+            "model-a0b9",
+        }
+    )
+    result = live_completion_models(pool)
+    assert "codex-auto-review" not in result
+    assert result == ("model-a0e7", "model-a0b9", "model-a0c3", "model-a0b8", "model-a0e6")
+
+
+def test_live_completion_models_handles_empty_input() -> None:
+    assert live_completion_models(frozenset()) == ()
+    # Pool with only non-completion models also returns empty.
+    assert live_completion_models(frozenset({"codex-auto-review", "embedding-x"})) == ()
+
+
+def test_live_completion_models_handles_unknown_future_models() -> None:
+    """Brand-new gpt-X.Y models from a future Codex release should slot in
+    correctly without code edits — that's the whole point of the dynamic grid.
+    """
+    pool = frozenset({"model-a0e7", "model-a0f1", "model-a0c5"})
+    result = live_completion_models(pool)
+    # model-a0f1 is the strongest (highest major.minor); model-a0e7 sorts after.
+    assert result[0] == "model-a0f1"
+    assert result[1] == "model-a0c5"
+    assert result[2] == "model-a0e7"

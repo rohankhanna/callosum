@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
 REASONING_LEVELS: tuple[str, ...] = ("low", "medium", "high", "xhigh")
 
-# Models a Codex Plus account typically has access to. `codex-auto-review` is
-# excluded — it is a special-purpose review model and not a normal completion
-# target. The grid is intentionally small (16 cells); larger model lists for
-# Pro accounts or future Codex releases can be passed in at construction time.
+# Cold-start fallback model list. Used by `build_cells()` when no explicit
+# models are passed. With dynamic model discovery (CodexAuthVaultBackend
+# fetches /backend-api/codex/models per account), the runtime cell grid
+# is built from `live_completion_models()` instead — DEFAULT_MODELS is
+# only a safety net for tests and cold-start paths where no live data
+# is available yet.
 DEFAULT_MODELS: tuple[str, ...] = (
     "model-a0e7",
     "model-a0c3",
@@ -62,6 +65,51 @@ def build_cells(
     reasoning-major, so iteration is predictable for round-robin scheduling.
     """
     return [Cell(model=m, reasoning_effort=r) for m in models for r in reasoning_levels]
+
+
+# `gpt-X.Y` with optional `-mini` or `-codex` suffix. Excludes review models,
+# embeddings, audio, etc. — anything that doesn't match this shape is treated
+# as a special-purpose model and kept out of the auto-learning cell grid.
+_COMPLETION_MODEL_RE = re.compile(r"^gpt-(\d+)\.(\d+)(?:-(mini|codex))?$")
+
+# Suffix ordering: full-model variants beat code-tuned beat smaller. Lower
+# rank wins (used as a tiebreak after major.minor desc).
+_SUFFIX_RANK: dict[str, int] = {"": 0, "codex": 1, "mini": 2}
+
+
+def is_completion_model(slug: str) -> bool:
+    """True if the model id looks like a general-purpose chat completion
+    target (gpt-X.Y, gpt-X.Y-mini, gpt-X.Y-codex). Excludes codex-auto-review,
+    embeddings, audio models, and anything else that doesn't match.
+    """
+    return _COMPLETION_MODEL_RE.match(slug) is not None
+
+
+def model_strength_key(slug: str) -> tuple[int, int, int, int, str]:
+    """Return a sort key where SMALLER tuple == STRONGER model.
+
+    Use as `sorted(models, key=model_strength_key)` to get strongest first.
+    Non-completion models sort to the end via a leading sentinel.
+    """
+    m = _COMPLETION_MODEL_RE.match(slug)
+    if m is None:
+        # Non-completion: push to the end of any sort. Tiebreak by name so
+        # the ordering is deterministic.
+        return (1, 0, 0, 0, slug)
+    major = int(m.group(1))
+    minor = int(m.group(2))
+    suffix = m.group(3) or ""
+    return (0, -major, -minor, _SUFFIX_RANK.get(suffix, 9), slug)
+
+
+def live_completion_models(model_pool: frozenset[str] | set[str]) -> tuple[str, ...]:
+    """Filter a backend's advertised_models to just completion-style ids and
+    return them sorted strongest-first. Used by app.py to build a cell grid
+    that adapts to the current upstream catalog without a hardcoded list.
+    """
+    completion_only = [m for m in model_pool if is_completion_model(m)]
+    completion_only.sort(key=model_strength_key)
+    return tuple(completion_only)
 
 
 def coverage_from_db(

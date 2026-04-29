@@ -65,3 +65,35 @@ def test_exploiter_raises_not_trained() -> None:
     router = ExploiterRouter(usage_log_path=None)
     with pytest.raises(ExploiterRouter.NotTrained):
         router.choose()
+
+
+def test_explorer_uses_dynamic_cells_fn(tmp_path: Path) -> None:
+    """ExplorerRouter calls cells_fn on every choose() so the grid can
+    adapt to upstream catalog changes mid-process.
+    """
+    # Initial pool: only model-a0e7 × reasoning levels.
+    pool: list[str] = ["model-a0e7"]
+
+    def cells_fn() -> list[Cell]:
+        from codex_proxy.cell_grid import REASONING_LEVELS
+
+        return [Cell(model=m, reasoning_effort=r) for m in pool for r in REASONING_LEVELS]
+
+    router = ExplorerRouter(usage_log_path=None, cells_fn=cells_fn)
+    decision = router.choose()
+    assert decision.cell.model == "model-a0e7"
+
+    # Simulate catalog refresh adding a new model — without restart, the next
+    # choose() sees it.
+    pool.insert(0, "model-a0f1")
+    decision = router.choose()
+    assert decision.cell.model == "model-a0f1"
+
+
+def test_explorer_raises_when_cells_fn_returns_empty(tmp_path: Path) -> None:
+    """No cells available (e.g. backends not yet ready) → clear failure
+    rather than routing to a phantom model.
+    """
+    router = ExplorerRouter(usage_log_path=None, cells_fn=lambda: [])
+    with pytest.raises(RuntimeError, match="no cells"):
+        router.choose()
