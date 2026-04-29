@@ -14,6 +14,7 @@ from codex_proxy.synthetic import (
     organic_burn_rate_pct_per_hour,
     synthetic_body,
     weekly_exhaustion_fire_count,
+    weekly_exhaustion_fire_rate,
 )
 
 
@@ -104,6 +105,11 @@ def test_synthetic_body_uses_virtual_model_name() -> None:
     assert body["model"] == "auto-learning-synthetic"
     assert body["stream"] is False
     assert isinstance(body["input"], list) and len(body["input"]) == 1
+    # Codex's Responses API requires non-empty `instructions` AND `store: False`
+    # — omitting either yields a 400.
+    assert isinstance(body.get("instructions"), str)
+    assert body["instructions"]  # non-empty
+    assert body.get("store") is False
 
 
 # --------- cold-start fallback ---------------------------------------------
@@ -310,3 +316,125 @@ def test_organic_burn_rate_sums_deltas_for_backend(tmp_path: Path) -> None:
     _make_burn_log(db, rows)
     rate = organic_burn_rate_pct_per_hour(db, backend_id="alpha", now_ts=now_ts, window_hours=100.0)
     assert rate == 0.03
+
+
+# --------- leaky-bucket fractional rate (the bug fix) -----------------------
+
+
+def test_weekly_exhaust_returns_fractional_rate_under_one() -> None:
+    """The bug: previous integer-rounded version returned 0 forever when the
+    target rate was < 0.5 per tick. The float rate version returns the
+    actual fractional rate so the worker can accumulate it.
+    """
+    cfg = AutoRouterConfig(
+        pct_per_synthetic_estimate=0.1,
+        prediction_safety_margin=1.0,
+        max_synthetics_per_tick=10,
+        synthetic_check_interval_seconds=300,
+        weekly_target_pct=95.0,
+    )
+    now = 1_700_000_000.0
+    # Mirrors the real-world bug: 25% used, ~140h remaining, low organic.
+    rate = weekly_exhaustion_fire_rate(
+        _quota(weekly_used=25, weekly_reset_at=int(now + 140 * 3600)),
+        organic_rate_pct_per_hour=0.14,
+        now_ts=now,
+        cfg=cfg,
+    )
+    # Should be between 0 and 1 — exactly the case the int rounding broke.
+    assert 0.0 < rate < 1.0
+    # Old fire_count would have rounded this to 0; new code should preserve it.
+    assert (
+        weekly_exhaustion_fire_count(
+            _quota(weekly_used=25, weekly_reset_at=int(now + 140 * 3600)),
+            organic_rate_pct_per_hour=0.14,
+            now_ts=now,
+            cfg=cfg,
+        )
+        == 0
+    )  # backward-compat int rounding still returns 0
+    # But the rate itself is non-zero — that's what the worker accumulator
+    # uses to actually fire over many ticks.
+    assert rate > 0.1
+
+
+async def test_synthetic_topper_accumulator_fires_over_many_ticks() -> None:
+    """Functional check: with a fractional rate of ~0.3 per tick, after 10
+    ticks the worker should have fired ~3 synthetics — not 0 (the old bug)
+    and not 10 (over-firing).
+    """
+    import asyncio
+
+    from codex_proxy.backend import HealthStatus, UsageSnapshot
+    from codex_proxy.codex_quota import CodexQuotaSnapshot
+    from codex_proxy.fakes import InMemoryFakeBackend
+    from codex_proxy.synthetic import SyntheticTopper
+
+    # Backend with a quota state that produces ~0.28 rate per tick (matches
+    # the live state where the bug manifested).
+    backend = InMemoryFakeBackend(
+        id="alpha",
+        advertised_models=frozenset({"model-a0e7"}),
+        health=HealthStatus(available=True, reason="ok"),
+        usage=UsageSnapshot(
+            remaining_fraction=0.7,
+            cooldown_until_ts=None,
+            weekly_exhausted=False,
+            probed_at_ts=0.0,
+        ),
+    )
+    fake_clock = [1_700_000_000.0]
+    backend._fake_quota = CodexQuotaSnapshot(  # type: ignore[attr-defined]
+        plan_type="plus",
+        active_limit="premium",
+        five_hourly_used_percent=1,
+        weekly_used_percent=25,
+        five_hourly_window_minutes=300,
+        weekly_window_minutes=10080,
+        five_hourly_reset_at=None,
+        weekly_reset_at=int(fake_clock[0] + 140 * 3600),
+        five_hourly_reset_after_seconds=None,
+        weekly_reset_after_seconds=None,
+        five_hourly_over_weekly_limit_percent=None,
+        credits_balance=None,
+        credits_has_credits=False,
+        credits_unlimited=False,
+        observed_at=fake_clock[0],
+    )
+
+    fired_calls: list[str] = []
+
+    async def fake_dispatch(body: dict, backend_id: str) -> None:
+        fired_calls.append(backend_id)
+
+    cfg = AutoRouterConfig(
+        pct_per_synthetic_estimate=0.1,
+        prediction_safety_margin=1.0,
+        max_synthetics_per_tick=10,
+        synthetic_check_interval_seconds=300,
+        weekly_target_pct=95.0,
+    )
+    # Use a tmp_path-like path for the usage_log; doesn't need rows for this
+    # test (organic_rate query handles missing file by returning 0.0).
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as td:
+        log_path = Path(td) / "u.sqlite"
+        topper = SyntheticTopper(
+            cfg=cfg,
+            usage_log_path=log_path,
+            backends=[backend],
+            dispatch=fake_dispatch,
+            clock=lambda: fake_clock[0],
+        )
+        # Run 10 ticks manually (don't start the asyncio loop).
+        for _ in range(10):
+            await topper._tick()
+        # Should have fired some synthetics — strictly between 0 (old bug)
+        # and 10 (over-firing). With rate ~0.28, expect ~2-3 over 10 ticks.
+        assert 1 <= len(fired_calls) <= 5, (
+            f"expected 1-5 synthetics fired across 10 ticks, got {len(fired_calls)}"
+        )
+        await topper.stop()
+    _ = asyncio  # silence unused-import lint

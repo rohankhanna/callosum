@@ -50,12 +50,22 @@ _PROMPT_CORPUS: tuple[str, ...] = (
     "Reply with only the word: ack",
 )
 
+# Codex's Responses API rejects requests without a non-empty `instructions`
+# field (400: "Instructions are required"). Mirrors the constant in app.py
+# used by the smoke test for the same reason.
+_SYNTHETIC_INSTRUCTIONS = "You are a synthetic auto-learning probe. Reply minimally."
+
 
 def synthetic_body() -> dict[str, Any]:
-    """Build a Responses-API request body for one synthetic call."""
+    """Build a Responses-API request body for one synthetic call.
+
+    Both `instructions` (non-empty) and `store: False` are required by the
+    Codex Responses API — omitting either yields a 400 from upstream.
+    """
     prompt = random.choice(_PROMPT_CORPUS)
     return {
         "model": "auto-learning-synthetic",
+        "instructions": _SYNTHETIC_INSTRUCTIONS,
         "input": [
             {
                 "type": "message",
@@ -64,6 +74,7 @@ def synthetic_body() -> dict[str, Any]:
             }
         ],
         "stream": False,
+        "store": False,
     }
 
 
@@ -190,6 +201,54 @@ def organic_burn_rate_pct_per_hour(
     return max(0.0, float(total) / window_hours)
 
 
+def weekly_exhaustion_fire_rate(
+    quota: CodexQuotaSnapshot,
+    *,
+    organic_rate_pct_per_hour: float,
+    now_ts: float,
+    cfg: AutoRouterConfig,
+) -> float:
+    """Raw fractional rate of synthetics to fire on a backend this tick to
+    keep its weekly window on track to land at 100% by reset.
+
+    Returns 0.0 when:
+      - quota snapshot is incomplete (no weekly_used_percent or weekly_reset_at)
+      - account is past `weekly_target_pct` (close enough; stop)
+      - account is past `five_hourly_pause_pct` (rate-limited; pause)
+      - reset is imminent or in the past (let it cycle)
+      - projected human burn alone will exhaust the weekly window
+
+    The worker uses this float rate via a leaky-bucket accumulator so a
+    "0.28 synthetics per tick" target accumulates and fires correctly over
+    many ticks instead of rounding to 0 every time.
+    """
+    if quota.weekly_used_percent is None or quota.weekly_reset_at is None:
+        return 0.0
+    if quota.weekly_used_percent >= cfg.weekly_target_pct:
+        return 0.0
+    if (
+        quota.five_hourly_used_percent is not None
+        and quota.five_hourly_used_percent >= cfg.five_hourly_pause_pct
+    ):
+        return 0.0
+    hours_remaining = max(0.0, (quota.weekly_reset_at - now_ts) / 3600.0)
+    if hours_remaining < 0.1:
+        return 0.0
+    weekly_remaining_pct = float(cfg.weekly_target_pct) - float(quota.weekly_used_percent)
+    if weekly_remaining_pct <= 0:
+        return 0.0
+    projected_organic_pct = (
+        organic_rate_pct_per_hour * hours_remaining * cfg.prediction_safety_margin
+    )
+    burnable_pct = max(0.0, weekly_remaining_pct - projected_organic_pct)
+    if burnable_pct <= 0:
+        return 0.0
+    pct_per_call = max(1e-6, cfg.pct_per_synthetic_estimate)
+    synthetics_total = burnable_pct / pct_per_call
+    tick_hours = max(1, cfg.synthetic_check_interval_seconds) / 3600.0
+    return synthetics_total * tick_hours / hours_remaining
+
+
 def weekly_exhaustion_fire_count(
     quota: CodexQuotaSnapshot,
     *,
@@ -197,42 +256,16 @@ def weekly_exhaustion_fire_count(
     now_ts: float,
     cfg: AutoRouterConfig,
 ) -> int:
-    """How many synthetics to fire on a backend this tick to keep its weekly
-    window on track to land at 100% by reset.
-
-    Returns 0 when:
-      - quota snapshot is incomplete (no weekly_used_percent or weekly_reset_at)
-      - account is past `weekly_target_pct` (close enough; stop)
-      - account is past `five_hourly_pause_pct` (rate-limited; pause)
-      - reset is imminent or in the past (let it cycle)
-      - projected human burn alone will exhaust the weekly window
+    """Integer-rounded count for tests and one-shot callers. The worker uses
+    `weekly_exhaustion_fire_rate` directly so it can pace via accumulator.
     """
-    if quota.weekly_used_percent is None or quota.weekly_reset_at is None:
-        return 0
-    if quota.weekly_used_percent >= cfg.weekly_target_pct:
-        return 0
-    if (
-        quota.five_hourly_used_percent is not None
-        and quota.five_hourly_used_percent >= cfg.five_hourly_pause_pct
-    ):
-        return 0
-    hours_remaining = max(0.0, (quota.weekly_reset_at - now_ts) / 3600.0)
-    if hours_remaining < 0.1:
-        return 0
-    weekly_remaining_pct = float(cfg.weekly_target_pct) - float(quota.weekly_used_percent)
-    if weekly_remaining_pct <= 0:
-        return 0
-    projected_organic_pct = (
-        organic_rate_pct_per_hour * hours_remaining * cfg.prediction_safety_margin
+    rate = weekly_exhaustion_fire_rate(
+        quota,
+        organic_rate_pct_per_hour=organic_rate_pct_per_hour,
+        now_ts=now_ts,
+        cfg=cfg,
     )
-    burnable_pct = max(0.0, weekly_remaining_pct - projected_organic_pct)
-    if burnable_pct <= 0:
-        return 0
-    pct_per_call = max(1e-6, cfg.pct_per_synthetic_estimate)
-    synthetics_total = burnable_pct / pct_per_call
-    tick_hours = max(1, cfg.synthetic_check_interval_seconds) / 3600.0
-    synthetics_this_tick = synthetics_total * tick_hours / hours_remaining
-    n = int(round(synthetics_this_tick))
+    n = int(round(rate))
     return max(0, min(cfg.max_synthetics_per_tick, n))
 
 
@@ -272,6 +305,12 @@ class SyntheticTopper:
         self._clock = clock if clock is not None else _wall_clock
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
+        # Leaky-bucket accumulator per backend: each tick adds the desired
+        # fractional rate; whenever the accumulator crosses 1.0, fire that
+        # many whole synthetics and decrement. This makes a target like
+        # "0.28 synthetics/tick" actually fire 1 synthetic every ~3.5 ticks
+        # instead of rounding to 0 every tick forever.
+        self._fire_accumulator: dict[str, float] = {}
 
     @property
     def enabled(self) -> bool:
@@ -330,12 +369,25 @@ class SyntheticTopper:
                 now_ts=now_ts,
                 window_hours=float(self._cfg.prediction_window_hours),
             )
-            return weekly_exhaustion_fire_count(
+            # Leaky-bucket pacing: add this tick's fractional rate to the
+            # accumulator, fire whatever whole synthetics have accumulated.
+            # This is the fix for the "0.28 → round() → 0 forever" bug that
+            # used to silently disable the controller in low-rate scenarios.
+            rate = weekly_exhaustion_fire_rate(
                 snap,
                 organic_rate_pct_per_hour=organic_rate,
                 now_ts=now_ts,
                 cfg=self._cfg,
             )
+            self._fire_accumulator[backend.id] = self._fire_accumulator.get(backend.id, 0.0) + rate
+            n_whole = int(self._fire_accumulator[backend.id])
+            if n_whole > 0:
+                # Cap at max_per_tick to avoid bursting; remaining stays in
+                # the accumulator and fires next tick.
+                fired = min(n_whole, self._cfg.max_synthetics_per_tick)
+                self._fire_accumulator[backend.id] -= fired
+                return fired
+            return 0
         if self._usage_log_path is None:
             return 0
         counts = daily_counts(self._usage_log_path, now_ts=now_ts, backend_id=backend.id)
