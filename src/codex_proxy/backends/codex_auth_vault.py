@@ -7,7 +7,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import httpx
 
@@ -21,6 +21,12 @@ from codex_proxy.state import StateStore
 
 DEFAULT_BASE_URL = "https://chatgpt.com/backend-api/codex"
 RESPONSES_BETA_HEADER_VALUE = "responses=v1"
+
+# Codex Responses API requires a non-empty `instructions` field. When a
+# client sends a chat-completions body with no system message, we fall
+# back to this short placeholder so the translated /responses request
+# isn't rejected with "Instructions are required".
+_DEFAULT_INSTRUCTIONS = "You are a helpful assistant."
 
 # How long to keep a fetched model catalog before refreshing. The Codex model
 # lineup changes monthly (and trending toward weekly per operator), so an
@@ -266,34 +272,56 @@ class CodexAuthVaultBackend:
     async def responses(
         self, body: dict[str, Any], handle: CallHandle | None = None
     ) -> dict[str, Any]:
-        # Body is already in Responses-API shape; forward verbatim.
-        # Try once; on upstream 401 (server-side token revocation, not
-        # JWT-exp expiry), force-refresh and retry once with new tokens.
+        # Codex Responses API now requires `stream: true` for ALL requests
+        # (returns 400 "Stream must be set to true" otherwise). For callers
+        # that want a non-streaming dict response, we send stream=true to
+        # upstream, collect the SSE via ResponsesStreamCollector, and return
+        # the buffered response.completed payload — invisible to the caller.
         if handle is not None:
             handle.quota_before = self._last_quota
+        streaming_body = {**body, "stream": True}
         for attempt in (1, 2):
             tokens = (
                 await self._vault.current() if attempt == 1 else await self._vault.force_refresh()
             )
-            headers = self._build_headers(tokens.access_token, tokens.account_id)
+            headers = self._build_headers(
+                tokens.access_token, tokens.account_id, accept_event_stream=True
+            )
             try:
-                response = await self._client.post(
+                stream_ctx = self._client.stream(
+                    "POST",
                     f"{self._base_url}/responses",
-                    json=body,
+                    json=streaming_body,
                     headers=headers,
                 )
+                async with stream_ctx as response:
+                    if attempt == 1 and response.status_code == 401:
+                        await response.aread()
+                        continue  # retry with refresh
+                    self._apply_response_to_handle(response.headers, response.status_code, handle)
+                    if response.status_code >= 400:
+                        await response.aread()
+                        err = error_from_response(response)
+                        self._apply_error_to_usage(err)
+                        raise err
+                    collector = ResponsesStreamCollector(response.aiter_bytes())
+                    async for _chunk in collector.iter_through():
+                        pass  # buffer the whole stream
+                    if handle is not None:
+                        handle.stream_summary = collector.summary
+                    completed = (
+                        collector.summary.completed_response
+                        if collector.summary is not None
+                        else None
+                    )
+                    if completed is None:
+                        raise BackendError(
+                            classification="transient",
+                            message="upstream stream ended without response.completed event",
+                        )
+                    return completed
             except httpx.HTTPError as exc:
                 raise BackendError(classification="transient", message=str(exc)) from exc
-            if attempt == 1 and response.status_code == 401:
-                # Don't apply this response to the handle/quota — it's a
-                # transient artifact of stale credentials, not the call result.
-                continue
-            self._apply_response_to_handle(response.headers, response.status_code, handle)
-            if response.status_code >= 400:
-                err = error_from_response(response)
-                self._apply_error_to_usage(err)
-                raise err
-            return cast(dict[str, Any], response.json())
         # Unreachable: loop either returns or raises on attempt 2.
         raise BackendError(classification="auth_invalid", message="auth retry exhausted")
 
@@ -461,9 +489,14 @@ def _chat_to_responses_request(body: dict[str, Any], *, stream: bool) -> dict[st
         "model": body["model"],
         "input": input_items,
         "stream": stream,
+        # Codex Responses API requires both `instructions` (non-empty) and
+        # `store: False` or it returns 400. Forward whatever the caller
+        # provided, then backfill defaults below if absent — clients that
+        # send chat-completions bodies (hermes, codex CLI's translator,
+        # most OAI-compatible tools) typically omit both.
+        "store": False,
     }
-    if instructions is not None:
-        payload["instructions"] = instructions
+    payload["instructions"] = instructions if instructions else _DEFAULT_INSTRUCTIONS
     for key in ("temperature", "top_p", "max_output_tokens", "metadata", "store"):
         if key in body:
             payload[key] = body[key]

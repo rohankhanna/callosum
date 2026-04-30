@@ -41,6 +41,32 @@ def _make_vault(path: Path, *, transport: httpx.MockTransport | None = None) -> 
     return AuthVault(path=path, transport=transport)
 
 
+def _sse_response(
+    response_payload: dict, *, status: int = 200, headers: dict | None = None
+) -> httpx.Response:
+    """Build an SSE response equivalent to a non-streaming JSON 200.
+
+    Codex Responses API now requires `stream: true` always, so the backend
+    sends streaming requests upstream and buffers the resulting SSE into a
+    dict. Test handlers simulate that by returning a `response.created` event
+    followed by a `response.completed` event whose `response` field is the
+    payload the test expects to come back from `backend.responses(...)`.
+    """
+    events = [
+        ("response.created", {"type": "response.created", "id": response_payload.get("id", "r1")}),
+        (
+            "response.completed",
+            {"type": "response.completed", "response": response_payload},
+        ),
+    ]
+    body = "".join(f"event: {n}\ndata: {json.dumps(p)}\n\n" for n, p in events).encode()
+    return httpx.Response(
+        status,
+        content=body,
+        headers={"content-type": "text/event-stream", **(headers or {})},
+    )
+
+
 async def test_chat_completions_translates_and_forwards_to_responses_endpoint(
     tmp_path: Path,
 ) -> None:
@@ -53,9 +79,8 @@ async def test_chat_completions_translates_and_forwards_to_responses_endpoint(
         captured["authorization"] = request.headers.get("Authorization")
         captured["account_id"] = request.headers.get("chatgpt-account-id")
         captured["body"] = json.loads(request.content)
-        return httpx.Response(
-            200,
-            json={
+        return _sse_response(
+            {
                 "id": "resp-1",
                 "model": "model-a0d0",
                 "output": [
@@ -66,7 +91,7 @@ async def test_chat_completions_translates_and_forwards_to_responses_endpoint(
                     }
                 ],
                 "usage": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12},
-            },
+            }
         )
 
     vault = _make_vault(auth_path)
@@ -94,7 +119,10 @@ async def test_chat_completions_translates_and_forwards_to_responses_endpoint(
         assert isinstance(body, dict)
         assert body["model"] == "model-a0d0"
         assert body["instructions"] == "be brief"
-        assert body["stream"] is False
+        # Codex Responses API now requires stream=true ALWAYS — even when the
+        # caller wanted a non-streaming dict response, backend internally
+        # promotes to streaming and collects the SSE.
+        assert body["stream"] is True
         assert body["input"] == [
             {
                 "type": "message",
@@ -106,6 +134,106 @@ async def test_chat_completions_translates_and_forwards_to_responses_endpoint(
         assert result["choices"][0]["message"]["content"] == "hello"
         assert result["usage"]["prompt_tokens"] == 10
         assert result["usage"]["completion_tokens"] == 2
+    finally:
+        await backend.aclose()
+
+
+async def test_chat_translation_defaults_instructions_and_store(tmp_path: Path) -> None:
+    """Codex Responses API rejects requests without `instructions` (non-empty)
+    and `store: False`. When a chat-completions caller (e.g. hermes) sends a
+    body lacking either, the translation must backfill defaults so upstream
+    accepts it.
+    """
+    auth_path = tmp_path / "auth.json"
+    _write_auth_json(auth_path)
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return _sse_response(
+            {
+                "id": "resp-x",
+                "model": "model-a0e7",
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "ok"}],
+                    }
+                ],
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            }
+        )
+
+    vault = _make_vault(auth_path)
+    backend = CodexAuthVaultBackend(
+        id="vault-a",
+        vault=vault,
+        advertised_models=frozenset({"model-a0e7"}),
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        # Chat body with NO system message and NO store field — the two
+        # missing pieces that used to 400 on real hermes traffic.
+        await backend.chat_completions(
+            {
+                "model": "model-a0e7",
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+        )
+        body = captured["body"]
+        assert isinstance(body, dict)
+        assert isinstance(body.get("instructions"), str)
+        assert body["instructions"]  # non-empty fallback
+        assert body.get("store") is False
+        # Stream is forced to true upstream (Codex Responses API requires it).
+        assert body.get("stream") is True
+    finally:
+        await backend.aclose()
+
+
+async def test_chat_translation_preserves_explicit_store(tmp_path: Path) -> None:
+    """If the caller DID provide `store`, don't override it. Backfill is only
+    for the missing-default case.
+    """
+    auth_path = tmp_path / "auth.json"
+    _write_auth_json(auth_path)
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return _sse_response(
+            {
+                "id": "x",
+                "model": "model-a0e7",
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "ok"}],
+                    }
+                ],
+            }
+        )
+
+    vault = _make_vault(auth_path)
+    backend = CodexAuthVaultBackend(
+        id="vault-a",
+        vault=vault,
+        advertised_models=frozenset({"model-a0e7"}),
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        await backend.chat_completions(
+            {
+                "model": "model-a0e7",
+                "messages": [{"role": "user", "content": "hi"}],
+                "store": True,  # explicit; must survive translation unchanged
+            }
+        )
+        body = captured["body"]
+        assert isinstance(body, dict)
+        assert body.get("store") is True
     finally:
         await backend.aclose()
 
@@ -182,9 +310,8 @@ async def test_upstream_401_triggers_force_refresh_and_retries(tmp_path: Path) -
         upstream_calls.append(request.headers.get("Authorization", ""))
         if len(upstream_calls) == 1:
             return httpx.Response(401, json={"error": {"code": "invalid_token"}})
-        return httpx.Response(
-            200,
-            json={
+        return _sse_response(
+            {
                 "id": "resp-ok",
                 "model": "model-a0d0",
                 "output": [
@@ -194,7 +321,7 @@ async def test_upstream_401_triggers_force_refresh_and_retries(tmp_path: Path) -
                         "content": [{"type": "output_text", "text": "ok"}],
                     }
                 ],
-            },
+            }
         )
 
     def vault_handler(request: httpx.Request) -> httpx.Response:
@@ -231,9 +358,8 @@ async def test_chat_completions_stream_emits_valid_sse_chunks(tmp_path: Path) ->
     _write_auth_json(auth_path)
 
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
+        return _sse_response(
+            {
                 "id": "resp-stream",
                 "model": "model-a0d0",
                 "output": [
@@ -243,7 +369,7 @@ async def test_chat_completions_stream_emits_valid_sse_chunks(tmp_path: Path) ->
                         "content": [{"type": "output_text", "text": "streamed"}],
                     }
                 ],
-            },
+            }
         )
 
     vault = _make_vault(auth_path)
@@ -285,7 +411,7 @@ async def test_responses_forwards_body_verbatim_with_vault_headers(tmp_path: Pat
         captured["beta"] = request.headers.get("OpenAI-Beta")
         captured["originator"] = request.headers.get("originator")
         captured["body"] = json.loads(request.content)
-        return httpx.Response(200, json={"id": "resp-xyz", "object": "response"})
+        return _sse_response({"id": "resp-xyz", "object": "response"})
 
     vault = _make_vault(auth_path)
     backend = CodexAuthVaultBackend(
@@ -314,8 +440,13 @@ async def test_responses_forwards_body_verbatim_with_vault_headers(tmp_path: Pat
         assert captured["account_id"] == "acct-codex"
         assert captured["beta"] == "responses=v1"
         assert captured["originator"] == "codex_cli_rs"
-        # Request passes through unchanged — no chat-to-responses translation.
-        assert captured["body"] == request_body
+        # Body forwarded with one mutation: stream is forced to true (Codex
+        # Responses API now requires it). Other fields pass through unchanged.
+        forwarded = captured["body"]
+        assert isinstance(forwarded, dict)
+        assert forwarded["stream"] is True
+        for key, expected in request_body.items():
+            assert forwarded.get(key) == expected
         assert result["id"] == "resp-xyz"
     finally:
         await backend.aclose()
