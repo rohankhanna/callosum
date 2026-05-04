@@ -485,7 +485,15 @@ async def _dispatch_internal(
         body.setdefault("reasoning", {})["effort"] = decision.cell.reasoning_effort
         routing_mode = "auto-learning"
     elif requested_model == "auto-learning-synthetic":
-        decision = synthetic_explorer.choose()
+        # Constrain the cell grid to models the forced backend advertises.
+        # Without this, choose() may pick a model from the union-of-all-backends
+        # that the forced backend doesn't serve, causing _no_viable at dispatch time.
+        allowed: frozenset[str] | None = None
+        if forced_backend_id is not None:
+            fb = next((b for b in backends_list if b.id == forced_backend_id), None)
+            if fb is not None:
+                allowed = frozenset(fb.advertised_models)
+        decision = synthetic_explorer.choose(allowed_models=allowed)
         body["model"] = decision.cell.model
         body.setdefault("reasoning", {})["effort"] = decision.cell.reasoning_effort
         routing_mode = "auto-learning-synthetic"

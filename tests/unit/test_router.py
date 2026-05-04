@@ -97,3 +97,27 @@ def test_explorer_raises_when_cells_fn_returns_empty(tmp_path: Path) -> None:
     router = ExplorerRouter(usage_log_path=None, cells_fn=lambda: [])
     with pytest.raises(RuntimeError, match="no cells"):
         router.choose()
+
+
+def test_explorer_choose_respects_allowed_models(tmp_path: Path) -> None:
+    """choose(allowed_models=...) picks only from cells whose model is allowed."""
+    from codex_proxy.cell_grid import REASONING_LEVELS
+
+    def cells_fn() -> list[Cell]:
+        return [
+            Cell(model=m, reasoning_effort=r)
+            for m in ["model-a0e7", "model-a0c3"]
+            for r in REASONING_LEVELS
+        ]
+
+    router = ExplorerRouter(usage_log_path=None, cells_fn=cells_fn)
+    # Restrict to only model-a0c3 — even though model-a0e7 is in the grid.
+    decision = router.choose(allowed_models=frozenset(["model-a0c3"]))
+    assert decision.cell.model == "model-a0c3"
+
+
+def test_explorer_choose_raises_when_allowed_models_empty(tmp_path: Path) -> None:
+    """allowed_models=frozenset() filters to no cells → clear failure."""
+    router = ExplorerRouter(usage_log_path=None)
+    with pytest.raises(RuntimeError, match="no cells"):
+        router.choose(allowed_models=frozenset())

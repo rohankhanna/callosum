@@ -60,14 +60,25 @@ class ExplorerRouter:
         """
         return list(self._cells_fn())
 
-    def choose(self) -> RouterDecision:
-        """Return the cell to vary into for the next auto-learning request."""
+    def choose(self, *, allowed_models: frozenset[str] | None = None) -> RouterDecision:
+        """Return the cell to vary into for the next auto-learning request.
+
+        When `allowed_models` is provided, only cells whose model is in that
+        set are candidates. Used by the synthetic worker to constrain the
+        explorer to models the forced backend actually advertises.
+        """
         cells = self._cells_fn()
+        if allowed_models is not None:
+            cells = [c for c in cells if c.model in allowed_models]
         if not cells:
             # No cells available (e.g. backends haven't refreshed their
             # catalogs yet). Caller will see a clear failure rather than
             # routing to a phantom model.
-            raise RuntimeError("explorer router has no cells; backends not yet ready")
+            msg = "explorer router has no cells"
+            if allowed_models is not None:
+                msg += f" for models {sorted(allowed_models)}"
+            msg += "; backends not yet ready"
+            raise RuntimeError(msg)
         coverage = (
             coverage_from_db(self._usage_log_path, cells, routing_mode=self._routing_mode)
             if self._usage_log_path is not None
