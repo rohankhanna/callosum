@@ -52,6 +52,10 @@ models = ["model-a0d0"]
     assert bc.type == "codex_auth_vault"
     assert bc.vault_path == vault
     assert bc.models == ["model-a0d0"]
+    # Aggressive exhaustion config backward-compat defaults
+    assert cfg.auto_router.aggressive_exhaustion_pct == 98.0
+    assert cfg.auto_router.aggressive_exhaustion_consecutive_429s == 3
+    assert cfg.auto_router.aggressive_exhaustion_max_per_burst == 50
 
 
 def test_load_config_with_state_dir(tmp_path: Path) -> None:

@@ -8,6 +8,8 @@ from codex_proxy.codex_quota import CodexQuotaSnapshot
 from codex_proxy.config import AutoRouterConfig
 from codex_proxy.synthetic import (
     DailyCounts,
+    _aggressive_synthetic_body,
+    _should_enter_aggressive,
     cold_start_fire_count,
     cold_start_target,
     daily_counts,
@@ -438,3 +440,249 @@ async def test_synthetic_topper_accumulator_fires_over_many_ticks() -> None:
         )
         await topper.stop()
     _ = asyncio  # silence unused-import lint
+
+
+# --------- aggressive exhaustion mode ----------------------------------------
+
+
+def test_should_enter_aggressive_at_threshold() -> None:
+    cfg = AutoRouterConfig(aggressive_exhaustion_pct=98.0)
+    # At threshold
+    assert _should_enter_aggressive(_quota(weekly_used=98), cfg)
+    # Above threshold
+    assert _should_enter_aggressive(_quota(weekly_used=99), cfg)
+    # Below threshold
+    assert not _should_enter_aggressive(_quota(weekly_used=97), cfg)
+    # No snap
+    assert not _should_enter_aggressive(None, cfg)
+    # No weekly percentage
+    assert not _should_enter_aggressive(_quota(weekly_used=None), cfg)
+
+
+def test_aggressive_body_always_valid() -> None:
+    for _ in range(60):
+        body = _aggressive_synthetic_body()
+        assert body["store"] is False
+        assert isinstance(body.get("instructions"), str)
+        assert body["instructions"]  # non-empty
+        assert body["model"] == "auto-learning-synthetic"
+        assert isinstance(body.get("input"), list)
+        assert len(body["input"]) > 0
+
+
+def test_aggressive_body_hits_all_tiers() -> None:
+    small_count = 0
+    medium_count = 0
+    large_count = 0
+
+    for _ in range(200):
+        body = _aggressive_synthetic_body()
+        # Detect tier by input length
+        # Small: single input element, medium: 3 input elements, large: 1 but with very long text
+        input_len = len(body["input"])
+        max_tokens = body.get("max_tokens", 0)
+
+        if input_len > 1:
+            # Multiple messages = medium tier
+            medium_count += 1
+        elif max_tokens > 200:
+            # Single message with high max_tokens = large tier
+            large_count += 1
+        else:
+            # Default small tier
+            small_count += 1
+
+    # All tiers should appear statistically
+    assert small_count > 10, f"expected > 10 small, got {small_count}"
+    assert medium_count > 10, f"expected > 10 medium, got {medium_count}"
+    assert large_count > 10, f"expected > 10 large, got {large_count}"
+
+
+async def test_aggressive_fires_until_consecutive_429s(tmp_path: Path) -> None:
+    from fastapi import HTTPException
+
+    from codex_proxy.backend import HealthStatus, UsageSnapshot
+    from codex_proxy.fakes import InMemoryFakeBackend
+    from codex_proxy.synthetic import SyntheticTopper
+
+    backend = InMemoryFakeBackend(
+        id="alpha",
+        advertised_models=frozenset({"model-a0e7"}),
+        health=HealthStatus(available=True, reason="ok"),
+        usage=UsageSnapshot(
+            remaining_fraction=0.01,
+            cooldown_until_ts=None,
+            weekly_exhausted=True,
+            probed_at_ts=0.0,
+        ),
+    )
+    backend._fake_quota = _quota(weekly_used=99)  # type: ignore[attr-defined]
+
+    dispatch_calls = []
+
+    async def fake_dispatch(body: dict, backend_id: str) -> None:
+        dispatch_calls.append(backend_id)
+        raise HTTPException(status_code=429, detail="rate limited")
+
+    cfg = AutoRouterConfig(
+        aggressive_exhaustion_pct=98.0,
+        aggressive_exhaustion_consecutive_429s=3,
+    )
+
+    log_path = tmp_path / "u.sqlite"
+    topper = SyntheticTopper(
+        cfg=cfg,
+        usage_log_path=log_path,
+        backends=[backend],
+        dispatch=fake_dispatch,
+    )
+
+    await topper._tick()
+    # Should have fired exactly 3 requests (the confirm threshold)
+    assert len(dispatch_calls) == 3
+    # Should exit aggressive mode after confirming
+    assert not topper._in_aggressive_mode.get("alpha", False)
+    await topper.stop()
+
+
+async def test_aggressive_resets_streak_on_success(tmp_path: Path) -> None:
+    from fastapi import HTTPException
+
+    from codex_proxy.backend import HealthStatus, UsageSnapshot
+    from codex_proxy.fakes import InMemoryFakeBackend
+    from codex_proxy.synthetic import SyntheticTopper
+
+    backend = InMemoryFakeBackend(
+        id="alpha",
+        advertised_models=frozenset({"model-a0e7"}),
+        health=HealthStatus(available=True, reason="ok"),
+        usage=UsageSnapshot(
+            remaining_fraction=0.01,
+            cooldown_until_ts=None,
+            weekly_exhausted=True,
+            probed_at_ts=0.0,
+        ),
+    )
+    backend._fake_quota = _quota(weekly_used=99)  # type: ignore[attr-defined]
+
+    call_sequence = ["ok", "ok", "429", "ok"]
+    call_index = [0]
+
+    async def fake_dispatch(body: dict, backend_id: str) -> None:
+        response = call_sequence[call_index[0] % len(call_sequence)]
+        call_index[0] += 1
+        if response == "429":
+            raise HTTPException(status_code=429, detail="rate limited")
+
+    cfg = AutoRouterConfig(
+        aggressive_exhaustion_pct=98.0,
+        aggressive_exhaustion_consecutive_429s=3,
+    )
+
+    log_path = tmp_path / "u.sqlite"
+    topper = SyntheticTopper(
+        cfg=cfg,
+        usage_log_path=log_path,
+        backends=[backend],
+        dispatch=fake_dispatch,
+    )
+
+    await topper._tick()
+    # Should have 4 dispatch calls: ok, ok, 429, ok
+    # After the final ok, streak should be 0
+    assert topper._aggressive_consecutive_429s["alpha"] == 0
+    await topper.stop()
+
+
+async def test_aggressive_falls_back_on_non_429(tmp_path: Path) -> None:
+    from codex_proxy.backend import HealthStatus, UsageSnapshot
+    from codex_proxy.fakes import InMemoryFakeBackend
+    from codex_proxy.synthetic import SyntheticTopper
+
+    backend = InMemoryFakeBackend(
+        id="alpha",
+        advertised_models=frozenset({"model-a0e7"}),
+        health=HealthStatus(available=True, reason="ok"),
+        usage=UsageSnapshot(
+            remaining_fraction=0.01,
+            cooldown_until_ts=None,
+            weekly_exhausted=True,
+            probed_at_ts=0.0,
+        ),
+    )
+    backend._fake_quota = _quota(weekly_used=99)  # type: ignore[attr-defined]
+
+    async def fake_dispatch(body: dict, backend_id: str) -> None:
+        raise RuntimeError("network error")
+
+    cfg = AutoRouterConfig(aggressive_exhaustion_pct=98.0)
+
+    log_path = tmp_path / "u.sqlite"
+    topper = SyntheticTopper(
+        cfg=cfg,
+        usage_log_path=log_path,
+        backends=[backend],
+        dispatch=fake_dispatch,
+    )
+
+    await topper._tick()
+    # Should exit aggressive mode on non-429 error
+    assert not topper._in_aggressive_mode.get("alpha", False)
+    await topper.stop()
+
+
+async def test_normal_pacing_unchanged_below_threshold(tmp_path: Path) -> None:
+    from codex_proxy.backend import HealthStatus, UsageSnapshot
+    from codex_proxy.fakes import InMemoryFakeBackend
+    from codex_proxy.synthetic import SyntheticTopper
+
+    now_ts = 1_700_000_000.0
+
+    backend = InMemoryFakeBackend(
+        id="alpha",
+        advertised_models=frozenset({"model-a0e7"}),
+        health=HealthStatus(available=True, reason="ok"),
+        usage=UsageSnapshot(
+            remaining_fraction=0.5,
+            cooldown_until_ts=None,
+            weekly_exhausted=False,
+            probed_at_ts=0.0,
+        ),
+    )
+    # Provide weekly_reset_at so the pacing controller fires synthetics
+    backend._fake_quota = _quota(  # type: ignore[attr-defined]
+        weekly_used=50, weekly_reset_at=int(now_ts + 86400)
+    )
+
+    dispatch_calls = []
+
+    async def fake_dispatch(body: dict, backend_id: str) -> None:
+        dispatch_calls.append(body)
+
+    cfg = AutoRouterConfig(
+        aggressive_exhaustion_pct=98.0,
+        pct_per_synthetic_estimate=0.1,
+        prediction_safety_margin=1.0,
+        weekly_target_pct=95.0,
+        max_synthetics_per_tick=10,
+        synthetic_check_interval_seconds=300,
+    )
+
+    log_path = tmp_path / "u.sqlite"
+    topper = SyntheticTopper(
+        cfg=cfg,
+        usage_log_path=log_path,
+        backends=[backend],
+        dispatch=fake_dispatch,
+        clock=lambda: now_ts,
+    )
+
+    await topper._tick()
+    # Should not enter aggressive mode
+    assert not topper._in_aggressive_mode.get("alpha", False)
+    # Should use normal pacing (small payloads only)
+    assert len(dispatch_calls) > 0
+    for body in dispatch_calls:
+        # Normal payload has single input element
+        assert len(body["input"]) == 1
+    await topper.stop()

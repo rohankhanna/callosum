@@ -33,9 +33,12 @@ from math import ceil
 from pathlib import Path
 from typing import Any
 
+from fastapi import HTTPException
+
 from codex_proxy.backend import Backend
 from codex_proxy.codex_quota import CodexQuotaSnapshot
 from codex_proxy.config import AutoRouterConfig
+from codex_proxy.errors import BackendError
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +57,76 @@ _PROMPT_CORPUS: tuple[str, ...] = (
 # field (400: "Instructions are required"). Mirrors the constant in app.py
 # used by the smoke test for the same reason.
 _SYNTHETIC_INSTRUCTIONS = "You are a synthetic auto-learning probe. Reply minimally."
+
+# Medium-tier payloads: multi-turn conversations (100-500 tokens)
+_MEDIUM_TEMPLATES: tuple[dict[str, Any], ...] = (
+    {
+        "instructions": _SYNTHETIC_INSTRUCTIONS,
+        "input": [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Explain the difference between TCP and UDP in two sentences."}]},
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "TCP is connection-oriented and guarantees ordered, reliable delivery via acknowledgments and retransmissions. UDP is connectionless and prioritizes low latency over reliability, with no built-in retransmission or ordering."}]},
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Which would you choose for a live video stream and why?"}]},
+        ],
+        "max_tokens": 120,
+    },
+    {
+        "instructions": "You are a concise coding tutor.",
+        "input": [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Write a Python function that reverses a string."}]},
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "def reverse_string(s: str) -> str:\n    return s[::-1]"}]},
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Now handle None input gracefully."}]},
+        ],
+        "max_tokens": 100,
+    },
+    {
+        "instructions": _SYNTHETIC_INSTRUCTIONS,
+        "input": [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "What does the `yield` keyword do in Python?"}]},
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "The `yield` keyword pauses a function and returns a value to the caller, turning the function into a generator that can be resumed on the next call."}]},
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Give a short example showing iteration over a generator."}]},
+        ],
+        "max_tokens": 150,
+    },
+    {
+        "instructions": "You are a helpful assistant. Be concise.",
+        "input": [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "What is the CAP theorem?"}]},
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "The CAP theorem states that a distributed system can guarantee only two of three properties simultaneously: Consistency (all nodes see the same data), Availability (every request gets a response), and Partition tolerance (the system continues operating despite network splits)."}]},
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Which pair do most modern databases choose and why?"}]},
+        ],
+        "max_tokens": 150,
+    },
+    {
+        "instructions": _SYNTHETIC_INSTRUCTIONS,
+        "input": [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "What are the main differences between SQL and NoSQL databases?"}]},
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "SQL databases use structured schemas with ACID transactions, suited for relational data. NoSQL databases offer flexible schemas and horizontal scalability, suited for unstructured or large-scale data, but typically trade ACID guarantees for performance."}]},
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "When would you choose MongoDB over PostgreSQL?"}]},
+        ],
+        "max_tokens": 120,
+    },
+)
+
+_LARGE_INSTRUCTIONS = "You are a document analysis assistant. Answer factually based only on the provided text."
+
+# Large-tier payloads: long documents + analysis (1000-3000 tokens)
+_LARGE_TEMPLATES: tuple[dict[str, Any], ...] = (
+    {
+        "instructions": _LARGE_INSTRUCTIONS,
+        "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "HTTP has evolved significantly across its versions. HTTP/1.1, standardized in 1997, introduced persistent connections via Keep-Alive, chunked transfer encoding, and virtual hosting through the Host header. However, it suffered from head-of-line blocking where a single slow response would delay all subsequent requests on the same connection. Browsers worked around this by opening multiple parallel connections (typically 6 per domain), but this added overhead.\n\nHTTP/2, released in 2015, addressed these limitations with multiplexing — multiple streams over a single TCP connection — eliminating head-of-line blocking at the HTTP layer. It introduced header compression via HPACK, server push (proactively sending resources before the client requests them), and binary framing instead of text. HTTP/2 significantly improved page load times for assets-heavy sites.\n\nHTTP/3 (2022) moved to QUIC, a UDP-based transport built into the protocol itself. QUIC provides independent stream multiplexing so packet loss on one stream doesn't block others, 0-RTT connection resumption for faster reconnects, and built-in encryption. HTTP/3 is particularly beneficial for mobile users and high-latency networks.\n\nQuestion: List the key performance improvement each HTTP version introduced over its predecessor."}]}],
+        "max_tokens": 250,
+    },
+    {
+        "instructions": _LARGE_INSTRUCTIONS,
+        "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "The following is a software architecture document:\n\n## System Overview\nThe Order Processing System (OPS) is a microservices-based platform responsible for handling customer orders from submission through fulfillment. It consists of six core services:\n\n1. **API Gateway** — Entry point for all client requests. Handles authentication, rate limiting, and request routing. Stateless; horizontally scalable.\n2. **Order Service** — Creates and manages order lifecycle (pending → confirmed → shipped → delivered). Persists to PostgreSQL. Emits events to Kafka on state transitions.\n3. **Inventory Service** — Tracks stock levels. Consumes Order Service events to reserve items. Uses Redis for low-latency reads and PostgreSQL for persistence.\n4. **Payment Service** — Integrates with Stripe and PayPal. Synchronous for authorization, async for settlement. Retries with exponential backoff on transient failures.\n5. **Notification Service** — Sends emails and SMS on order events. Consumes from Kafka. At-least-once delivery with idempotency keys.\n6. **Fulfillment Service** — Picks, packs, and ships. Integrates with three 3PL warehouse APIs. Handles partial fulfillment when items are split across warehouses.\n\n## Known Failure Modes\n- Kafka lag spikes during peak hours can delay notifications by up to 10 minutes.\n- Inventory double-reservation bug when two orders for the last item arrive within 50ms of each other (race condition in Inventory Service).\n- Payment Service retries can create duplicate charges when Stripe returns ambiguous responses.\n- Fulfillment Service timeout (30s) on slow 3PL API responses causes order to enter an unknown state.\n\nQuestion: What are the main failure modes described in this document?"}]}],
+        "max_tokens": 300,
+    },
+    {
+        "instructions": _LARGE_INSTRUCTIONS,
+        "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Distributed consensus is the problem of getting multiple nodes to agree on a single value despite failures. The following describes three common approaches:\n\n**Paxos** (Lamport, 1989) is the foundational algorithm. It operates in two phases: Prepare (a proposer asks acceptors to promise not to accept earlier proposals) and Accept (the proposer sends a value, acceptors commit if they haven't promised to a higher proposal number). Paxos guarantees safety (no two nodes decide differently) but is notoriously difficult to implement correctly. Multi-Paxos extends it for a sequence of decisions, forming the basis for many production systems.\n\n**Raft** (Ongaro & Ousterhout, 2014) was designed to be more understandable than Paxos. It decomposes consensus into leader election, log replication, and safety. A leader is elected per term; all writes go through the leader, which replicates them to followers before committing. Raft guarantees that elected leaders always have the most up-to-date log. It's used in etcd, CockroachDB, and TiKV.\n\n**Viewstamped Replication (VR)** (Liskov, 1988) predates Paxos and uses a primary/backup model with view changes for leader election. It's less widely known but influenced many modern designs.\n\nAll three require a quorum (majority) of nodes to be available. With N nodes, they tolerate ⌊(N-1)/2⌋ failures.\n\nQuestion: What is the key design goal that distinguishes Raft from Paxos, and which production systems use Raft?"}]}],
+        "max_tokens": 200,
+    },
+)
 
 
 def synthetic_body() -> dict[str, Any]:
@@ -76,6 +149,35 @@ def synthetic_body() -> dict[str, Any]:
         "stream": False,
         "store": False,
     }
+
+
+def _aggressive_synthetic_body() -> dict[str, Any]:
+    """Build a diverse synthetic payload for aggressive exhaustion mode.
+
+    Cycles through small/medium/large tiers for dataset variety.
+    All tiers include required `store: False` and non-empty `instructions`.
+    """
+    tier = random.choice(("small", "medium", "large"))
+    if tier == "small":
+        return synthetic_body()
+    template = random.choice(_MEDIUM_TEMPLATES if tier == "medium" else _LARGE_TEMPLATES)
+    return {
+        **template,
+        "model": "auto-learning-synthetic",
+        "stream": False,
+        "store": False,
+    }
+
+
+def _should_enter_aggressive(snap: Any, cfg: AutoRouterConfig) -> bool:
+    """Return True when a backend's weekly quota is high enough to trigger
+    aggressive exhaustion mode (bypassing normal pacing accumulator).
+    """
+    if snap is None:
+        return False
+    if snap.weekly_used_percent is None:
+        return False
+    return snap.weekly_used_percent >= cfg.aggressive_exhaustion_pct
 
 
 # ---------------------------------------------------------------------------
@@ -311,6 +413,9 @@ class SyntheticTopper:
         # "0.28 synthetics/tick" actually fire 1 synthetic every ~3.5 ticks
         # instead of rounding to 0 every tick forever.
         self._fire_accumulator: dict[str, float] = {}
+        # Aggressive exhaustion mode state.
+        self._aggressive_consecutive_429s: dict[str, int] = {}
+        self._in_aggressive_mode: dict[str, bool] = {}
 
     @property
     def enabled(self) -> bool:
@@ -352,13 +457,19 @@ class SyntheticTopper:
             return
         now_ts = self._clock()
         for backend in self._backends:
-            n = await self._fire_count_for_backend(backend, now_ts=now_ts)
-            for _ in range(n):
-                try:
-                    await self._dispatch(synthetic_body(), backend.id)
-                except Exception:
-                    logger.exception("synthetic dispatch failed for %s", backend.id)
-                    break  # don't tight-loop on a sick backend
+            snap = await backend.quota_snapshot()
+            if _should_enter_aggressive(snap, self._cfg):
+                await self._aggressive_exhaust_backend(backend, snap, now_ts=now_ts)
+            else:
+                # Normal pacing — unchanged leaky-bucket accumulator path.
+                self._in_aggressive_mode[backend.id] = False
+                n = await self._fire_count_for_backend(backend, now_ts=now_ts)
+                for _ in range(n):
+                    try:
+                        await self._dispatch(synthetic_body(), backend.id)
+                    except Exception:
+                        logger.exception("synthetic dispatch failed for %s", backend.id)
+                        break  # don't tight-loop on a sick backend
 
     async def _fire_count_for_backend(self, backend: Backend, *, now_ts: float) -> int:
         snap: Any = await backend.quota_snapshot()
@@ -392,6 +503,84 @@ class SyntheticTopper:
             return 0
         counts = daily_counts(self._usage_log_path, now_ts=now_ts, backend_id=backend.id)
         return cold_start_fire_count(counts, self._cfg)
+
+    async def _aggressive_exhaust_backend(
+        self, backend: Backend, snap: Any, *, now_ts: float
+    ) -> None:
+        """Fire diverse payloads in a tight loop until confirmed exhaustion."""
+        if not self._in_aggressive_mode.get(backend.id, False):
+            logger.warning(
+                "backend %s: entering aggressive exhaustion mode (weekly=%s%%)",
+                backend.id,
+                snap.weekly_used_percent,
+            )
+            self._in_aggressive_mode[backend.id] = True
+            self._aggressive_consecutive_429s[backend.id] = 0
+
+        consecutive = self._aggressive_consecutive_429s.get(backend.id, 0)
+        confirm_threshold = self._cfg.aggressive_exhaustion_consecutive_429s
+        max_burst = self._cfg.aggressive_exhaustion_max_per_burst
+
+        for _ in range(max_burst):
+            try:
+                await self._dispatch(_aggressive_synthetic_body(), backend.id)
+                consecutive = 0
+            except Exception as exc:
+                is_429 = (isinstance(exc, HTTPException) and exc.status_code == 429) or (
+                    isinstance(exc, BackendError)
+                    and exc.classification == "rate_limited"
+                )
+                if is_429:
+                    consecutive += 1
+                    logger.info(
+                        "backend %s: aggressive 429 #%d (confirm at %d)",
+                        backend.id,
+                        consecutive,
+                        confirm_threshold,
+                    )
+                    if consecutive >= confirm_threshold:
+                        await self._handle_confirmed_exhaustion(
+                            backend, now_ts=now_ts
+                        )
+                        self._aggressive_consecutive_429s[backend.id] = consecutive
+                        return
+                else:
+                    logger.warning(
+                        "backend %s: aggressive mode non-429 error (%s) — falling back",
+                        backend.id,
+                        type(exc).__name__,
+                    )
+                    self._in_aggressive_mode[backend.id] = False
+                    self._aggressive_consecutive_429s[backend.id] = 0
+                    return
+
+        self._aggressive_consecutive_429s[backend.id] = consecutive
+
+    async def _handle_confirmed_exhaustion(
+        self, backend: Backend, *, now_ts: float
+    ) -> None:
+        """After N consecutive 429s, distinguish weekly-limit vs 5h exhaustion."""
+        post_snap = await backend.quota_snapshot()
+        five_h = (
+            post_snap.five_hourly_used_percent if post_snap is not None else None
+        )
+        weekly = post_snap.weekly_used_percent if post_snap is not None else None
+
+        if five_h is not None and five_h >= self._cfg.five_hourly_pause_pct:
+            logger.warning(
+                "backend %s: 5h window exhausted (%d%%) — pausing aggressive mode",
+                backend.id,
+                five_h,
+            )
+        else:
+            logger.warning(
+                "backend %s: WEEKLY QUOTA CONFIRMED EXHAUSTED "
+                "(weekly=%s%%, 5h=%s%%)",
+                backend.id,
+                weekly,
+                five_h,
+            )
+        self._in_aggressive_mode[backend.id] = False
 
 
 def _wall_clock() -> float:

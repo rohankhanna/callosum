@@ -115,6 +115,13 @@ class AutoRouterConfig(BaseModel):
     # Pause firing on an account when 5h is near-exhausted (otherwise we'd
     # 429-loop until the 5h window rolls).
     five_hourly_pause_pct: float = 95.0
+    # Aggressive-exhaustion mode: when weekly_used_percent meets this threshold,
+    # bypass normal pacing and fire continuously until confirmed 429 from upstream.
+    aggressive_exhaustion_pct: float = 98.0
+    # How many consecutive 429 responses confirm real exhaustion (vs transient).
+    aggressive_exhaustion_consecutive_429s: int = 3
+    # Max requests per aggressive burst (safety cap per backend per tick).
+    aggressive_exhaustion_max_per_burst: int = 50
 
 
 class BackendConfig(BaseModel):
