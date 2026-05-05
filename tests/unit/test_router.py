@@ -37,16 +37,22 @@ def test_explorer_picks_first_cell_when_log_missing(tmp_path: Path) -> None:
 def test_explorer_picks_least_sampled_cell(tmp_path: Path) -> None:
     db = tmp_path / "u.sqlite"
     cells = build_cells()
-    # Saturate every cell except (model-a0c3, low) which has zero samples.
+    least_sampled = None
+    # Saturate every cell except one which has zero samples.
+    for c in cells:
+        if c.model == "model-a0c3" and c.reasoning_effort == "low":
+            least_sampled = c
+            break
+    assert least_sampled is not None
     saturated = [
         (c.model, c.reasoning_effort, "auto-learning", 200)
         for c in cells
-        if c != Cell(model="model-a0c3", reasoning_effort="low")
+        if c != least_sampled
     ] * 10
     _seed_log(db, saturated)
     router = ExplorerRouter(usage_log_path=db)
     decision = router.choose()
-    assert decision.cell == Cell(model="model-a0c3", reasoning_effort="low")
+    assert decision.cell == least_sampled
 
 
 def test_explorer_decision_carries_reason(tmp_path: Path) -> None:
@@ -58,7 +64,13 @@ def test_explorer_decision_carries_reason(tmp_path: Path) -> None:
     assert "round-robin" in decision.reason
     # The chosen cell should NOT be the one we just inserted (it has 1 sample
     # while every other cell has 0).
-    assert decision.cell != Cell(model="model-a0e7", reasoning_effort="xhigh")
+    inserted_cell = None
+    for c in build_cells():
+        if c.model == "model-a0e7" and c.reasoning_effort == "xhigh":
+            inserted_cell = c
+            break
+    assert inserted_cell is not None
+    assert decision.cell != inserted_cell
 
 
 def test_exploiter_raises_not_trained() -> None:

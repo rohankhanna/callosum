@@ -122,6 +122,9 @@ class AutoRouterConfig(BaseModel):
     aggressive_exhaustion_consecutive_429s: int = 3
     # Max requests per aggressive burst (safety cap per backend per tick).
     aggressive_exhaustion_max_per_burst: int = 50
+    # Context-safe routing: min headroom (tokens) to leave above current session size
+    # when picking a model. Prevents routing to models with insufficient context.
+    router_context_safety_margin: int = 8192
 
 
 class BackendConfig(BaseModel):

@@ -7,6 +7,7 @@ import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +48,10 @@ _EXHAUSTED_STATUS: dict[ErrorClass, int] = {
     "transient": 502,
     "client_error": 400,
 }
+
+# Context variable to track the current request's database rowid, set during dispatch
+# and read by response handlers to include in X-Proxy-Request-ID header.
+_request_id_context: ContextVar[int | None] = ContextVar("request_id", default=None)
 
 
 class PinState:
@@ -139,6 +144,7 @@ def create_app(
             user_id=None,
             api_key_id=None,
             forced_backend_id=backend_id,
+            router_context_safety_margin=auto_cfg.router_context_safety_margin,
         )
 
     topper = SyntheticTopper(
@@ -371,9 +377,31 @@ def create_app(
                 }
         raise HTTPException(status_code=404, detail=f"model {model_id!r} not found")
 
+    @app.post("/v1/feedback")
+    async def feedback(body: dict[str, Any]) -> dict[str, str]:
+        """Record user feedback (quality label) for a request.
+
+        Expected body: {"request_id": <int>, "rating": <-1|0|1>}
+        """
+        if usage_log is None:
+            raise HTTPException(status_code=503, detail="usage logging disabled")
+        request_id = body.get("request_id")
+        rating = body.get("rating")
+        if not isinstance(request_id, int) or request_id <= 0:
+            raise HTTPException(status_code=400, detail="request_id must be a positive integer")
+        if rating not in (-1, 0, 1):
+            raise HTTPException(status_code=400, detail="rating must be -1, 0, or 1")
+        try:
+            usage_log.record_quality(request_id, rating, "user")
+        except Exception as exc:
+            logging.getLogger("codex_proxy.app").warning("feedback record failed: %s", exc)
+            raise HTTPException(status_code=400, detail="request_id not found or feedback failed")
+        return {"status": "recorded", "request_id": request_id}
+
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
-        return await _dispatch_route(
+        _request_id_context.set(None)  # Reset context for this request
+        result = await _dispatch_route(
             body,
             request=request,
             route_name="chat_completions",
@@ -386,11 +414,22 @@ def create_app(
             exploiter=exploiter,
             nonstream=lambda b, p, h: b.chat_completions(p, h),
             stream=lambda b, p, h: b.chat_completions_stream(p, h),
+            router_context_safety_margin=auto_cfg.router_context_safety_margin,
         )
+        # Add X-Proxy-Request-ID header if a request was logged
+        request_id = _request_id_context.get()
+        if request_id is not None:
+            headers = {"X-Proxy-Request-ID": str(request_id)}
+            if isinstance(result, dict):
+                return JSONResponse(result, headers=headers)
+            # For streaming (AsyncIterator), wrap with StreamingResponse
+            return StreamingResponse(result, media_type="text/event-stream", headers=headers)
+        return result
 
     @app.post("/v1/responses")
     async def responses(request: Request, body: dict[str, Any]) -> Any:
-        return await _dispatch_route(
+        _request_id_context.set(None)  # Reset context for this request
+        result = await _dispatch_route(
             body,
             request=request,
             route_name="responses",
@@ -403,7 +442,17 @@ def create_app(
             exploiter=exploiter,
             nonstream=lambda b, p, h: b.responses(p, h),
             stream=lambda b, p, h: b.responses_stream(p, h),
+            router_context_safety_margin=auto_cfg.router_context_safety_margin,
         )
+        # Add X-Proxy-Request-ID header if a request was logged
+        request_id = _request_id_context.get()
+        if request_id is not None:
+            headers = {"X-Proxy-Request-ID": str(request_id)}
+            if isinstance(result, dict):
+                return JSONResponse(result, headers=headers)
+            # For streaming (AsyncIterator), wrap with StreamingResponse
+            return StreamingResponse(result, media_type="text/event-stream", headers=headers)
+        return result
 
     return app
 
@@ -422,6 +471,7 @@ async def _dispatch_route(
     exploiter: ExploiterRouter,
     nonstream: NonstreamCall,
     stream: StreamCall,
+    router_context_safety_margin: int = 8192,
 ) -> Any:
     """HTTP entry-point. Pulls session_id + api_key off the Request, then
     hands off to _dispatch_internal for the rewrite + dispatch logic.
@@ -446,6 +496,7 @@ async def _dispatch_route(
         session_id=session_id,
         user_id=user_id,
         api_key_id=api_key_id,
+        router_context_safety_margin=router_context_safety_margin,
     )
 
 
@@ -466,6 +517,7 @@ async def _dispatch_internal(
     user_id: int | None,
     api_key_id: int | None,
     forced_backend_id: str | None = None,
+    router_context_safety_margin: int = 8192,
 ) -> Any:
     """Dispatch core, no Request dependency. Used by the HTTP entry-points and
     by the synthetic-request worker.
@@ -477,10 +529,19 @@ async def _dispatch_internal(
     requested_model = _require_model(body)
     requested_reasoning = _extract_reasoning_effort(body)
     routing_mode = "pass-through"
+
+    # Look up current session context size for context-safe routing
+    session_prompt_tokens: int | None = None
+    if session_id is not None and usage_log is not None:
+        session_prompt_tokens = usage_log.last_session_prompt_tokens(session_id)
+
     # Virtual model rewrite. The body is mutated in place so the downstream
     # selector and backend see the resolved (model, reasoning) pair.
     if requested_model == "auto-learning":
-        decision = explorer.choose()
+        decision = explorer.choose(
+            session_prompt_tokens=session_prompt_tokens,
+            router_context_safety_margin=router_context_safety_margin,
+        )
         body["model"] = decision.cell.model
         body.setdefault("reasoning", {})["effort"] = decision.cell.reasoning_effort
         routing_mode = "auto-learning"
@@ -493,13 +554,21 @@ async def _dispatch_internal(
             fb = next((b for b in backends_list if b.id == forced_backend_id), None)
             if fb is not None:
                 allowed = frozenset(fb.advertised_models)
-        decision = synthetic_explorer.choose(allowed_models=allowed)
+        decision = synthetic_explorer.choose(
+            allowed_models=allowed,
+            session_prompt_tokens=session_prompt_tokens,
+            router_context_safety_margin=router_context_safety_margin,
+        )
         body["model"] = decision.cell.model
         body.setdefault("reasoning", {})["effort"] = decision.cell.reasoning_effort
         routing_mode = "auto-learning-synthetic"
     elif requested_model == "auto":
         try:
-            decision = exploiter.choose(model_hint=None)
+            decision = exploiter.choose(
+                model_hint=None,
+                session_prompt_tokens=session_prompt_tokens,
+                router_context_safety_margin=router_context_safety_margin,
+            )
         except ExploiterRouter.NotTrained as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         body["model"] = decision.cell.model
@@ -893,7 +962,9 @@ def _log_attempt(
         requested_reasoning_effort=requested_reasoning_effort,
         routing_mode=routing_mode,
     )
-    usage_log.record(entry)
+    request_id = usage_log.record(entry)
+    # Store request_id in context for response handlers to access
+    _request_id_context.set(request_id)
 
 
 class _Tokens:

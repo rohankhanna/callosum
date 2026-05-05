@@ -99,6 +99,11 @@ _MIGRATIONS = [
     "ALTER TABLE requests RENAME COLUMN secondary_reset_at TO weekly_reset_at",
     "ALTER TABLE requests RENAME COLUMN primary_over_secondary_limit_percent"
     " TO five_hourly_over_weekly_limit_percent",
+    # Quality labeling for ExploiterRouter training: user feedback and automated signals.
+    "ALTER TABLE requests ADD COLUMN quality_score INTEGER",  # -1, 0, +1; NULL = unlabeled
+    "ALTER TABLE requests ADD COLUMN quality_label_method TEXT",  # 'user', 'llm_judge_v1', etc
+    # Prompt complexity classification for cost-per-complexity routing.
+    "ALTER TABLE requests ADD COLUMN prompt_complexity_class INTEGER",  # 1, 2, 3; NULL = not classified
 ]
 
 
@@ -294,6 +299,38 @@ class UsageLog:
                     ),
                 )
             return int(request_id)
+
+    def last_session_prompt_tokens(self, session_id: str) -> int | None:
+        """Query the most recent prompt_tokens for a session_id.
+
+        Returns the prompt_tokens from the last request in this session, or None
+        if the session is not found or has no prompt_tokens data. Used to infer
+        the current context accumulation in a session for context-safe routing.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT prompt_tokens FROM requests"
+                " WHERE session_id = ? AND prompt_tokens IS NOT NULL"
+                " ORDER BY ts_start DESC LIMIT 1",
+                (session_id,),
+            ).fetchone()
+        return row[0] if row is not None else None
+
+    def record_quality(self, request_id: int, score: int, method: str) -> None:
+        """Record a quality label for an existing request row.
+
+        `request_id`: the rowid from the requests table
+        `score`: -1 (bad), 0 (ok), or 1 (good)
+        `method`: identifier for how the label was generated ('user', 'llm_judge_v1', etc)
+        """
+        if score not in (-1, 0, 1):
+            raise ValueError(f"quality_score must be -1, 0, or 1; got {score}")
+        with self._lock:
+            self._conn.execute(
+                "UPDATE requests SET quality_score = ?, quality_label_method = ?"
+                " WHERE id = ?",
+                (score, method, request_id),
+            )
 
     def close(self) -> None:
         with self._lock:

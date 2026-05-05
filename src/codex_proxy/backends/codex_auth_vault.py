@@ -101,6 +101,7 @@ class CodexAuthVaultBackend:
         # `advertised_models` property prefers dynamic when available.
         self._static_advertised_models: frozenset[str] = advertised_models
         self._dynamic_advertised_models: frozenset[str] | None = None
+        self._model_context_windows: dict[str, int] = {}  # slug → context_window tokens
         self._models_fetched_at: float = 0.0
         self._models_refresh_s = models_refresh_s
         self._vault = vault
@@ -135,6 +136,13 @@ class CodexAuthVaultBackend:
         if self._dynamic_advertised_models is not None:
             return self._dynamic_advertised_models
         return self._static_advertised_models
+
+    @property
+    def model_context_windows(self) -> dict[str, int]:
+        """Return the most recently fetched context windows per model. Empty dict
+        if not yet fetched or if the upstream API doesn't include context_length.
+        """
+        return self._model_context_windows
 
     async def refresh_advertised_models(self, *, now: float | None = None) -> None:
         """Fetch the upstream model catalog for this account and update the
@@ -179,9 +187,10 @@ class CodexAuthVaultBackend:
             payload = response.json()
         except (ValueError, json.JSONDecodeError):
             return
-        models = _extract_model_slugs(payload)
+        models, context_windows = _extract_model_catalog(payload)
         if models:
             self._dynamic_advertised_models = models
+            self._model_context_windows = context_windows
             self._models_fetched_at = ts
 
     async def health(self) -> HealthStatus:
@@ -418,31 +427,49 @@ class CodexAuthVaultBackend:
             self._state_store.save_usage(self.id, self._usage)
 
 
-def _extract_model_slugs(payload: Any) -> frozenset[str]:
-    """Pull model slug strings out of an upstream `/backend-api/codex/models`
-    response. Tolerates both the documented shape {"models": [{"slug": ...}]}
-    and the OpenAI-compatible {"data": [{"id": ...}]} shape, since the
-    upstream surface has shipped both at different times. Returns an empty
-    frozenset on anything malformed — callers treat empty as "fall back to the
-    cold-start static set."
+def _extract_model_catalog(payload: Any) -> tuple[frozenset[str], dict[str, int]]:
+    """Pull model slugs and context windows from an upstream `/backend-api/codex/models`
+    response. Tolerates both the documented shape {"models": [{"slug": ..., "context_length": ...}]}
+    and the OpenAI-compatible {"data": [{"id": ..., "context_length": ...}]} shape, since the
+    upstream surface has shipped both at different times.
+
+    Returns (frozenset of slugs, dict of slug→context_window). Context window is None
+    for any model not present in the API response. Returns empty set on malformed payload
+    — callers treat empty as "fall back to the cold-start static set."
     """
     if not isinstance(payload, dict):
-        return frozenset()
+        return frozenset(), {}
     items: Any = payload.get("models")
     if not isinstance(items, list):
         items = payload.get("data")
     if not isinstance(items, list):
-        return frozenset()
+        return frozenset(), {}
     slugs: set[str] = set()
+    context_windows: dict[str, int] = {}
     for item in items:
         if not isinstance(item, dict):
             continue
         slug = item.get("slug")
         if not isinstance(slug, str) or not slug:
             slug = item.get("id")
-        if isinstance(slug, str) and slug:
-            slugs.add(slug)
-    return frozenset(slugs)
+        if not isinstance(slug, str) or not slug:
+            continue
+        slugs.add(slug)
+        # Capture context_length if present, but don't fail if absent
+        if "context_length" in item:
+            ctx_len = item.get("context_length")
+            if isinstance(ctx_len, int) and ctx_len > 0:
+                context_windows[slug] = ctx_len
+    return frozenset(slugs), context_windows
+
+
+def _extract_model_slugs(payload: Any) -> frozenset[str]:
+    """Pull model slug strings out of an upstream `/backend-api/codex/models`
+    response. Deprecated: use _extract_model_catalog instead to get context windows.
+    Kept for backward compat. Returns an empty frozenset on anything malformed.
+    """
+    slugs, _ = _extract_model_catalog(payload)
+    return slugs
 
 
 def _require_model(body: dict[str, Any]) -> str:

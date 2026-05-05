@@ -26,6 +26,17 @@ DEFAULT_MODELS: tuple[str, ...] = (
 # - "auto":                    cost-optimal exploiter (returns 503 NotTrained)
 VIRTUAL_MODELS: frozenset[str] = frozenset({"auto-learning", "auto-learning-synthetic", "auto"})
 
+# Known context window limits per model. Used as a fallback when the API
+# response doesn't include context_length. This map is volatile — models churn
+# monthly toward weekly, so treat it as a safety net rather than truth.
+_KNOWN_CONTEXT_WINDOWS: dict[str, int] = {
+    "model-a0e8": 256_000,
+    "model-a0e7": 128_000,
+    "model-a0c3": 128_000,
+    "model-a0b8": 128_000,
+    "model-a0e6": 128_000,
+}
+
 
 @dataclass(frozen=True, slots=True)
 class Cell:
@@ -33,6 +44,7 @@ class Cell:
 
     model: str
     reasoning_effort: str
+    context_window: int | None = None  # Model's max context length in tokens, None = unknown
 
     def as_tuple(self) -> tuple[str, str]:
         return (self.model, self.reasoning_effort)
@@ -60,11 +72,21 @@ class CellCoverage:
 def build_cells(
     models: tuple[str, ...] = DEFAULT_MODELS,
     reasoning_levels: tuple[str, ...] = REASONING_LEVELS,
+    context_windows: dict[str, int] | None = None,
 ) -> list[Cell]:
     """Cross product of (models, reasoning_levels). Order is models-major then
     reasoning-major, so iteration is predictable for round-robin scheduling.
+
+    If `context_windows` is provided, each Cell is stamped with the model's
+    known context window. Otherwise defaults to _KNOWN_CONTEXT_WINDOWS map.
     """
-    return [Cell(model=m, reasoning_effort=r) for m in models for r in reasoning_levels]
+    if context_windows is None:
+        context_windows = _KNOWN_CONTEXT_WINDOWS
+    return [
+        Cell(model=m, reasoning_effort=r, context_window=context_windows.get(m))
+        for m in models
+        for r in reasoning_levels
+    ]
 
 
 # `gpt-X.Y` with optional `-mini` or `-codex` suffix. Excludes review models,

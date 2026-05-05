@@ -88,10 +88,14 @@ def test_coverage_only_counts_auto_learning_successes(tmp_path: Path) -> None:
     conn.close()
     cells = build_cells()
     cov = coverage_from_db(db, cells)
-    assert cov.counts[Cell(model="model-a0c3", reasoning_effort="low")] == 3
-    assert cov.counts[Cell(model="model-a0e7", reasoning_effort="xhigh")] == 2
+    # Use cells from build_cells to ensure context_window matches
+    cell_5_4_mini_low = next(c for c in cells if c.model == "model-a0c3" and c.reasoning_effort == "low")
+    cell_5_4_xhigh = next(c for c in cells if c.model == "model-a0e7" and c.reasoning_effort == "xhigh")
+    cell_5_2_medium = next(c for c in cells if c.model == "model-a0e6" and c.reasoning_effort == "medium")
+    assert cov.counts[cell_5_4_mini_low] == 3
+    assert cov.counts[cell_5_4_xhigh] == 2
     # Cells not appearing in the data are zero, not missing.
-    assert cov.counts[Cell(model="model-a0e6", reasoning_effort="medium")] == 0
+    assert cov.counts[cell_5_2_medium] == 0
     assert cov.total_samples() == 5
 
 
