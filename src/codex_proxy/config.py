@@ -125,6 +125,11 @@ class AutoRouterConfig(BaseModel):
     # Context-safe routing: min headroom (tokens) to leave above current session size
     # when picking a model. Prevents routing to models with insufficient context.
     router_context_safety_margin: int = 8192
+    # ExploiterRouter training parameters.
+    # Min samples per cell before the cost model activates (lower = less strict).
+    exploiter_min_samples_per_cell: int = 30
+    # How often to refit the cost model (seconds). 0 to disable periodic refit.
+    exploiter_refit_interval_seconds: int = 3600
 
 
 class BackendConfig(BaseModel):

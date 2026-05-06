@@ -26,12 +26,13 @@ import contextlib
 import logging
 import random
 import sqlite3
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from math import ceil
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException
 
@@ -39,6 +40,9 @@ from codex_proxy.backend import Backend
 from codex_proxy.codex_quota import CodexQuotaSnapshot
 from codex_proxy.config import AutoRouterConfig
 from codex_proxy.errors import BackendError
+
+if TYPE_CHECKING:
+    from codex_proxy.router import ExploiterRouter
 
 logger = logging.getLogger(__name__)
 
@@ -398,12 +402,14 @@ class SyntheticTopper:
         usage_log_path: Path | None,
         backends: Sequence[Backend],
         dispatch: SyntheticDispatch,
+        exploiter: ExploiterRouter | None = None,
         clock: Callable[[], float] | None = None,
     ) -> None:
         self._cfg = cfg
         self._usage_log_path = usage_log_path
         self._backends = list(backends)
         self._dispatch = dispatch
+        self._exploiter = exploiter
         self._clock = clock if clock is not None else _wall_clock
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
@@ -470,6 +476,11 @@ class SyntheticTopper:
                     except Exception:
                         logger.exception("synthetic dispatch failed for %s", backend.id)
                         break  # don't tight-loop on a sick backend
+        # Periodically refit the exploiter cost model
+        if (self._exploiter is not None
+            and self._cfg.exploiter_refit_interval_seconds > 0
+            and (now_ts - self._exploiter._last_fit) >= self._cfg.exploiter_refit_interval_seconds):
+            self._exploiter.fit(min_samples_per_cell=self._cfg.exploiter_min_samples_per_cell)
 
     async def _fire_count_for_backend(self, backend: Backend, *, now_ts: float) -> int:
         snap: Any = await backend.quota_snapshot()

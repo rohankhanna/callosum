@@ -211,6 +211,7 @@ def create_app(
         usage_log_path=usage_log.path if usage_log is not None else None,
         backends=backends_list,
         dispatch=_synthetic_dispatch,
+        exploiter=exploiter,
     )
     smoke_tester = _PeriodicSmokeTester(
         backends=backends_list,
@@ -237,6 +238,8 @@ def create_app(
                     logger.exception("startup model-list refresh failed for %r", backend.id)
         if startup_smoke_test and backends_list:
             await _run_startup_smoke_test(backends_list)
+        # Prime the exploiter cost model if data exists
+        exploiter.fit(min_samples_per_cell=auto_cfg.exploiter_min_samples_per_cell)
         topper.start()
         smoke_tester.start()
         try:

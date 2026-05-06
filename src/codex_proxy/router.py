@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +11,9 @@ from codex_proxy.cell_grid import (
     build_cells,
     coverage_from_db,
 )
+from codex_proxy.efficiency_model import EfficiencyModel
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,16 +135,47 @@ class ExplorerRouter:
 
 
 class ExploiterRouter:
-    """Cost-optimal router. Stub for now — returns a not-trained signal so the
-    'auto' virtual model can fail loud rather than silently doing the wrong
-    thing. Fills in once the cost model is fit on a complete cell grid.
+    """Cost-optimal router. Routes to the cell with lowest average token cost.
+
+    v1 metric: avg_total_tokens per cell (cheaper = lower tokens, across all sessions)
+    v2 will use: quality_score / total_tokens once labels accumulate
+
+    Fits the efficiency model from the usage log on demand (via fit() or fit_if_ready()).
+    The model is ready only when every live cell has >= min_samples_per_cell successful
+    requests.
     """
 
     class NotTrained(RuntimeError):
         pass
 
-    def __init__(self, usage_log_path: Path | None) -> None:
+    def __init__(
+        self,
+        usage_log_path: Path | None,
+        *,
+        cells_fn: Callable[[], list[Cell]] | None = None,
+    ) -> None:
         self._usage_log_path = usage_log_path
+        self._cells_fn: Callable[[], list[Cell]] = cells_fn or build_cells
+        self._model: EfficiencyModel | None = None
+        self._last_fit: float = 0.0
+
+    def fit(self, min_samples_per_cell: int = 30) -> None:
+        """Refit the efficiency model from the usage log.
+
+        Safe to call from any context (thread, task). Updates _model and _last_fit.
+        """
+        cells = self._cells_fn()
+        self._model = EfficiencyModel.from_db(
+            self._usage_log_path,
+            cells,
+            min_samples_per_cell=min_samples_per_cell,
+        )
+        self._last_fit = time.time()
+        logger.info(
+            "ExploiterRouter: fit complete — ready=%s, cells=%d",
+            self._model.is_ready,
+            len(cells),
+        )
 
     def choose(
         self,
@@ -148,9 +184,20 @@ class ExploiterRouter:
         session_prompt_tokens: int | None = None,
         router_context_safety_margin: int = 8192,
     ) -> RouterDecision:
-        del model_hint, session_prompt_tokens, router_context_safety_margin
-        raise ExploiterRouter.NotTrained(
-            "auto-routing is not ready: the cost model has not been trained yet."
-            " Use `auto-learning` to keep collecting data, or pick a model"
-            " explicitly (model-a0e7, model-a0c3, model-a0b8, model-a0e6)."
+        del model_hint  # Hook for future: complexity-aware routing
+        if self._model is None or not self._model.is_ready:
+            raise ExploiterRouter.NotTrained(
+                "auto-routing is not ready: the cost model has not been trained yet. "
+                "Use `auto-learning` to keep collecting data, or pick a model explicitly."
+            )
+        cells = self._cells_fn()
+        cell = self._model.best_cell(
+            cells,
+            session_prompt_tokens=session_prompt_tokens,
+            router_context_safety_margin=router_context_safety_margin,
+        )
+        avg_tokens = self._model.scores.get((cell.model, cell.reasoning_effort), 0)
+        return RouterDecision(
+            cell=cell,
+            reason=f"exploiter: cheapest cell avg_tokens={avg_tokens:.0f}",
         )
