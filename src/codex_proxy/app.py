@@ -1062,11 +1062,11 @@ async def _extract_complexity_from_stream(
                                     complexity_found = True
                                     if complexity_class is not None:
                                         _complexity_class_context.set(complexity_class)
-                                        delta["content"] = cleaned
-                                        choices[0]["delta"] = delta
-                                        data["choices"] = choices
-                                        new_lines.append("data: " + json.dumps(data))
-                                        continue
+                                    delta["content"] = cleaned
+                                    choices[0]["delta"] = delta
+                                    data["choices"] = choices
+                                    new_lines.append("data: " + json.dumps(data))
+                                    continue
                         except (json.JSONDecodeError, KeyError, IndexError):
                             complexity_found = True  # Stop searching; don't loop on malformed chunks
                     new_lines.append(line)
