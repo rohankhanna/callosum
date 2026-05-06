@@ -143,6 +143,9 @@ class UsageLogEntry:
     requested_model: str | None = None
     requested_reasoning_effort: str | None = None
     routing_mode: str | None = None
+    # Complexity classification from embedded instruction in auto-learning requests.
+    # 1, 2, or 3; NULL = not classified (non-auto-learning or marker not found).
+    prompt_complexity_class: int | None = None
 
 
 class UsageLog:
@@ -246,6 +249,7 @@ class UsageLog:
             entry.requested_model,
             entry.requested_reasoning_effort,
             entry.routing_mode,
+            entry.prompt_complexity_class,
         )
         with self._lock:
             cursor = self._conn.execute(
@@ -265,12 +269,13 @@ class UsageLog:
                     five_hourly_over_weekly_limit_percent,
                     credits_balance, credits_has_credits, credits_unlimited,
                     quota_reset_crossover,
-                    requested_model, requested_reasoning_effort, routing_mode
+                    requested_model, requested_reasoning_effort, routing_mode,
+                    prompt_complexity_class
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?
                 )
                 """,
                 row,

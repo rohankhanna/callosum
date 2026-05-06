@@ -53,6 +53,65 @@ _EXHAUSTED_STATUS: dict[ErrorClass, int] = {
 # and read by response handlers to include in X-Proxy-Request-ID header.
 _request_id_context: ContextVar[int | None] = ContextVar("request_id", default=None)
 
+# Context variable to signal that this request needs complexity extraction from the response.
+# Set to True for auto-learning requests, used by response handlers to extract {{{N}}}.
+_extract_complexity_context: ContextVar[bool] = ContextVar("extract_complexity", default=False)
+
+# Context variable to store the extracted complexity class (1, 2, or 3) after response is processed.
+_complexity_class_context: ContextVar[int | None] = ContextVar("complexity_class", default=None)
+
+# Complexity classification instruction appended to auto-learning requests.
+# The model outputs {{{1}}}, {{{2}}}, or {{{3}}} at the start of its response.
+_COMPLEXITY_CLASSIFIER_INSTRUCTION = (
+    "Before answering, classify this prompt's complexity as {{{1}}} (simple factual/short), "
+    "{{{2}}} (moderate analysis), or {{{3}}} (complex reasoning/long output). "
+    "Output ONLY the classification token first, then your answer."
+)
+
+
+def _extract_complexity_class(text: str) -> tuple[int | None, str]:
+    """Extract complexity classification token {{{N}}} from response start.
+
+    Returns (complexity_class, cleaned_text) where complexity_class is 1, 2, or 3,
+    or None if the marker is not found. cleaned_text has the marker stripped.
+
+    The marker should appear at the very start of the response (after whitespace).
+    """
+    import re
+    match = re.match(r'^\s*\{\{\{([123])\}\}\}', text)
+    if match:
+        complexity_class = int(match.group(1))
+        cleaned = text[match.end():].lstrip()
+        return complexity_class, cleaned
+    return None, text
+
+
+def _extract_and_strip_complexity(result: dict[str, Any]) -> tuple[int | None, dict[str, Any]]:
+    """Extract complexity class from response dict and strip the marker.
+
+    Navigates the OpenAI-compatible response structure (choices[0].message.content),
+    calls _extract_complexity_class to parse and strip the {{{N}}} marker,
+    and returns (complexity_class, modified_result_dict).
+
+    If the marker is not found, logs a warning and returns (None, result_unchanged).
+    """
+    try:
+        if result.get("choices") and len(result["choices"]) > 0:
+            choice = result["choices"][0]
+            if "message" in choice and "content" in choice["message"]:
+                content = choice["message"]["content"]
+                if isinstance(content, str):
+                    complexity_class, cleaned = _extract_complexity_class(content)
+                    if complexity_class is not None:
+                        # Update the response dict with cleaned content
+                        result["choices"][0]["message"]["content"] = cleaned
+                    else:
+                        logger.warning("Complexity marker not found in auto-learning response")
+                    return complexity_class, result
+    except (KeyError, IndexError, TypeError) as e:
+        logger.warning(f"Failed to extract complexity class from response: {e}")
+    return None, result
+
 
 class PinState:
     """Process-wide backend pin. Thread-safety not needed under single-loop uvicorn."""
@@ -401,6 +460,8 @@ def create_app(
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         _request_id_context.set(None)  # Reset context for this request
+        _extract_complexity_context.set(False)
+        _complexity_class_context.set(None)
         result = await _dispatch_route(
             body,
             request=request,
@@ -429,6 +490,8 @@ def create_app(
     @app.post("/v1/responses")
     async def responses(request: Request, body: dict[str, Any]) -> Any:
         _request_id_context.set(None)  # Reset context for this request
+        _extract_complexity_context.set(False)
+        _complexity_class_context.set(None)
         result = await _dispatch_route(
             body,
             request=request,
@@ -545,6 +608,16 @@ async def _dispatch_internal(
         body["model"] = decision.cell.model
         body.setdefault("reasoning", {})["effort"] = decision.cell.reasoning_effort
         routing_mode = "auto-learning"
+        # Inject complexity classification instruction for cost-per-complexity routing
+        # The backend will translate this to the responses API format
+        body.setdefault("instructions", "")
+        if body["instructions"]:
+            body["instructions"] += "\n\n" + _COMPLEXITY_CLASSIFIER_INSTRUCTION
+        else:
+            body["instructions"] = _COMPLEXITY_CLASSIFIER_INSTRUCTION
+        # Signal response handlers to extract and strip the {{{N}}} marker
+        _extract_complexity_context.set(True)
+        _complexity_class_context.set(None)
     elif requested_model == "auto-learning-synthetic":
         # Constrain the cell grid to models the forced backend advertises.
         # Without this, choose() may pick a model from the union-of-all-backends
@@ -702,6 +775,7 @@ async def _dispatch_nonstream(
                 requested_model=requested_model,
                 requested_reasoning_effort=requested_reasoning_effort,
                 routing_mode=routing_mode,
+                prompt_complexity_class=None,
             )
             last_error = exc
             if exc.classification not in RETRYABLE:
@@ -710,6 +784,12 @@ async def _dispatch_nonstream(
             continue
         ts_end = time.time()
         _remember_binding(session_registry, session_id, backend.id)
+
+        # Extract complexity classification if this was an auto-learning request
+        if _extract_complexity_context.get():
+            complexity_class, result = _extract_and_strip_complexity(result)
+            _complexity_class_context.set(complexity_class)
+
         _log_attempt(
             usage_log,
             body=body,
@@ -728,6 +808,7 @@ async def _dispatch_nonstream(
             requested_model=requested_model,
             requested_reasoning_effort=requested_reasoning_effort,
             routing_mode=routing_mode,
+            prompt_complexity_class=_complexity_class_context.get(),
         )
         return result
     raise _no_viable(model=model, last_error=last_error)
@@ -786,6 +867,7 @@ async def _dispatch_stream(
                 requested_model=requested_model,
                 requested_reasoning_effort=requested_reasoning_effort,
                 routing_mode=routing_mode,
+                prompt_complexity_class=None,
             )
             _remember_binding(session_registry, session_id, backend.id)
             return StreamingResponse(_empty_iter(), media_type="text/event-stream")
@@ -809,6 +891,7 @@ async def _dispatch_stream(
                 requested_model=requested_model,
                 requested_reasoning_effort=requested_reasoning_effort,
                 routing_mode=routing_mode,
+                prompt_complexity_class=None,
             )
             last_error = exc
             if exc.classification not in RETRYABLE:
@@ -816,9 +899,15 @@ async def _dispatch_stream(
             excluded.add(backend.id)
             continue
         _remember_binding(session_registry, session_id, backend.id)
+
+        # For auto-learning requests, extract complexity from stream if needed
+        stream = _prepend(first_chunk, iterator)
+        if _extract_complexity_context.get():
+            stream = _extract_complexity_from_stream(stream)
+
         return StreamingResponse(
             _log_on_complete(
-                _prepend(first_chunk, iterator),
+                stream,
                 usage_log=usage_log,
                 body=body,
                 model=model,
@@ -841,6 +930,54 @@ async def _dispatch_stream(
 async def _prepend(first: bytes, rest: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
     yield first
     async for chunk in rest:
+        yield chunk
+
+
+async def _extract_complexity_from_stream(
+    source: AsyncIterator[bytes],
+) -> AsyncIterator[bytes]:
+    """Extract and strip complexity marker from SSE stream's first content chunk.
+
+    For streaming responses, the {{{N}}} marker appears at the start of the first
+    delta message. This function buffers until it finds the marker, extracts it,
+    then streams the rest transparently.
+
+    Stores the extracted complexity class in _complexity_class_context.
+    """
+    complexity_found = False
+    async for chunk in source:
+        if not complexity_found:
+            try:
+                # Parse SSE chunk to extract content
+                chunk_text = chunk.decode("utf-8")
+                # SSE chunks are like: data: {"choices":[{"delta":{"content":"..."},...
+                if "data: " in chunk_text:
+                    # Extract JSON part after "data: "
+                    lines = chunk_text.split("\n")
+                    for line in lines:
+                        if line.startswith("data: "):
+                            json_str = line[6:]
+                            try:
+                                data = json.loads(json_str)
+                                if data.get("choices") and len(data["choices"]) > 0:
+                                    delta = data["choices"][0].get("delta", {})
+                                    content = delta.get("content", "")
+                                    if content:
+                                        # Found content — check for complexity marker
+                                        complexity_class, cleaned = _extract_complexity_class(content)
+                                        if complexity_class is not None:
+                                            _complexity_class_context.set(complexity_class)
+                                            # Reconstruct chunk with cleaned content
+                                            delta["content"] = cleaned
+                                            data["choices"][0]["delta"] = delta
+                                            chunk = (line[:6] + json.dumps(data) + "\n").encode("utf-8")
+                                            complexity_found = True
+                                        else:
+                                            complexity_found = True  # Stop looking after first content
+                            except (json.JSONDecodeError, KeyError, IndexError):
+                                pass
+            except (UnicodeDecodeError, AttributeError):
+                pass
         yield chunk
 
 
@@ -892,6 +1029,7 @@ async def _log_on_complete(
         requested_model=requested_model,
         requested_reasoning_effort=requested_reasoning_effort,
         routing_mode=routing_mode,
+        prompt_complexity_class=_complexity_class_context.get(),
     )
 
 
@@ -914,6 +1052,7 @@ def _log_attempt(
     requested_model: str | None = None,
     requested_reasoning_effort: str | None = None,
     routing_mode: str = "pass-through",
+    prompt_complexity_class: int | None = None,
 ) -> None:
     if usage_log is None:
         return
@@ -961,6 +1100,7 @@ def _log_attempt(
         requested_model=requested_model,
         requested_reasoning_effort=requested_reasoning_effort,
         routing_mode=routing_mode,
+        prompt_complexity_class=prompt_complexity_class,
     )
     request_id = usage_log.record(entry)
     # Store request_id in context for response handlers to access
