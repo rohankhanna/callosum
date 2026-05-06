@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import random
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
@@ -113,6 +114,35 @@ def _extract_and_strip_complexity(result: dict[str, Any]) -> tuple[int | None, d
     return None, result
 
 
+def _exploitation_cap_pct(model_release_timestamp: float | None) -> float:
+    """Calculate current exploitation cap percentage based on days since model release.
+
+    When a new model is detected, exploitation cap drops to 75% (25% exploration).
+    Over the next 30 days, it gradually ramps to 90% (10% exploration).
+    After 30+ days, it stays at 90% until the next model appears.
+
+    Returns the exploitation cap as a percentage (0-100).
+    """
+    if model_release_timestamp is None:
+        # No model release detected yet — conservative default: 75%
+        return 75.0
+
+    now_ts = time.time()
+    days_since_release = (now_ts - model_release_timestamp) / 86400
+
+    if days_since_release < 0:
+        # Clock went backwards (shouldn't happen) — reset to conservative
+        return 75.0
+
+    if days_since_release >= 30:
+        # Fully ramped after 30 days
+        return 90.0
+
+    # Linearly ramp from 75% to 90% over 30 days
+    cap = 75.0 + (days_since_release / 30) * 15.0
+    return cap
+
+
 class PinState:
     """Process-wide backend pin. Thread-safety not needed under single-loop uvicorn."""
 
@@ -139,9 +169,18 @@ def create_app(
     startup_smoke_test: bool = False,
     smoke_test_interval_seconds: int = 0,
 ) -> FastAPI:
+    from codex_proxy.state import StateStore
+
     backends_list: list[Backend] = list(backends)
     pin_state = PinState()
     session_registry = sessions if sessions is not None else SessionRegistry()
+
+    # Extract state_store from the first CodexAuthVaultBackend (for model release tracking)
+    state_store: StateStore | None = None
+    for b in backends_list:
+        if hasattr(b, "_state_store"):
+            state_store = b._state_store  # type: ignore
+            break
 
     def _live_cells() -> list[Cell]:
         """Build the auto-learning cell grid from the union of every Codex
@@ -204,6 +243,7 @@ def create_app(
             api_key_id=None,
             forced_backend_id=backend_id,
             router_context_safety_margin=auto_cfg.router_context_safety_margin,
+            state_store=state_store,
         )
 
     topper = SyntheticTopper(
@@ -216,6 +256,7 @@ def create_app(
     smoke_tester = _PeriodicSmokeTester(
         backends=backends_list,
         interval_s=smoke_test_interval_seconds,
+        state_store=state_store,
     )
 
     @asynccontextmanager
@@ -229,11 +270,23 @@ def create_app(
         # smoke test runs — that way the smoke test probes models the upstream
         # actually still serves, not stale TOML names. Best-effort: any
         # backend that fails to refresh just keeps using its cold-start set.
+        # Also detect when new models appear (model release) and timestamp them.
         for backend in backends_list:
             refresh = getattr(backend, "refresh_advertised_models", None)
             if refresh is not None:
                 try:
+                    # Capture models before refresh to detect new ones
+                    models_before = set(backend.advertised_models)
                     await refresh()
+                    models_after = set(backend.advertised_models)
+                    # If new models detected, record the release timestamp
+                    if models_after > models_before and state_store is not None:
+                        new_models = models_after - models_before
+                        logger.info(
+                            "new models detected for backend %r: %s — recording model release timestamp",
+                            backend.id, sorted(new_models)
+                        )
+                        state_store.set_model_release_timestamp(time.time())
                 except Exception:
                     logger.exception("startup model-list refresh failed for %r", backend.id)
         if startup_smoke_test and backends_list:
@@ -479,6 +532,7 @@ def create_app(
             nonstream=lambda b, p, h: b.chat_completions(p, h),
             stream=lambda b, p, h: b.chat_completions_stream(p, h),
             router_context_safety_margin=auto_cfg.router_context_safety_margin,
+            state_store=state_store,
         )
         # Add X-Proxy-Request-ID header if a request was logged
         request_id = _request_id_context.get()
@@ -509,6 +563,7 @@ def create_app(
             nonstream=lambda b, p, h: b.responses(p, h),
             stream=lambda b, p, h: b.responses_stream(p, h),
             router_context_safety_margin=auto_cfg.router_context_safety_margin,
+            state_store=state_store,
         )
         # Add X-Proxy-Request-ID header if a request was logged
         request_id = _request_id_context.get()
@@ -538,6 +593,7 @@ async def _dispatch_route(
     nonstream: NonstreamCall,
     stream: StreamCall,
     router_context_safety_margin: int = 8192,
+    state_store: Any | None = None,
 ) -> Any:
     """HTTP entry-point. Pulls session_id + api_key off the Request, then
     hands off to _dispatch_internal for the rewrite + dispatch logic.
@@ -563,6 +619,7 @@ async def _dispatch_route(
         user_id=user_id,
         api_key_id=api_key_id,
         router_context_safety_margin=router_context_safety_margin,
+        state_store=state_store,
     )
 
 
@@ -584,6 +641,7 @@ async def _dispatch_internal(
     api_key_id: int | None,
     forced_backend_id: str | None = None,
     router_context_safety_margin: int = 8192,
+    state_store: Any | None = None,
 ) -> Any:
     """Dispatch core, no Request dependency. Used by the HTTP entry-points and
     by the synthetic-request worker.
@@ -604,23 +662,54 @@ async def _dispatch_internal(
     # Virtual model rewrite. The body is mutated in place so the downstream
     # selector and backend see the resolved (model, reasoning) pair.
     if requested_model == "auto-learning":
-        decision = explorer.choose(
-            session_prompt_tokens=session_prompt_tokens,
-            router_context_safety_margin=router_context_safety_margin,
+        # Per-request exploitation scheduling: occasionally route to exploiter instead of explorer
+        # to test the learned model and keep it fresh against changing landscape.
+        exploitation_cap = _exploitation_cap_pct(
+            state_store.get_model_release_timestamp() if state_store is not None else None
         )
-        body["model"] = decision.cell.model
-        body.setdefault("reasoning", {})["effort"] = decision.cell.reasoning_effort
-        routing_mode = "auto-learning"
-        # Inject complexity classification instruction for cost-per-complexity routing
-        # The backend will translate this to the responses API format
-        body.setdefault("instructions", "")
-        if body["instructions"]:
-            body["instructions"] += "\n\n" + _COMPLEXITY_CLASSIFIER_INSTRUCTION
+        should_exploit = random.randint(0, 100) < exploitation_cap
+
+        if should_exploit and exploiter._model is not None and exploiter._model.is_ready:
+            # Route to exploiter (cost-optimal) for this request
+            try:
+                decision = exploiter.choose(
+                    model_hint=None,
+                    session_prompt_tokens=session_prompt_tokens,
+                    router_context_safety_margin=router_context_safety_margin,
+                )
+                body["model"] = decision.cell.model
+                body.setdefault("reasoning", {})["effort"] = decision.cell.reasoning_effort
+                routing_mode = "auto"
+            except ExploiterRouter.NotTrained:
+                # Fallback to explorer if exploiter raises (shouldn't happen with is_ready check)
+                decision = explorer.choose(
+                    session_prompt_tokens=session_prompt_tokens,
+                    router_context_safety_margin=router_context_safety_margin,
+                )
+                body["model"] = decision.cell.model
+                body.setdefault("reasoning", {})["effort"] = decision.cell.reasoning_effort
+                routing_mode = "auto-learning"
         else:
-            body["instructions"] = _COMPLEXITY_CLASSIFIER_INSTRUCTION
-        # Signal response handlers to extract and strip the {{{N}}} marker
-        _extract_complexity_context.set(True)
-        _complexity_class_context.set(None)
+            # Route to explorer (data collection) for this request
+            decision = explorer.choose(
+                session_prompt_tokens=session_prompt_tokens,
+                router_context_safety_margin=router_context_safety_margin,
+            )
+            body["model"] = decision.cell.model
+            body.setdefault("reasoning", {})["effort"] = decision.cell.reasoning_effort
+            routing_mode = "auto-learning"
+
+        # Inject complexity classification instruction only for exploration requests
+        # (not for exploitation routing, which uses learned costs)
+        if routing_mode == "auto-learning":
+            body.setdefault("instructions", "")
+            if body["instructions"]:
+                body["instructions"] += "\n\n" + _COMPLEXITY_CLASSIFIER_INSTRUCTION
+            else:
+                body["instructions"] = _COMPLEXITY_CLASSIFIER_INSTRUCTION
+            # Signal response handlers to extract and strip the {{{N}}} marker
+            _extract_complexity_context.set(True)
+            _complexity_class_context.set(None)
     elif requested_model == "auto-learning-synthetic":
         # Constrain the cell grid to models the forced backend advertises.
         # Without this, choose() may pick a model from the union-of-all-backends
@@ -1302,11 +1391,14 @@ class _PeriodicSmokeTester:
     class only handles the recurring follow-up ticks. interval_s=0 disables.
     """
 
-    def __init__(self, *, backends: Sequence[Backend], interval_s: int) -> None:
+    def __init__(
+        self, *, backends: Sequence[Backend], interval_s: int, state_store: Any | None = None
+    ) -> None:
         self._backends = list(backends)
         self._interval_s = interval_s
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
+        self._state_store = state_store
 
     @property
     def enabled(self) -> bool:
@@ -1338,6 +1430,23 @@ class _PeriodicSmokeTester:
                 # Stop event fired during the wait → exit cleanly.
                 return
             try:
+                # Refresh dynamic model lists and detect new models
+                for backend in self._backends:
+                    refresh = getattr(backend, "refresh_advertised_models", None)
+                    if refresh is not None:
+                        try:
+                            models_before = set(backend.advertised_models)
+                            await refresh()
+                            models_after = set(backend.advertised_models)
+                            if models_after > models_before and self._state_store is not None:
+                                new_models = models_after - models_before
+                                logger.info(
+                                    "new models detected in periodic refresh for backend %r: %s",
+                                    backend.id, sorted(new_models)
+                                )
+                                self._state_store.set_model_release_timestamp(time.time())
+                        except Exception:
+                            logger.exception("periodic model-list refresh failed for %r", backend.id)
                 logger.info("periodic smoke test cycle")
                 await _run_startup_smoke_test(self._backends)
             except Exception:
