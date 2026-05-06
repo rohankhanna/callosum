@@ -171,11 +171,21 @@ class ExploiterRouter:
             min_samples_per_cell=min_samples_per_cell,
         )
         self._last_fit = time.time()
-        logger.info(
-            "ExploiterRouter: fit complete — ready=%s, cells=%d",
-            self._model.is_ready,
-            len(cells),
-        )
+        if self._model.is_ready:
+            logger.warning(
+                "✓ ExploiterRouter READY. auto routing is active. "
+                "Routing to cheapest cells based on learned token costs."
+            )
+        else:
+            # Count how many cells have data
+            with_data = sum(1 for c in cells if (c.model, c.reasoning_effort) in self._model.scores)
+            logger.info(
+                "ExploiterRouter training: %d/%d cells have data. "
+                "auto routing unavailable until all cells reach %d samples. "
+                "Use model: 'auto-learning' for now.",
+                with_data, len(cells),
+                30,  # min_samples_per_cell hard-coded for clarity in log
+            )
 
     def choose(
         self,

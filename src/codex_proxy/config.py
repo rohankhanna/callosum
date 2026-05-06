@@ -90,7 +90,8 @@ class AutoRouterConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # Cold-start fallback bounds (used when no quota_snapshot is available).
-    synthetic_floor_per_day: int = 0
+    # Default floor fires 10 synthetics/day to bootstrap the router early.
+    synthetic_floor_per_day: int = 10
     synthetic_pct_of_organic: float = 0.0
     synthetic_hard_ceiling_per_day: int = 0
     # How often the worker wakes to check whether to fire another synthetic.
