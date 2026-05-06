@@ -1,4 +1,4 @@
-"""Tests for ExploiterRouter and EfficiencyModel."""
+"""Tests for LearnedModelRouter and EfficiencyModel."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import pytest
 
 from codex_proxy.cell_grid import Cell, build_cells
 from codex_proxy.efficiency_model import EfficiencyModel
-from codex_proxy.router import ExploiterRouter
+from codex_proxy.router import LearnedModelRouter
 
 
 def _seed_usage_log(db: Path, rows: list[tuple[str, str, int, str, int]]) -> None:
@@ -128,9 +128,9 @@ def test_efficiency_model_ignores_failed_requests(tmp_path: Path) -> None:
 def test_exploiter_not_trained_when_no_data(tmp_path: Path) -> None:
     """choose() raises NotTrained when model is not ready."""
     db = tmp_path / "empty.sqlite"
-    router = ExploiterRouter(usage_log_path=db)
+    router = LearnedModelRouter(usage_log_path=db)
 
-    with pytest.raises(ExploiterRouter.NotTrained):
+    with pytest.raises(LearnedModelRouter.NotTrained):
         router.choose()
 
 
@@ -147,7 +147,7 @@ def test_exploiter_transitions_to_ready_after_fit(tmp_path: Path) -> None:
     ]
     _seed_usage_log(db, rows)
 
-    router = ExploiterRouter(usage_log_path=db)
+    router = LearnedModelRouter(usage_log_path=db)
     assert router._model is None
 
     # fit() should populate the model
@@ -191,7 +191,7 @@ def test_exploiter_context_window_filtering(tmp_path: Path) -> None:
 
 
 def test_exploiter_respects_cells_fn(tmp_path: Path) -> None:
-    """ExploiterRouter uses cells_fn to get live cell grid."""
+    """LearnedModelRouter uses cells_fn to get live cell grid."""
     db = tmp_path / "dynamic.sqlite"
 
     # Use a dynamic cells function
@@ -200,7 +200,7 @@ def test_exploiter_respects_cells_fn(tmp_path: Path) -> None:
         from codex_proxy.cell_grid import REASONING_LEVELS
         return [Cell(model=m, reasoning_effort=r) for m in pool for r in REASONING_LEVELS]
 
-    router = ExploiterRouter(usage_log_path=db, cells_fn=cells_fn)
+    router = LearnedModelRouter(usage_log_path=db, cells_fn=cells_fn)
 
     # With one model, fit should see 4 cells (1 model × 4 reasoning levels)
     cells = router._cells_fn()

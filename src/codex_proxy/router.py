@@ -134,13 +134,15 @@ class ExplorerRouter:
         )
 
 
-class ExploiterRouter:
-    """Cost-optimal router. Routes to the cell with lowest average token cost.
+class LearnedModelRouter:
+    """Cost-optimal router using a trained efficiency model.
+
+    Routes to the cell with lowest average token cost based on logged request data.
 
     v1 metric: avg_total_tokens per cell (cheaper = lower tokens, across all sessions)
     v2 will use: quality_score / total_tokens once labels accumulate
 
-    Fits the efficiency model from the usage log on demand (via fit() or fit_if_ready()).
+    Fits the efficiency model from the usage log on demand (via fit()).
     The model is ready only when every live cell has >= min_samples_per_cell successful
     requests.
     """
@@ -173,14 +175,14 @@ class ExploiterRouter:
         self._last_fit = time.time()
         if self._model.is_ready:
             logger.warning(
-                "✓ ExploiterRouter READY. auto routing is active. "
+                "✓ LearnedModelRouter READY. auto routing is active. "
                 "Routing to cheapest cells based on learned token costs."
             )
         else:
             # Count how many cells have data
             with_data = sum(1 for c in cells if (c.model, c.reasoning_effort) in self._model.scores)
             logger.info(
-                "ExploiterRouter training: %d/%d cells have data. "
+                "LearnedModelRouter training: %d/%d cells have data. "
                 "auto routing unavailable until all cells reach %d samples. "
                 "Use model: 'auto-learning' for now.",
                 with_data, len(cells),
@@ -196,7 +198,7 @@ class ExploiterRouter:
     ) -> RouterDecision:
         del model_hint  # Hook for future: complexity-aware routing
         if self._model is None or not self._model.is_ready:
-            raise ExploiterRouter.NotTrained(
+            raise LearnedModelRouter.NotTrained(
                 "auto-routing is not ready: the cost model has not been trained yet. "
                 "Use `auto-learning` to keep collecting data, or pick a model explicitly."
             )
@@ -209,5 +211,5 @@ class ExploiterRouter:
         avg_tokens = self._model.scores.get((cell.model, cell.reasoning_effort), 0)
         return RouterDecision(
             cell=cell,
-            reason=f"exploiter: cheapest cell avg_tokens={avg_tokens:.0f}",
+            reason=f"learned-model: cheapest cell avg_tokens={avg_tokens:.0f}",
         )

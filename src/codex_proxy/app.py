@@ -27,7 +27,7 @@ from codex_proxy.backend import Backend, CallHandle
 from codex_proxy.cell_grid import VIRTUAL_MODELS, Cell, build_cells, live_completion_models
 from codex_proxy.config import AutoRouterConfig
 from codex_proxy.errors import RETRYABLE, BackendError, ErrorClass
-from codex_proxy.router import ExploiterRouter, ExplorerRouter
+from codex_proxy.router import LearnedModelRouter, ExplorerRouter
 from codex_proxy.selector import select
 from codex_proxy.session import SessionRegistry
 from codex_proxy.synthetic import SyntheticTopper
@@ -217,7 +217,7 @@ def create_app(
         routing_mode="auto-learning-synthetic",
         cells_fn=_live_cells,
     )
-    exploiter = ExploiterRouter(usage_log_path=usage_log.path if usage_log is not None else None)
+    cost_router = LearnedModelRouter(usage_log_path=usage_log.path if usage_log is not None else None)
 
     auto_cfg = auto_router_config if auto_router_config is not None else AutoRouterConfig()
 
@@ -235,7 +235,7 @@ def create_app(
             usage_log=usage_log,
             explorer=explorer,
             synthetic_explorer=synthetic_explorer,
-            exploiter=exploiter,
+            cost_router=cost_router,
             nonstream=lambda b, p, h: b.responses(p, h),
             stream=lambda b, p, h: b.responses_stream(p, h),
             session_id=None,
@@ -251,7 +251,7 @@ def create_app(
         usage_log_path=usage_log.path if usage_log is not None else None,
         backends=backends_list,
         dispatch=_synthetic_dispatch,
-        exploiter=exploiter,
+        cost_router=cost_router,
     )
     smoke_tester = _PeriodicSmokeTester(
         backends=backends_list,
@@ -291,8 +291,8 @@ def create_app(
                     logger.exception("startup model-list refresh failed for %r", backend.id)
         if startup_smoke_test and backends_list:
             await _run_startup_smoke_test(backends_list)
-        # Prime the exploiter cost model if data exists
-        exploiter.fit(min_samples_per_cell=auto_cfg.exploiter_min_samples_per_cell)
+        # Prime the cost_router cost model if data exists
+        cost_router.fit(min_samples_per_cell=auto_cfg.exploiter_min_samples_per_cell)
         topper.start()
         smoke_tester.start()
         try:
@@ -528,7 +528,7 @@ def create_app(
             usage_log=usage_log,
             explorer=explorer,
             synthetic_explorer=synthetic_explorer,
-            exploiter=exploiter,
+            cost_router=cost_router,
             nonstream=lambda b, p, h: b.chat_completions(p, h),
             stream=lambda b, p, h: b.chat_completions_stream(p, h),
             router_context_safety_margin=auto_cfg.router_context_safety_margin,
@@ -559,7 +559,7 @@ def create_app(
             usage_log=usage_log,
             explorer=explorer,
             synthetic_explorer=synthetic_explorer,
-            exploiter=exploiter,
+            cost_router=cost_router,
             nonstream=lambda b, p, h: b.responses(p, h),
             stream=lambda b, p, h: b.responses_stream(p, h),
             router_context_safety_margin=auto_cfg.router_context_safety_margin,
@@ -589,7 +589,7 @@ async def _dispatch_route(
     usage_log: UsageLog | None,
     explorer: ExplorerRouter,
     synthetic_explorer: ExplorerRouter,
-    exploiter: ExploiterRouter,
+    cost_router: LearnedModelRouter,
     nonstream: NonstreamCall,
     stream: StreamCall,
     router_context_safety_margin: int = 8192,
@@ -612,7 +612,7 @@ async def _dispatch_route(
         usage_log=usage_log,
         explorer=explorer,
         synthetic_explorer=synthetic_explorer,
-        exploiter=exploiter,
+        cost_router=cost_router,
         nonstream=nonstream,
         stream=stream,
         session_id=session_id,
@@ -633,7 +633,7 @@ async def _dispatch_internal(
     usage_log: UsageLog | None,
     explorer: ExplorerRouter,
     synthetic_explorer: ExplorerRouter,
-    exploiter: ExploiterRouter,
+    cost_router: LearnedModelRouter,
     nonstream: NonstreamCall,
     stream: StreamCall,
     session_id: str | None,
@@ -662,17 +662,17 @@ async def _dispatch_internal(
     # Virtual model rewrite. The body is mutated in place so the downstream
     # selector and backend see the resolved (model, reasoning) pair.
     if requested_model == "auto-learning":
-        # Per-request exploitation scheduling: occasionally route to exploiter instead of explorer
+        # Per-request exploitation scheduling: occasionally route to cost_router instead of explorer
         # to test the learned model and keep it fresh against changing landscape.
         exploitation_cap = _exploitation_cap_pct(
             state_store.get_model_release_timestamp() if state_store is not None else None
         )
         should_exploit = random.randint(0, 100) < exploitation_cap
 
-        if should_exploit and exploiter._model is not None and exploiter._model.is_ready:
-            # Route to exploiter (cost-optimal) for this request
+        if should_exploit and cost_router._model is not None and cost_router._model.is_ready:
+            # Route to cost_router (cost-optimal) for this request
             try:
-                decision = exploiter.choose(
+                decision = cost_router.choose(
                     model_hint=None,
                     session_prompt_tokens=session_prompt_tokens,
                     router_context_safety_margin=router_context_safety_margin,
@@ -680,8 +680,8 @@ async def _dispatch_internal(
                 body["model"] = decision.cell.model
                 body.setdefault("reasoning", {})["effort"] = decision.cell.reasoning_effort
                 routing_mode = "auto"
-            except ExploiterRouter.NotTrained:
-                # Fallback to explorer if exploiter raises (shouldn't happen with is_ready check)
+            except LearnedModelRouter.NotTrained:
+                # Fallback to explorer if cost_router raises (shouldn't happen with is_ready check)
                 decision = explorer.choose(
                     session_prompt_tokens=session_prompt_tokens,
                     router_context_safety_margin=router_context_safety_margin,
@@ -729,12 +729,12 @@ async def _dispatch_internal(
         routing_mode = "auto-learning-synthetic"
     elif requested_model == "auto":
         try:
-            decision = exploiter.choose(
+            decision = cost_router.choose(
                 model_hint=None,
                 session_prompt_tokens=session_prompt_tokens,
                 router_context_safety_margin=router_context_safety_margin,
             )
-        except ExploiterRouter.NotTrained as exc:
+        except LearnedModelRouter.NotTrained as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         body["model"] = decision.cell.model
         body.setdefault("reasoning", {})["effort"] = decision.cell.reasoning_effort

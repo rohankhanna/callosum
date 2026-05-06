@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from codex_proxy.cell_grid import Cell, build_cells
-from codex_proxy.router import ExploiterRouter, ExplorerRouter
+from codex_proxy.router import LearnedModelRouter, ExplorerRouter
 
 
 def _seed_log(db: Path, rows: list[tuple[str, str, str, int]]) -> None:
@@ -74,8 +74,8 @@ def test_explorer_decision_carries_reason(tmp_path: Path) -> None:
 
 
 def test_exploiter_raises_not_trained() -> None:
-    router = ExploiterRouter(usage_log_path=None)
-    with pytest.raises(ExploiterRouter.NotTrained):
+    router = LearnedModelRouter(usage_log_path=None)
+    with pytest.raises(LearnedModelRouter.NotTrained):
         router.choose()
 
 
