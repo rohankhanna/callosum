@@ -12,12 +12,12 @@ from codex_proxy.backend import UsageSnapshot
 class StateStore:
     """Per-backend on-disk cache for UsageSnapshot so cooldowns survive restarts.
 
-    Also tracks model release cycle for adaptive exploration scheduling.
+    Also tracks model release cycle and proxy startup for adaptive learned model scheduling.
     """
 
     def __init__(self, base_dir: Path) -> None:
         self._usage_dir = base_dir / "usage"
-        self._model_release_path = base_dir / "model_release.json"
+        self._timing_path = base_dir / "timing.json"
 
     def load_usage(self, backend_id: str) -> UsageSnapshot | None:
         path = self._usage_dir / f"{backend_id}.json"
@@ -44,25 +44,64 @@ class StateStore:
         tmp.write_text(json.dumps(asdict(snapshot)))
         os.replace(tmp, path)
 
+    def get_proxy_startup_timestamp(self) -> float | None:
+        """Return the timestamp when the proxy started (first run or restart).
+
+        Used to calculate days-since-startup for the initial learned model ramp.
+        """
+        if not self._timing_path.exists():
+            return None
+        try:
+            data = json.loads(self._timing_path.read_text())
+            return float(data.get("startup_timestamp"))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            return None
+
+    def set_proxy_startup_timestamp(self, ts: float) -> None:
+        """Record the proxy startup timestamp (called once on lifespan startup).
+
+        Persists across restarts to track the initial 90-day ramp.
+        """
+        self._timing_path.parent.mkdir(parents=True, exist_ok=True)
+        # Read existing data to preserve model_release_timestamp
+        existing = {}
+        if self._timing_path.exists():
+            try:
+                existing = json.loads(self._timing_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                pass
+        existing["startup_timestamp"] = ts
+        tmp = self._timing_path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(existing))
+        os.replace(tmp, self._timing_path)
+
     def get_model_release_timestamp(self) -> float | None:
         """Return the timestamp (seconds since epoch) of the last detected model release.
 
-        Used to calculate days-since-release for adaptive exploration scheduling.
+        Used to calculate days-since-release for model-specific learned model ramp.
         """
-        if not self._model_release_path.exists():
+        if not self._timing_path.exists():
             return None
         try:
-            data = json.loads(self._model_release_path.read_text())
-            return float(data.get("release_timestamp"))
+            data = json.loads(self._timing_path.read_text())
+            return float(data.get("model_release_timestamp"))
         except (OSError, json.JSONDecodeError, TypeError, ValueError):
             return None
 
     def set_model_release_timestamp(self, ts: float) -> None:
         """Record a new model release detection.
 
-        Called when advertised_models changes.
+        Called when advertised_models changes. Resets the learned model ramp.
         """
-        self._model_release_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._model_release_path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps({"release_timestamp": ts}))
-        os.replace(tmp, self._model_release_path)
+        self._timing_path.parent.mkdir(parents=True, exist_ok=True)
+        # Read existing data to preserve startup_timestamp
+        existing = {}
+        if self._timing_path.exists():
+            try:
+                existing = json.loads(self._timing_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                pass
+        existing["model_release_timestamp"] = ts
+        tmp = self._timing_path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(existing))
+        os.replace(tmp, self._timing_path)

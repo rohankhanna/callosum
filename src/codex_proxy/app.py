@@ -114,33 +114,53 @@ def _extract_and_strip_complexity(result: dict[str, Any]) -> tuple[int | None, d
     return None, result
 
 
-def _exploitation_cap_pct(model_release_timestamp: float | None) -> float:
-    """Calculate current exploitation cap percentage based on days since model release.
+def _learned_model_cap_pct(
+    startup_timestamp: float | None,
+    model_release_timestamp: float | None,
+) -> float:
+    """Calculate current learned model usage cap percentage.
 
-    When a new model is detected, exploitation cap drops to 75% (25% exploration).
-    Over the next 30 days, it gradually ramps to 90% (10% exploration).
-    After 30+ days, it stays at 90% until the next model appears.
+    Two phases:
 
-    Returns the exploitation cap as a percentage (0-100).
+    1. **Initial phase (no model release detected)**:
+       - Ramp from 1% to 90% over 90 days from proxy startup
+       - After 90 days: hold at 90% until new model detected
+
+    2. **After model release detected**:
+       - Reset to 75% when new model appears
+       - Ramp from 75% to 90% over 30 days
+       - After 30 days: hold at 90% until next model release
+
+    Returns the learned model cap as a percentage (0-100).
     """
-    if model_release_timestamp is None:
-        # No model release detected yet — conservative default: 75%
-        return 75.0
-
     now_ts = time.time()
-    days_since_release = (now_ts - model_release_timestamp) / 86400
 
-    if days_since_release < 0:
-        # Clock went backwards (shouldn't happen) — reset to conservative
-        return 75.0
+    # Phase 2: New model detected
+    if model_release_timestamp is not None and model_release_timestamp <= now_ts:
+        days_since_release = (now_ts - model_release_timestamp) / 86400
 
-    if days_since_release >= 30:
-        # Fully ramped after 30 days
-        return 90.0
+        if days_since_release >= 30:
+            # Fully ramped after 30 days
+            return 90.0
 
-    # Linearly ramp from 75% to 90% over 30 days
-    cap = 75.0 + (days_since_release / 30) * 15.0
-    return cap
+        # Linearly ramp from 75% to 90% over 30 days
+        cap = 75.0 + (days_since_release / 30) * 15.0
+        return cap
+
+    # Phase 1: No model release detected yet (or startup)
+    if startup_timestamp is not None and startup_timestamp <= now_ts:
+        days_since_startup = (now_ts - startup_timestamp) / 86400
+
+        if days_since_startup >= 90:
+            # Fully ramped after 90 days
+            return 90.0
+
+        # Linearly ramp from 1% to 90% over 90 days
+        cap = 1.0 + (days_since_startup / 90) * 89.0
+        return cap
+
+    # Fallback (shouldn't happen): conservative default
+    return 1.0
 
 
 class PinState:
@@ -266,6 +286,10 @@ def create_app(
         # picked up by the process they actually launched.
         ids = ", ".join(b.id for b in backends_list) if backends_list else "(none)"
         logger.warning("loaded %d backend(s): %s", len(backends_list), ids)
+
+        # Initialize proxy startup timestamp if not already set (for initial 90-day ramp)
+        if state_store is not None and state_store.get_proxy_startup_timestamp() is None:
+            state_store.set_proxy_startup_timestamp(time.time())
         # Refresh dynamic model lists for backends that support it BEFORE the
         # smoke test runs — that way the smoke test probes models the upstream
         # actually still serves, not stale TOML names. Best-effort: any
@@ -662,14 +686,15 @@ async def _dispatch_internal(
     # Virtual model rewrite. The body is mutated in place so the downstream
     # selector and backend see the resolved (model, reasoning) pair.
     if requested_model == "auto-learning":
-        # Per-request exploitation scheduling: occasionally route to cost_router instead of explorer
+        # Per-request learned model routing: occasionally route to cost_router instead of explorer
         # to test the learned model and keep it fresh against changing landscape.
-        exploitation_cap = _exploitation_cap_pct(
-            state_store.get_model_release_timestamp() if state_store is not None else None
+        learned_model_cap = _learned_model_cap_pct(
+            startup_timestamp=state_store.get_proxy_startup_timestamp() if state_store is not None else None,
+            model_release_timestamp=state_store.get_model_release_timestamp() if state_store is not None else None,
         )
-        should_exploit = random.randint(0, 100) < exploitation_cap
+        should_use_learned_model = random.randint(0, 100) < learned_model_cap
 
-        if should_exploit and cost_router._model is not None and cost_router._model.is_ready:
+        if should_use_learned_model and cost_router._model is not None and cost_router._model.is_ready:
             # Route to cost_router (cost-optimal) for this request
             try:
                 decision = cost_router.choose(
