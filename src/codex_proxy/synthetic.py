@@ -480,7 +480,7 @@ class SyntheticTopper:
         if (self._cost_router is not None
             and self._cfg.exploiter_refit_interval_seconds > 0
             and (now_ts - self._cost_router._last_fit) >= self._cfg.exploiter_refit_interval_seconds):
-            self._cost_router.fit(min_samples_per_cell=self._cfg.cost_router_min_samples_per_cell)
+            self._cost_router.fit(min_samples_per_cell=self._cfg.exploiter_min_samples_per_cell)
 
     async def _fire_count_for_backend(self, backend: Backend, *, now_ts: float) -> int:
         snap: Any = await backend.quota_snapshot()

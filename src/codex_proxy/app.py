@@ -1035,39 +1035,42 @@ async def _extract_complexity_from_stream(
     then streams the rest transparently.
 
     Stores the extracted complexity class in _complexity_class_context.
+    Preserves all lines in multi-line chunks; only the marker-containing line is modified.
     """
     complexity_found = False
     async for chunk in source:
         if not complexity_found:
             try:
-                # Parse SSE chunk to extract content
                 chunk_text = chunk.decode("utf-8")
-                # SSE chunks are like: data: {"choices":[{"delta":{"content":"..."},...
-                if "data: " in chunk_text:
-                    # Extract JSON part after "data: "
-                    lines = chunk_text.split("\n")
-                    for line in lines:
-                        if line.startswith("data: "):
-                            json_str = line[6:]
-                            try:
-                                data = json.loads(json_str)
-                                if data.get("choices") and len(data["choices"]) > 0:
-                                    delta = data["choices"][0].get("delta", {})
-                                    content = delta.get("content", "")
-                                    if content:
-                                        # Found content — check for complexity marker
-                                        complexity_class, cleaned = _extract_complexity_class(content)
-                                        if complexity_class is not None:
-                                            _complexity_class_context.set(complexity_class)
-                                            # Reconstruct chunk with cleaned content
-                                            delta["content"] = cleaned
-                                            data["choices"][0]["delta"] = delta
-                                            chunk = (line[:6] + json.dumps(data) + "\n").encode("utf-8")
-                                            complexity_found = True
-                                        else:
-                                            complexity_found = True  # Stop looking after first content
-                            except (json.JSONDecodeError, KeyError, IndexError):
-                                pass
+                lines = chunk_text.split("\n")
+                new_lines = []
+                for line in lines:
+                    if not complexity_found and line.startswith("data: "):
+                        json_str = line[6:]
+                        if json_str.strip() == "[DONE]":
+                            complexity_found = True
+                            new_lines.append(line)
+                            continue
+                        try:
+                            data = json.loads(json_str)
+                            choices = data.get("choices") or []
+                            if choices:
+                                delta = choices[0].get("delta", {})
+                                content = delta.get("content") or ""
+                                if content:
+                                    complexity_class, cleaned = _extract_complexity_class(content)
+                                    complexity_found = True
+                                    if complexity_class is not None:
+                                        _complexity_class_context.set(complexity_class)
+                                        delta["content"] = cleaned
+                                        choices[0]["delta"] = delta
+                                        data["choices"] = choices
+                                        new_lines.append("data: " + json.dumps(data))
+                                        continue
+                        except (json.JSONDecodeError, KeyError, IndexError):
+                            complexity_found = True  # Stop searching; don't loop on malformed chunks
+                    new_lines.append(line)
+                chunk = "\n".join(new_lines).encode("utf-8")
             except (UnicodeDecodeError, AttributeError):
                 pass
         yield chunk
