@@ -589,7 +589,11 @@ def create_app(
             headers = {"X-Proxy-Request-ID": str(request_id)}
             if isinstance(result, dict):
                 return JSONResponse(result, headers=headers)
-            # For streaming (AsyncIterator), wrap with StreamingResponse
+            # Result is already a StreamingResponse from _dispatch_stream
+            if isinstance(result, StreamingResponse):
+                result.headers.update(headers)
+                return result
+            # Fallback: shouldn't reach here, but wrap just in case
             return StreamingResponse(result, media_type="text/event-stream", headers=headers)
         return result
 
@@ -620,7 +624,11 @@ def create_app(
             headers = {"X-Proxy-Request-ID": str(request_id)}
             if isinstance(result, dict):
                 return JSONResponse(result, headers=headers)
-            # For streaming (AsyncIterator), wrap with StreamingResponse
+            # Result is already a StreamingResponse from _dispatch_stream
+            if isinstance(result, StreamingResponse):
+                result.headers.update(headers)
+                return result
+            # Fallback: shouldn't reach here, but wrap just in case
             return StreamingResponse(result, media_type="text/event-stream", headers=headers)
         return result
 
