@@ -929,9 +929,10 @@ async def _dispatch_nonstream(
         ts_end = time.time()
         _remember_binding(session_registry, session_id, backend.id)
 
-        # Extract complexity classification if this was an auto-learning request
+        # Always extract and strip complexity markers from responses
+        # (auto-learning requests track the class; regular requests just clean the output)
+        complexity_class, result = _extract_and_strip_complexity(result)
         if _extract_complexity_context.get():
-            complexity_class, result = _extract_and_strip_complexity(result)
             _complexity_class_context.set(complexity_class)
 
         _log_attempt(
@@ -1074,10 +1075,9 @@ async def _dispatch_stream(
             continue
         _remember_binding(session_registry, session_id, backend.id)
 
-        # For auto-learning requests, extract complexity from stream if needed
+        # Always extract and strip complexity markers from streaming responses
         stream = _prepend(first_chunk, iterator)
-        if _extract_complexity_context.get():
-            stream = _extract_complexity_from_stream(stream)
+        stream = _extract_complexity_from_stream(stream)
 
         # Wrap stream with safe error handling for peer disconnections
         stream = _safe_stream(stream, backend_id=backend.id)
