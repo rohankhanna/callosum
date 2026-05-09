@@ -9,6 +9,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ from codex_proxy.backend import Backend, CallHandle
 from codex_proxy.cell_grid import VIRTUAL_MODELS, Cell, build_cells, live_completion_models
 from codex_proxy.config import AutoRouterConfig
 from codex_proxy.errors import RETRYABLE, BackendError, ErrorClass
+from codex_proxy.fallback import FallbackExecutor, should_attempt_fallback
 from codex_proxy.router import LearnedModelRouter, ExplorerRouter
 from codex_proxy.selector import select
 from codex_proxy.session import SessionRegistry
@@ -34,6 +36,12 @@ from codex_proxy.synthetic import SyntheticTopper
 from codex_proxy.usage_log import UsageLog, UsageLogEntry
 
 logger = logging.getLogger("codex_proxy.startup")
+
+
+def _utc_timestamp() -> str:
+    """Return current time in ISO 8601 UTC format with Z suffix."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
 
 # Clients opt into sticky routing by sending this header. When absent, every
 # request is a fresh selection. There is no server-side "session mode" knob.
@@ -90,12 +98,13 @@ def _extract_complexity_class(text: str) -> tuple[int | None, str]:
 def _extract_and_strip_complexity(result: dict[str, Any]) -> tuple[int | None, dict[str, Any]]:
     """Extract complexity class from response dict and strip the marker.
 
-    Navigates the OpenAI-compatible response structure (choices[0].message.content),
-    calls _extract_complexity_class to parse and strip the {{{N}}} marker,
-    and returns (complexity_class, modified_result_dict).
+    Handles both response formats:
+    1. Chat completions: choices[0].message.content
+    2. Responses API: output[0].content[0].text
 
-    If the marker is not found, logs a warning and returns (None, result_unchanged).
+    Returns (complexity_class, modified_result_dict) where result is updated with cleaned content.
     """
+    # Try chat completions format first
     try:
         if result.get("choices") and len(result["choices"]) > 0:
             choice = result["choices"][0]
@@ -104,13 +113,29 @@ def _extract_and_strip_complexity(result: dict[str, Any]) -> tuple[int | None, d
                 if isinstance(content, str):
                     complexity_class, cleaned = _extract_complexity_class(content)
                     if complexity_class is not None:
-                        # Update the response dict with cleaned content
                         result["choices"][0]["message"]["content"] = cleaned
-                    else:
-                        logger.warning("Complexity marker not found in auto-learning response")
                     return complexity_class, result
-    except (KeyError, IndexError, TypeError) as e:
-        logger.warning(f"Failed to extract complexity class from response: {e}")
+    except (KeyError, IndexError, TypeError):
+        pass
+
+    # Try Responses API format
+    try:
+        output = result.get("output")
+        if output and isinstance(output, list) and len(output) > 0:
+            output_item = output[0]
+            content_list = output_item.get("content")
+            if content_list and isinstance(content_list, list) and len(content_list) > 0:
+                content_item = content_list[0]
+                text = content_item.get("text")
+                if isinstance(text, str):
+                    complexity_class, cleaned = _extract_complexity_class(text)
+                    if complexity_class is not None:
+                        result["output"][0]["content"][0]["text"] = cleaned
+                    return complexity_class, result
+    except (KeyError, IndexError, TypeError):
+        pass
+
+    logger.warning("Could not extract complexity marker from response (unsupported format)")
     return None, result
 
 
@@ -858,6 +883,7 @@ async def _dispatch_nonstream(
     routing_mode: str = "pass-through",
 ) -> dict[str, Any]:
     excluded: set[str] = set()
+    excluded_errors: dict[str, BackendError] = {}
     last_error: BackendError | None = None
     while True:
         backend = await select(
@@ -898,6 +924,7 @@ async def _dispatch_nonstream(
             if exc.classification not in RETRYABLE:
                 raise _terminal_http(exc) from exc
             excluded.add(backend.id)
+            excluded_errors[backend.id] = exc
             continue
         ts_end = time.time()
         _remember_binding(session_registry, session_id, backend.id)
@@ -928,7 +955,35 @@ async def _dispatch_nonstream(
             prompt_complexity_class=_complexity_class_context.get(),
         )
         return result
-    raise _no_viable(model=model, last_error=last_error)
+
+    # All primary backends exhausted. Try fallback strategies.
+    error_classifications = {
+        backend_id: error.classification
+        for backend_id, error in excluded_errors.items()
+    }
+
+    if should_attempt_fallback(error_classifications):
+        fallback = FallbackExecutor()
+        # TODO: Implement fallback retry logic here
+        # For now, just log that we attempted it
+        fallback.record_attempt(
+            "considered_fallback",
+            "skipped",
+            reason="fallback_not_yet_implemented",
+        )
+        raise _no_viable(
+            model=model,
+            last_error=last_error,
+            excluded_backends=excluded_errors,
+            fallback_executor=fallback,
+        )
+
+    raise _no_viable(
+        model=model,
+        last_error=last_error,
+        excluded_backends=excluded_errors,
+        fallback_executor=None,
+    )
 
 
 async def _dispatch_stream(
@@ -949,6 +1004,7 @@ async def _dispatch_stream(
     routing_mode: str = "pass-through",
 ) -> StreamingResponse:
     excluded: set[str] = set()
+    excluded_errors: dict[str, BackendError] = {}
     last_error: BackendError | None = None
     while True:
         backend = await select(
@@ -1014,6 +1070,7 @@ async def _dispatch_stream(
             if exc.classification not in RETRYABLE:
                 raise _terminal_http(exc) from exc
             excluded.add(backend.id)
+            excluded_errors[backend.id] = exc
             continue
         _remember_binding(session_registry, session_id, backend.id)
 
@@ -1021,6 +1078,9 @@ async def _dispatch_stream(
         stream = _prepend(first_chunk, iterator)
         if _extract_complexity_context.get():
             stream = _extract_complexity_from_stream(stream)
+
+        # Wrap stream with safe error handling for peer disconnections
+        stream = _safe_stream(stream, backend_id=backend.id)
 
         return StreamingResponse(
             _log_on_complete(
@@ -1041,13 +1101,62 @@ async def _dispatch_stream(
             ),
             media_type="text/event-stream",
         )
-    raise _no_viable(model=model, last_error=last_error)
+
+    # All primary backends exhausted. Try fallback strategies.
+    error_classifications = {
+        backend_id: error.classification
+        for backend_id, error in excluded_errors.items()
+    }
+
+    if should_attempt_fallback(error_classifications):
+        fallback = FallbackExecutor()
+        # TODO: Implement fallback retry logic here
+        # For now, just log that we attempted it
+        fallback.record_attempt(
+            "considered_fallback",
+            "skipped",
+            reason="fallback_not_yet_implemented",
+        )
+        raise _no_viable(
+            model=model,
+            last_error=last_error,
+            excluded_backends=excluded_errors,
+            fallback_executor=fallback,
+        )
+
+    raise _no_viable(
+        model=model,
+        last_error=last_error,
+        excluded_backends=excluded_errors,
+        fallback_executor=None,
+    )
 
 
 async def _prepend(first: bytes, rest: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
     yield first
     async for chunk in rest:
         yield chunk
+
+
+async def _safe_stream(
+    source: AsyncIterator[bytes], backend_id: str = "unknown"
+) -> AsyncIterator[bytes]:
+    """Safely stream chunks, gracefully handling peer disconnections.
+
+    When a peer closes connection without completing the response body,
+    log the error but don't crash the ASGI app. The client sees the partial
+    response (already sent headers are committed).
+    """
+    try:
+        async for chunk in source:
+            yield chunk
+    except Exception as exc:
+        # Peer closed connection or other streaming error
+        ts = _utc_timestamp()
+        logger.warning(
+            f"[{ts}] streaming error from {backend_id}: {type(exc).__name__}: {exc}"
+        )
+        # Don't re-raise; client already got partial response. Just stop streaming.
 
 
 async def _extract_complexity_from_stream(
@@ -1058,6 +1167,9 @@ async def _extract_complexity_from_stream(
     For streaming responses, the {{{N}}} marker appears at the start of the first
     delta message. This function buffers until it finds the marker, extracts it,
     then streams the rest transparently.
+
+    Handles both chat completions format (choices[0].delta.content) and Responses API
+    format (response.output_text.delta events with delta field).
 
     Stores the extracted complexity class in _complexity_class_context.
     Preserves all lines in multi-line chunks; only the marker-containing line is modified.
@@ -1078,8 +1190,9 @@ async def _extract_complexity_from_stream(
                             continue
                         try:
                             data = json.loads(json_str)
-                            choices = data.get("choices") or []
-                            if choices:
+                            # Try chat completions format first
+                            choices = data.get("choices")
+                            if choices and len(choices) > 0:
                                 delta = choices[0].get("delta", {})
                                 content = delta.get("content") or ""
                                 if content:
@@ -1092,7 +1205,19 @@ async def _extract_complexity_from_stream(
                                     data["choices"] = choices
                                     new_lines.append("data: " + json.dumps(data))
                                     continue
-                        except (json.JSONDecodeError, KeyError, IndexError):
+                            # Try Responses API format (response.output_text.delta events)
+                            event_type = data.get("type")
+                            if event_type == "response.output_text.delta":
+                                delta_text = data.get("delta") or ""
+                                if delta_text:
+                                    complexity_class, cleaned = _extract_complexity_class(delta_text)
+                                    complexity_found = True
+                                    if complexity_class is not None:
+                                        _complexity_class_context.set(complexity_class)
+                                    data["delta"] = cleaned
+                                    new_lines.append("data: " + json.dumps(data))
+                                    continue
+                        except (json.JSONDecodeError, KeyError, IndexError, TypeError):
                             complexity_found = True  # Stop searching; don't loop on malformed chunks
                     new_lines.append(line)
                 chunk = "\n".join(new_lines).encode("utf-8")
@@ -1721,7 +1846,34 @@ def _terminal_http(exc: BackendError) -> HTTPException:
     return HTTPException(status_code=status, detail=exc.message or exc.classification)
 
 
-def _no_viable(*, model: str, last_error: BackendError | None) -> HTTPException:
+def _no_viable(
+    *,
+    model: str,
+    last_error: BackendError | None,
+    excluded_backends: dict[str, BackendError] | None = None,
+    fallback_executor: FallbackExecutor | None = None,
+) -> HTTPException:
+    """Log all failed backends and return appropriate error."""
+    if excluded_backends:
+        # Build error classification map for logging
+        error_classifications = {
+            backend_id: error.classification
+            for backend_id, error in excluded_backends.items()
+        }
+
+        if fallback_executor:
+            fallback_executor.log_final_exhaustion(model, error_classifications)
+        else:
+            # Fallback not attempted, log basic info
+            failures = []
+            for backend_id, error in excluded_backends.items():
+                failures.append(f"{backend_id}: {error.classification}")
+            ts = _utc_timestamp()
+            logger.warning(
+                f"[{ts}] all backends exhausted for model {model!r}. "
+                f"Failures: {'; '.join(failures)}"
+            )
+
     if last_error is None:
         return HTTPException(status_code=503, detail=f"no viable backend for model {model!r}")
     status = _EXHAUSTED_STATUS.get(last_error.classification, 502)

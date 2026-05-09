@@ -1,8 +1,8 @@
-# codex-proxy
+# API Proxy
 
-A small local HTTP proxy that sits in front of multiple Codex Plus/Pro authentications and rotates across them. One endpoint on `127.0.0.1`, many `auth.json` vaults behind it. When one account is rate-limited or otherwise unavailable, the proxy sends the next request to another. When *all* of them are weekly-exhausted, the proxy can optionally fall back to free-tier OpenRouter models so you keep working at a slower pace until your weekly resets ([details](#auto-fallback-to-openrouter-free-tier)).
+A small local HTTP proxy that routes requests across multiple upstream accounts and manages request distribution. One endpoint on `127.0.0.1`, many upstream accounts behind it. When one account is rate-limited or otherwise unavailable, the proxy sends the next request to another. When *all* of them are exhausted, the proxy can optionally fall back to free-tier models so you keep working at a slower pace until limits reset.
 
-It is deliberately a less-than-intelligent router. It does not summarise, retry mid-stream, synthesise continuity, or do anything fancier than "pick an account that can serve this request, and if it fails, try the next one." The OpenAI-compatible routes (`/v1/responses` and `/v1/chat/completions`) exist so your normal Codex-speaking clients can point at this proxy without knowing anything changed.
+It is deliberately a less-than-intelligent router. It does not summarise, retry mid-stream, synthesise continuity, or do anything fancier than "pick an account that can serve this request, and if it fails, try the next one." The OpenAI-compatible routes (`/v1/responses` and `/v1/chat/completions`) exist so any OpenAI-compatible client can point at this proxy without knowing anything changed.
 
 ## Contents
 
@@ -39,37 +39,29 @@ It is deliberately a less-than-intelligent router. It does not summarise, retry 
 
 ## How it works (architecture)
 
-Three roles. Two of them involve a Codex CLI binary — easy to confuse.
+The proxy sits between clients and upstream services, managing request distribution and credential handling.
 
 ```
-                                                       ┌──────────────────────┐
-[ operator's Codex CLI ]   one-off, only for login →  │  account-a/auth.json │
-[ operator's Codex CLI ]   one-off, only for login →  │  account-b/auth.json │
-                                                       └──────────┬───────────┘
-                                                                  │ files on disk
-                                                                  ▼
-                                                       ┌──────────────────────┐
-[ end user's Codex CLI ] ── HTTP /v1/responses ─────► │   codex-proxy server  │ ── HTTPS ──► chatgpt.com/backend-api/codex
-[ another Codex CLI    ] ── HTTP /v1/responses ─────► │   (FastAPI process)   │           (with vault's access token +
-[ Aider / Cursor / ... ] ── HTTP /v1/chat/completions │                       │            chatgpt-account-id header)
-                                                       └──────────────────────┘
-                                                                  ▲
-                            Authorization: Bearer <api-key> ──────┘
-                            (only when [auth] is enabled)
+[ Client 1 ]   HTTP /v1/responses ─────┐
+[ Client 2 ]   HTTP /v1/chat/completions ├──► [ API Proxy ]  ─► [ Credential Custody ]  ─► [ Upstream Service ]
+[ Client 3 ]   HTTP /v1/chat/completions │    (FastAPI)         (manages tokens)           (OpenAI-compatible)
+                                        └─► (with bearer token)
+
+                            Authorization: Bearer <api-key> (from proxy's /auth/keys)
 ```
 
-Two completely different auth flows are involved:
+Two auth flows are involved:
 
 | Layer | What it secures | Credential | Where it lives |
 | --- | --- | --- | --- |
-| **Client → Proxy** | Your `codex` CLI authenticating to the proxy | API key minted via `/auth/keys` | `CODEX_PROXY_TOKEN` env var |
-| **Proxy → ChatGPT** | The proxy authenticating to `chatgpt.com/backend-api/codex` | OAuth tokens from `auth.json` | `~/.codex-proxy/vaults/*/auth.json` |
+| **Client → Proxy** | Client authenticating to the proxy | API key minted via `/auth/keys` | `PROXY_TOKEN` env var |
+| **Proxy → Upstream** | The proxy authenticating to upstream services | Managed by credential custody service | Credential service (not proxy) |
 
-The `auth.json` files are the proxy's **upstream** credentials. End users never see them. End users get their own short-lived API keys, completely unrelated to your Codex Plus accounts.
+Clients get their own short-lived API keys via the proxy's `/auth/keys` endpoint. The proxy never handles upstream credentials directly — a separate credential custody service manages them, issues stand-in tokens, and injects them only on final-hop requests.
 
-The proxy is just a FastAPI process. It does **not** shell out to a Codex CLI at request time — there is no Codex CLI inside the server. It reads `auth.json` directly, refreshes the OAuth access token over HTTPS when it nears expiry, and forwards Responses-API requests upstream itself. The operator's CLI is only used once per account, to log in and produce `auth.json`.
+The proxy is a FastAPI process that routes requests based on availability and load. It forwards OpenAI-compatible `/v1/responses` and `/v1/chat/completions` requests through the credential custody service, which handles token provisioning and upstream credential injection.
 
-## Quick start (operator)
+## Quick start
 
 Install with [uv](https://docs.astral.sh/uv/):
 
@@ -77,15 +69,7 @@ Install with [uv](https://docs.astral.sh/uv/):
 uv sync
 ```
 
-Each Codex account you want to rotate across needs its own `auth.json`. The fastest way to get one: log into the account with the normal Codex CLI, then **move** (not copy) `~/.codex/auth.json` to a vault path:
-
-```
-mkdir -p ~/.codex-proxy/vaults/account-a
-mv ~/.codex/auth.json ~/.codex-proxy/vaults/account-a/auth.json
-chmod 600 ~/.codex-proxy/vaults/account-a/auth.json
-```
-
-Repeat for each account (log in to the CLI as that account, then `mv` its `auth.json` out). Moving rather than copying avoids the [refresh-chain caveat](#operational-notes).
+The proxy requires a credential custody service running on the local network. Configure it to point to your credential service:
 
 Write `~/.config/codex-proxy/config.toml`:
 
@@ -105,15 +89,19 @@ capture_bodies = true
 db = "/home/you/.local/state/codex-proxy/auth.sqlite"
 
 [[backends]]
-id = "account-a"
-vault_path = "/home/you/.codex-proxy/vaults/account-a/auth.json"
+id = "primary"
+type = "credential_proxy"
+proxy_url = "http://127.0.0.1:7342"
 models = ["model-a0e7"]
 
 [[backends]]
-id = "account-b"
-vault_path = "/home/you/.codex-proxy/vaults/account-b/auth.json"
+id = "secondary"
+type = "credential_proxy"
+proxy_url = "http://127.0.0.1:7342"
 models = ["model-a0e7"]
 ```
+
+Replace `proxy_url` with your credential service's URL. Ensure the credential service is running before starting the proxy. The service itself determines which accounts/credentials are used.
 
 Start the server:
 
@@ -493,23 +481,22 @@ Passwords are stored as **argon2id** hashes. Session tokens and API keys are 32 
 
 ### `[[backends]]`
 
-One table per Codex account. Each backend needs a unique `id` and its own `auth.json` vault.
+One table per upstream account. Each backend needs a unique `id` and credentials at a credential service.
 
 ```toml
 [[backends]]
-id = "account-a"
-vault_path = "/home/you/.codex-proxy/vaults/account-a/auth.json"
-models = ["model-a0e7"]
-codex_base_url = "https://chatgpt.com/backend-api/codex"   # optional
+id = "primary"
+type = "credential_proxy"
+proxy_url = "http://127.0.0.1:7342"
+models = ["model-a0e7", "model-a0c3"]
 ```
 
-- `id` — required. Used in `/status`, `/control/pin`, and session bindings.
-- `vault_path` — required. Absolute path to the account's `auth.json` (the format the Codex CLI login flow writes). Must contain a `tokens` object with `access_token` and `refresh_token`; `account_id` and `id_token` are used when present. The file is rewritten in place after each successful OAuth refresh.
-- `models` — required as a **cold-start fallback**. The proxy fetches the live model list for this account from upstream's `/backend-api/codex/models` at startup (and refreshes hourly), and uses *that* dynamic list in preference to whatever's in the TOML. The TOML value is what's served until the first successful upstream refresh — so it must be non-empty, but it doesn't need to be exhaustive or up to date. Codex's lineup changes monthly (and trending toward weekly), so this design means operators don't have to chase it.
-- `type` — optional. Defaults to `"codex_auth_vault"` (the only supported type).
-- `codex_base_url` — optional. Defaults to the ChatGPT backend base.
+- `id` — required. Used in `/status`, `/control/pin`, and session bindings. Must be unique across all backends.
+- `type` — required. Must be `"credential_proxy"` to forward requests to a credential service.
+- `proxy_url` — required. Base URL of the credential service (e.g., `http://127.0.0.1:7342` for a local service).
+- `models` — required as a **cold-start fallback**. The proxy fetches the live model list from the service at startup (and refreshes hourly), and uses *that* dynamic list in preference to whatever's in the TOML. The TOML value is what's served until the first successful upstream refresh — so it must be non-empty, but it doesn't need to be exhaustive or up to date. Model listings change frequently, so this design means operators don't have to manually chase updates.
 
-To rotate across multiple accounts, declare multiple `[[backends]]` entries with different `vault_path`s. The `models` cold-start values can be the same across them (or even just `["model-a0e7"]` everywhere) — each backend pulls its actual catalog at startup based on what the account has access to.
+To distribute load across multiple backends, declare multiple `[[backends]]` entries pointing to the same or different credential services. The `models` values can be the same across them — each backend pulls its actual catalog at startup based on what the service provides.
 
 ## Endpoints
 
@@ -793,6 +780,7 @@ For systemd users, prefer a `systemd.timer` over cron — easier to inspect via 
 
 ## Operational notes
 
+- **SystemManager dependency management.** On systems running system manager, codex-proxy may be configured as a managed dependency. Use `system manager dependencies list` to check status and `system manager dependencies stop codex-proxy` / `start codex-proxy` to control it. Do not run multiple instances on the same port (8765 by default)—only the first will bind successfully; subsequent instances fail with "address already in use" and requests will hit the original instance instead.
 - **Auth.json refresh-chain caveat.** The proxy reads `auth.json` directly and owns the OAuth refresh chain for that account. Every successful refresh produces a new refresh token and writes it back to the file. If anything else (e.g. your normal `codex` usage on the same account) refreshes against the same auth file in parallel, whichever side rotates first invalidates the other. **Either dedicate an account to the proxy, or route your own Codex usage through the proxy too** (using the [Codex CLI Option A](#option-a--codex_proxy-as-the-global-default-recommended-for-single-point-of-auth-setups) global-default setup).
 - **Body capture is sensitive data.** With `capture_bodies = true`, prompts and responses are stored on disk in cleartext (after zlib decompression). Treat the database file as sensitive; `chmod 600` is a sensible baseline. Flip `capture_bodies = false` once you've collected enough corpus to model consumption; turn it back on whenever Codex updates its models.
 - **Quota-percent granularity.** `five_hourly_used_percent` and `weekly_used_percent` are integer percentages reported by the upstream (over the wire as `x-codex-primary-used-percent` and `x-codex-secondary-used-percent` respectively). Single small calls often show `Δ = 0`. Aggregate across many calls for a useful signal.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 import uvicorn
@@ -25,7 +26,14 @@ def main() -> None:
     # OK/SKIPPED lines get silently dropped — operator only sees FAILED.
     logging.getLogger("codex_proxy.startup").setLevel(logging.INFO)
     if not logging.getLogger().handlers:
-        logging.basicConfig(level=logging.INFO, format="%(levelname)s:  %(message)s")
+        # Use UTC timestamps in ISO 8601 format per polestar compliance
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s:  %(message)s",
+            datefmt="%Y-%m-%dT%H:%M:%SZ",
+        )
+        # Convert to UTC
+        logging.Formatter.converter = lambda *args: datetime.now(timezone.utc).timetuple()
 
     parser = argparse.ArgumentParser(prog="codex-proxy")
     parser.add_argument("--config", type=Path, default=_default_config_path())

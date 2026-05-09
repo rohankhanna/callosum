@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from codex_proxy.auth_vault import AuthVault
 from codex_proxy.backend import Backend
@@ -15,7 +15,7 @@ from codex_proxy.backends.codex_auth_vault import (
 from codex_proxy.backends.codex_auth_vault import CodexAuthVaultBackend
 from codex_proxy.state import StateStore
 
-BackendType = Literal["codex_auth_vault"]
+BackendType = Literal["codex_auth_vault", "credential_proxy"]
 
 
 class ServerConfig(BaseModel):
@@ -138,9 +138,27 @@ class BackendConfig(BaseModel):
 
     id: str
     type: BackendType = "codex_auth_vault"
-    vault_path: Path
+    vault_path: Path | None = None
+    proxy_url: str | None = None
+    upstream_url: str | None = None
     models: list[str] = Field(default_factory=list)
     codex_base_url: str = CODEX_AUTH_VAULT_DEFAULT_BASE_URL
+
+    @model_validator(mode="after")
+    def _validate_credential_source(self) -> BackendConfig:
+        """Enforce exactly one of vault_path or proxy_url is set."""
+        has_vault = self.vault_path is not None
+        has_proxy = self.proxy_url is not None
+        if has_vault and has_proxy:
+            raise ValueError("cannot specify both vault_path and proxy_url")
+        if self.type == "codex_auth_vault" and not has_vault:
+            raise ValueError("codex_auth_vault requires vault_path")
+        if self.type == "credential_proxy":
+            if not has_proxy:
+                raise ValueError("credential_proxy requires proxy_url")
+            if not self.upstream_url:
+                raise ValueError("credential_proxy requires upstream_url")
+        return self
 
 
 class Config(BaseModel):
@@ -167,14 +185,25 @@ def build_backend(
 ) -> Backend:
     if not cfg.models:
         raise ValueError(f"backend {cfg.id!r}: models is required")
-    vault = AuthVault(path=cfg.vault_path)
-    return CodexAuthVaultBackend(
-        id=cfg.id,
-        vault=vault,
-        advertised_models=frozenset(cfg.models),
-        base_url=cfg.codex_base_url,
-        state_store=state_store,
-    )
+    if cfg.type == "credential_proxy":
+        from codex_proxy.backends.credential_proxy import CredentialProxyBackend
+
+        return CredentialProxyBackend(
+            id=cfg.id,
+            proxy_url=cfg.proxy_url,
+            upstream_url=cfg.upstream_url,
+            advertised_models=frozenset(cfg.models),
+            state_store=state_store,
+        )
+    else:  # codex_auth_vault
+        vault = AuthVault(path=cfg.vault_path)
+        return CodexAuthVaultBackend(
+            id=cfg.id,
+            vault=vault,
+            advertised_models=frozenset(cfg.models),
+            base_url=cfg.codex_base_url,
+            state_store=state_store,
+        )
 
 
 def build_backends(cfg: Config, *, env: Mapping[str, str] | None = None) -> list[Backend]:
