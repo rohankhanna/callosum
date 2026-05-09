@@ -51,6 +51,7 @@ class CredentialProxyBackend:
         proxy_url: str,
         upstream_url: str,
         advertised_models: frozenset[str],
+        custody_account: str | None = None,
         state_store: StateStore | None = None,
     ) -> None:
         if not advertised_models:
@@ -59,6 +60,8 @@ class CredentialProxyBackend:
         self._proxy_url = proxy_url.rstrip("/")
         self._upstream_url = upstream_url.rstrip("/")
         self._advertised_models: frozenset[str] = advertised_models
+        # Use provided custody_account or default to f"service-{id}"
+        self._custody_account = custody_account or f"service-{id}"
         self._state_store = state_store
         loaded = state_store.load_usage(id) if state_store is not None else None
         self._usage = loaded or UsageSnapshot(
@@ -91,7 +94,7 @@ class CredentialProxyBackend:
         try:
             response = await self._http_client.post(
                 f"{self._proxy_url}/v1/standin",
-                json={"account": f"service-{self.id}", "ttl_seconds": 1800},
+                json={"account": self._custody_account, "ttl_seconds": 1800},
             )
             response.raise_for_status()
             data = response.json()

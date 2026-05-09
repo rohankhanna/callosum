@@ -141,6 +141,7 @@ class BackendConfig(BaseModel):
     vault_path: Path | None = None
     proxy_url: str | None = None
     upstream_url: str | None = None
+    custody_account: str | None = None
     models: list[str] = Field(default_factory=list)
     codex_base_url: str = CODEX_AUTH_VAULT_DEFAULT_BASE_URL
 
@@ -193,6 +194,7 @@ def build_backend(
             proxy_url=cfg.proxy_url,
             upstream_url=cfg.upstream_url,
             advertised_models=frozenset(cfg.models),
+            custody_account=cfg.custody_account,
             state_store=state_store,
         )
     else:  # codex_auth_vault
