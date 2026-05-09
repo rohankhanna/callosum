@@ -1529,7 +1529,8 @@ async def _diagnose_backend(backend: Backend) -> dict[str, Any]:
         async for _chunk in backend.responses_stream(body, handle):
             pass
     except BackendError as exc:
-        return {
+        # Build detailed error result with quota information if available
+        result = {
             "id": backend.id,
             "ok": False,
             "skipped": False,
@@ -1539,6 +1540,11 @@ async def _diagnose_backend(backend: Backend) -> dict[str, Any]:
             "reason": exc.message or exc.classification,
             "model": model,
         }
+        # Include quota snapshots for rate-limited errors
+        if exc.classification == "rate_limited" and handle.quota_after is not None:
+            quota = handle.quota_after
+            result["quota_after"] = quota
+        return result
     return _evaluate_diagnostic(backend.id, handle, model, kind=backend.kind)
 
 
@@ -1650,16 +1656,58 @@ def _log_smoke_result(result: dict[str, Any]) -> None:
     """One human-readable line per backend smoke test result."""
     backend_id = result.get("id", "?")
     if result.get("skipped"):
-        logger.info("  [%s] SKIPPED — %s", backend_id, result.get("reason", "in cooldown"))
+        cooldown_until = result.get("cooldown_until_ts")
+        reason = result.get("reason", "in cooldown")
+        if cooldown_until is not None:
+            from datetime import datetime, timezone
+            reset_time = datetime.fromtimestamp(cooldown_until, tz=timezone.utc).isoformat()
+            reason = f"{reason} (reset at {reset_time})"
+        logger.info("  [%s] SKIPPED — %s", backend_id, reason)
         return
     if result.get("ok"):
         upstream = result.get("upstream_status")
         logger.info("  [%s] OK — upstream %s", backend_id, upstream)
         return
+
     stage = result.get("stage", "?")
     classification = result.get("classification")
     status_code = result.get("status_code")
     reason = result.get("reason") or result.get("failed_checks") or "(no reason)"
+
+    # For rate_limited errors, include quota exhaustion details
+    quota_msg = ""
+    if classification == "rate_limited":
+        quota = result.get("quota_after")
+        if quota is not None:
+            from datetime import datetime, timezone
+            exhaustion_info = []
+
+            # 5-hour quota status
+            if quota.five_hourly_used_percent is not None:
+                pct = quota.five_hourly_used_percent
+                exhaustion_info.append(f"5h-window {pct}%")
+                if pct >= 99:
+                    if quota.five_hourly_reset_at is not None:
+                        reset = datetime.fromtimestamp(quota.five_hourly_reset_at, tz=timezone.utc)
+                        exhaustion_info.append(f"(resets {reset.isoformat()})")
+                    else:
+                        exhaustion_info.append("(resets ~5 hours)")
+
+            # Weekly quota status
+            if quota.weekly_used_percent is not None:
+                pct = quota.weekly_used_percent
+                exhaustion_info.append(f"weekly {pct}%")
+                if pct >= 99:
+                    if quota.weekly_reset_at is not None:
+                        reset = datetime.fromtimestamp(quota.weekly_reset_at, tz=timezone.utc)
+                        exhaustion_info.append(f"(resets {reset.isoformat()})")
+                    else:
+                        exhaustion_info.append("(resets ~7 days)")
+
+            if exhaustion_info:
+                quota_msg = f" [{' | '.join(exhaustion_info)}]"
+        reason = f"{reason}{quota_msg}"
+
     bits = [f"stage={stage}"]
     if classification is not None:
         bits.append(f"class={classification}")
