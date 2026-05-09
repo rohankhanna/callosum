@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import signal
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -78,6 +79,15 @@ def main() -> None:
         )
     host = args.host if args.host is not None else cfg.server.host
     port = args.port if args.port is not None else cfg.server.port
+
+    # Set up signal handlers to ensure clean shutdown even when run in background
+    def _signal_handler(signum: int, frame):
+        logging.getLogger("codex_proxy.startup").info(f"Received signal {signum}, shutting down...")
+        raise KeyboardInterrupt()
+
+    signal.signal(signal.SIGINT, _signal_handler)
+    signal.signal(signal.SIGTERM, _signal_handler)
+
     uvicorn.run(
         create_app(
             backends=backends,
