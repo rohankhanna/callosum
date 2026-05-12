@@ -99,7 +99,7 @@ _MIGRATIONS = [
     "ALTER TABLE requests RENAME COLUMN secondary_reset_at TO weekly_reset_at",
     "ALTER TABLE requests RENAME COLUMN primary_over_secondary_limit_percent"
     " TO five_hourly_over_weekly_limit_percent",
-    # Quality labeling for ExploiterRouter training: user feedback and automated signals.
+    # Quality labeling for cost-optimal router training: user feedback and automated signals.
     "ALTER TABLE requests ADD COLUMN quality_score INTEGER",  # -1, 0, +1; NULL = unlabeled
     "ALTER TABLE requests ADD COLUMN quality_label_method TEXT",  # 'user', 'llm_judge_v1', etc
     # Prompt complexity classification for cost-per-complexity routing.

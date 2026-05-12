@@ -23,7 +23,7 @@ DEFAULT_MODELS: tuple[str, ...] = (
 # Virtual model names a client can pick to opt into router behavior.
 # - "auto-learning":           organic round-robin explorer
 # - "auto-learning-synthetic": synthetic background topper (separate coverage tier)
-# - "auto":                    cost-optimal exploiter (returns 503 NotTrained)
+# - "auto":                    cost-optimal router (returns 503 NotTrained)
 VIRTUAL_MODELS: frozenset[str] = frozenset({"auto-learning", "auto-learning-synthetic", "auto"})
 
 # Known context window limits per model. Used as a fallback when the API

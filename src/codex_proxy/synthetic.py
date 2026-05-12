@@ -478,9 +478,9 @@ class SyntheticTopper:
                         break  # don't tight-loop on a sick backend
         # Periodically refit the cost_router cost model
         if (self._cost_router is not None
-            and self._cfg.exploiter_refit_interval_seconds > 0
-            and (now_ts - self._cost_router._last_fit) >= self._cfg.exploiter_refit_interval_seconds):
-            self._cost_router.fit(min_samples_per_cell=self._cfg.exploiter_min_samples_per_cell)
+            and self._cfg.optimal_refit_interval_seconds > 0
+            and (now_ts - self._cost_router._last_fit) >= self._cfg.optimal_refit_interval_seconds):
+            self._cost_router.fit(min_samples_per_cell=self._cfg.optimal_min_samples_per_cell)
 
     async def _fire_count_for_backend(self, backend: Backend, *, now_ts: float) -> int:
         snap: Any = await backend.quota_snapshot()
