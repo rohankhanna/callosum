@@ -6,6 +6,7 @@ import os
 import time
 import uuid
 from collections.abc import AsyncIterator
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -416,15 +417,35 @@ class CodexAuthVaultBackend:
         if err.classification != "rate_limited":
             return
         now = time.time()
-        cooldown_until = now + (err.retry_after_s or DEFAULT_COOLDOWN_S)
+        quota = self._last_quota
+
+        # Determine cooldown duration based on quota state
+        if err.retry_after_s:
+            cooldown_until = now + err.retry_after_s
+        elif quota is not None and quota.weekly_used_percent is not None and quota.weekly_used_percent >= 99:
+            # Weekly exhausted — cooldown until weekly reset (usually 44+ hours)
+            cooldown_until = float(quota.weekly_reset_at) if quota.weekly_reset_at else now + 7 * 86400
+        elif quota is not None and quota.five_hourly_used_percent is not None and quota.five_hourly_used_percent >= 95:
+            # 5-hour window exhausted — cooldown until 5h reset
+            cooldown_until = float(quota.five_hourly_reset_at) if quota.five_hourly_reset_at else now + 5 * 3600
+        else:
+            cooldown_until = now + DEFAULT_COOLDOWN_S
+
+        # Determine weekly_exhausted flag
+        weekly_exhausted = (
+            self._usage.weekly_exhausted
+            or (quota is not None and quota.weekly_used_percent is not None and quota.weekly_used_percent >= 99)
+        )
+
         self._usage = UsageSnapshot(
             remaining_fraction=self._usage.remaining_fraction,
             cooldown_until_ts=cooldown_until,
-            weekly_exhausted=self._usage.weekly_exhausted,
+            weekly_exhausted=weekly_exhausted,
             probed_at_ts=now,
         )
         if self._state_store is not None:
             self._state_store.save_usage(self.id, self._usage)
+        _log_cooldown_set(self.id, cooldown_until, quota)
 
 
 def _extract_model_catalog(payload: Any) -> tuple[frozenset[str], dict[str, int]]:
@@ -609,3 +630,36 @@ def _int_or(value: Any, default: int) -> int:
     if isinstance(value, float):
         return int(value)
     return default
+
+
+def _log_cooldown_set(backend_id: str, cooldown_until: float, quota: Any) -> None:
+    """Log when a cooldown is set, with details about the quota state.
+
+    Emits a single clear line showing backend ID, reason for cooldown, recovery time, and duration.
+    """
+    logger = logging.getLogger("codex_proxy.backend")
+    now = time.time()
+    recovery_seconds = cooldown_until - now
+    recovery_dt = datetime.fromtimestamp(cooldown_until, tz=timezone.utc)
+
+    if recovery_seconds < 0:
+        duration_str = "immediate"
+    elif recovery_seconds < 60:
+        duration_str = f"{int(recovery_seconds)}s"
+    elif recovery_seconds < 3600:
+        duration_str = f"{int(recovery_seconds / 60)}m"
+    else:
+        hours = int(recovery_seconds / 3600)
+        minutes = int((recovery_seconds % 3600) / 60)
+        duration_str = f"{hours}h {minutes}m"
+
+    if quota is not None and quota.weekly_used_percent is not None and quota.weekly_used_percent >= 99:
+        reason = f"weekly 100% exhausted"
+    elif quota is not None and quota.five_hourly_used_percent is not None and quota.five_hourly_used_percent >= 95:
+        reason = f"5h window {quota.five_hourly_used_percent}% exhausted"
+    else:
+        reason = "rate limited"
+
+    logger.info(
+        f"[{backend_id}] cooldown set — {reason}, resumes {recovery_dt.isoformat()} ({duration_str})"
+    )

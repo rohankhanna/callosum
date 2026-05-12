@@ -341,7 +341,7 @@ def create_app(
         if startup_smoke_test and backends_list:
             await _run_startup_smoke_test(backends_list)
         # Prime the cost_router cost model if data exists
-        cost_router.fit(min_samples_per_cell=auto_cfg.exploiter_min_samples_per_cell)
+        cost_router.fit(min_samples_per_cell=auto_cfg.optimal_min_samples_per_cell)
         topper.start()
         smoke_tester.start()
         try:
@@ -758,7 +758,7 @@ async def _dispatch_internal(
             routing_mode = "auto-learning"
 
         # Inject complexity classification instruction only for exploration requests
-        # (not for exploitation routing, which uses learned costs)
+        # (not for cost-optimal routing, which uses learned costs)
         if routing_mode == "auto-learning":
             body.setdefault("instructions", "")
             if body["instructions"]:
@@ -965,7 +965,18 @@ async def _dispatch_nonstream(
         )
         return result
 
-    # All primary backends exhausted. Try fallback strategies.
+    # All primary backends exhausted. Compute recovery timestamp.
+    recovery_ts: float | None = None
+    for backend in backends_list:
+        try:
+            usage = await backend.usage_snapshot()
+            if usage and usage.cooldown_until_ts:
+                if recovery_ts is None or usage.cooldown_until_ts < recovery_ts:
+                    recovery_ts = usage.cooldown_until_ts
+        except Exception:
+            pass  # Skip backends that fail to report usage
+
+    # Try fallback strategies.
     error_classifications = {
         backend_id: error.classification
         for backend_id, error in excluded_errors.items()
@@ -985,6 +996,7 @@ async def _dispatch_nonstream(
             last_error=last_error,
             excluded_backends=excluded_errors,
             fallback_executor=fallback,
+            recovery_ts=recovery_ts,
         )
 
     raise _no_viable(
@@ -992,6 +1004,7 @@ async def _dispatch_nonstream(
         last_error=last_error,
         excluded_backends=excluded_errors,
         fallback_executor=None,
+        recovery_ts=recovery_ts,
     )
 
 
@@ -1110,7 +1123,18 @@ async def _dispatch_stream(
             media_type="text/event-stream",
         )
 
-    # All primary backends exhausted. Try fallback strategies.
+    # All primary backends exhausted. Compute recovery timestamp.
+    recovery_ts: float | None = None
+    for backend in backends_list:
+        try:
+            usage = await backend.usage_snapshot()
+            if usage and usage.cooldown_until_ts:
+                if recovery_ts is None or usage.cooldown_until_ts < recovery_ts:
+                    recovery_ts = usage.cooldown_until_ts
+        except Exception:
+            pass  # Skip backends that fail to report usage
+
+    # Try fallback strategies.
     error_classifications = {
         backend_id: error.classification
         for backend_id, error in excluded_errors.items()
@@ -1130,6 +1154,7 @@ async def _dispatch_stream(
             last_error=last_error,
             excluded_backends=excluded_errors,
             fallback_executor=fallback,
+            recovery_ts=recovery_ts,
         )
 
     raise _no_viable(
@@ -1137,6 +1162,7 @@ async def _dispatch_stream(
         last_error=last_error,
         excluded_backends=excluded_errors,
         fallback_executor=None,
+        recovery_ts=recovery_ts,
     )
 
 
@@ -1908,8 +1934,9 @@ def _no_viable(
     last_error: BackendError | None,
     excluded_backends: dict[str, BackendError] | None = None,
     fallback_executor: FallbackExecutor | None = None,
+    recovery_ts: float | None = None,
 ) -> HTTPException:
-    """Log all failed backends and return appropriate error."""
+    """Log all failed backends and return appropriate error with Retry-After header."""
     if excluded_backends:
         # Build error classification map for logging
         error_classifications = {
@@ -1920,20 +1947,32 @@ def _no_viable(
         if fallback_executor:
             fallback_executor.log_final_exhaustion(model, error_classifications)
         else:
-            # Fallback not attempted, log basic info
+            # Fallback not attempted, log with recovery info if available
             failures = []
             for backend_id, error in excluded_backends.items():
                 failures.append(f"{backend_id}: {error.classification}")
             ts = _utc_timestamp()
-            logger.warning(
-                f"[{ts}] all backends exhausted for model {model!r}. "
-                f"Failures: {'; '.join(failures)}"
-            )
+            msg = f"[{ts}] all backends exhausted for model {model!r}. Failures: {'; '.join(failures)}"
+            if recovery_ts:
+                recovery_dt = datetime.fromtimestamp(recovery_ts, tz=timezone.utc)
+                recovery_s = max(1, int(recovery_ts - time.time()))
+                msg += f" | Earliest recovery: {recovery_dt.isoformat()} (in {recovery_s}s)"
+            logger.warning(msg)
 
     if last_error is None:
         return HTTPException(status_code=503, detail=f"no viable backend for model {model!r}")
     status = _EXHAUSTED_STATUS.get(last_error.classification, 502)
+
+    # Build response headers with Retry-After if available
+    headers: dict[str, str] = {}
+    if recovery_ts and status == 429:
+        retry_after_s = max(1, int(recovery_ts - time.time()))
+        headers["Retry-After"] = str(retry_after_s)
+        recovery_dt = datetime.fromtimestamp(recovery_ts, tz=timezone.utc)
+        headers["X-Retry-After-UTC"] = recovery_dt.isoformat()
+
     return HTTPException(
         status_code=status,
         detail=last_error.message or last_error.classification,
+        headers=headers or None,
     )

@@ -22,6 +22,7 @@ from typing import Any
 import httpx
 
 from codex_proxy.backend import BackendKind, CallHandle, HealthStatus, UsageSnapshot
+from codex_proxy.backends._http import DEFAULT_COOLDOWN_S
 from codex_proxy.codex_quota import parse_codex_headers
 from codex_proxy.errors import BackendError
 from codex_proxy.sse_tee import ResponsesStreamCollector
@@ -235,7 +236,8 @@ class CredentialProxyBackend:
                     message="upstream stream ended without response.completed event",
                 )
             return completed
-        except BackendError:
+        except BackendError as err:
+            self._apply_error_to_usage(err)
             raise
         except Exception as exc:
             raise BackendError(classification="transient", message=str(exc)) from exc
@@ -270,13 +272,28 @@ class CredentialProxyBackend:
                     yield chunk
                 if handle is not None:
                     handle.stream_summary = collector.summary
-        except BackendError:
+        except BackendError as err:
+            self._apply_error_to_usage(err)
             raise
         except Exception as exc:
             raise BackendError(classification="transient", message=str(exc)) from exc
 
     async def aclose(self) -> None:
         await self._http_client.aclose()
+
+    def _apply_error_to_usage(self, err: BackendError) -> None:
+        if err.classification != "rate_limited":
+            return
+        now = time.time()
+        cooldown_until = now + (err.retry_after_s or DEFAULT_COOLDOWN_S)
+        self._usage = UsageSnapshot(
+            remaining_fraction=self._usage.remaining_fraction,
+            cooldown_until_ts=cooldown_until,
+            weekly_exhausted=self._usage.weekly_exhausted,
+            probed_at_ts=now,
+        )
+        if self._state_store is not None:
+            self._state_store.save_usage(self.id, self._usage)
 
     def _apply_response_to_handle(
         self, response_headers: dict[str, str], status_code: int, handle: CallHandle | None
