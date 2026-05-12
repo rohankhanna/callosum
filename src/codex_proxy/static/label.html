@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Codex Proxy Label UI</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #0f0f0f;
+            color: #e0e0e0;
+            line-height: 1.6;
+        }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        h1 { font-size: 24px; margin-bottom: 20px; color: #fff; }
+
+        .search-panel {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        .search-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        input[type="text"], input[type="date"], select {
+            background: #2a2a2a;
+            color: #e0e0e0;
+            border: 1px solid #444;
+            border-radius: 4px;
+            padding: 8px 12px;
+            font-size: 14px;
+        }
+        input[type="text"] { flex: 1; min-width: 200px; }
+        input[type="date"] { flex: 0 1 140px; }
+        select { flex: 0 1 120px; }
+        button {
+            background: #4a90e2;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 8px 16px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        button:hover { background: #357abd; }
+
+        .stats {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 20px;
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            font-size: 14px;
+        }
+        .stat { display: flex; gap: 8px; }
+        .stat strong { color: #fff; }
+
+        .request-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .request-row {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 12px;
+            position: relative;
+        }
+        .request-row.new { border-color: #4a90e2; background: #1a2536; }
+        .request-row.new::before { content: "NEW"; position: absolute; top: 4px; right: 8px; background: #4a90e2; color: white; padding: 2px 6px; border-radius: 3px; font-size: 12px; font-weight: bold; }
+
+        .request-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .request-id { font-weight: bold; color: #4a90e2; }
+        .request-model { font-size: 13px; color: #aaa; }
+        .request-badges { display: flex; gap: 6px; flex-wrap: wrap; }
+        .badge {
+            background: #2a2a2a;
+            border: 1px solid #444;
+            border-radius: 3px;
+            padding: 2px 6px;
+            font-size: 12px;
+            color: #bbb;
+        }
+        .badge.complexity { border-color: #666; }
+        .badge.tokens { border-color: #666; }
+        .badge.quality { font-weight: bold; }
+        .badge.good { background: #1a3a1a; border-color: #4a9a4a; color: #7ae67a; }
+        .badge.neutral { background: #3a3a1a; border-color: #9a9a4a; color: #e6e67a; }
+        .badge.bad { background: #3a1a1a; border-color: #9a4a4a; color: #e67a7a; }
+
+        .request-text { margin: 8px 0; font-size: 13px; }
+        .request-text strong { color: #fff; display: block; margin-bottom: 3px; }
+        .request-text p { color: #bbb; overflow-wrap: break-word; }
+
+        .request-actions {
+            display: flex;
+            gap: 6px;
+            margin-top: 8px;
+        }
+        .action-btn {
+            flex: 1;
+            padding: 6px;
+            font-size: 12px;
+            border-radius: 3px;
+            cursor: pointer;
+            border: 1px solid #444;
+            background: #2a2a2a;
+            color: #bbb;
+            transition: 0.2s;
+        }
+        .action-btn:hover { background: #333; }
+        .action-btn.good { background: #1a3a1a; border-color: #4a9a4a; color: #7ae67a; }
+        .action-btn.bad { background: #3a1a1a; border-color: #9a4a4a; color: #e67a7a; }
+        .action-btn.neutral { background: #3a3a1a; border-color: #9a9a4a; color: #e6e67a; }
+
+        .load-more {
+            text-align: center;
+            padding: 12px;
+            margin-top: 12px;
+        }
+        .load-more button { width: 100%; }
+
+        .empty-state {
+            text-align: center;
+            color: #666;
+            padding: 40px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎯 Quality Labels</h1>
+
+        <div class="search-panel">
+            <div class="search-row">
+                <input type="text" id="search" placeholder="Search prompts & responses...">
+                <button onclick="performSearch()">Search</button>
+            </div>
+            <div class="search-row">
+                <select id="model" onchange="performSearch()">
+                    <option value="">All Models</option>
+                </select>
+                <select id="complexity" onchange="performSearch()">
+                    <option value="">All Complexity</option>
+                    <option value="1">Simple (1)</option>
+                    <option value="2">Moderate (2)</option>
+                    <option value="3">Complex (3)</option>
+                </select>
+                <select id="quality" onchange="performSearch()">
+                    <option value="all">All Quality</option>
+                    <option value="labeled">Labeled</option>
+                    <option value="unlabeled">Unlabeled</option>
+                    <option value="good">Good</option>
+                    <option value="neutral">Neutral</option>
+                    <option value="bad">Bad</option>
+                </select>
+                <input type="date" id="date_from" onchange="performSearch()">
+                <input type="date" id="date_to" onchange="performSearch()">
+                <select id="sort" onchange="performSearch()">
+                    <option value="newest">Newest First</option>
+                    <option value="oldest">Oldest First</option>
+                    <option value="most_tokens">Most Tokens</option>
+                    <option value="least_tokens">Least Tokens</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="stats" id="stats">
+            <div class="stat"><strong>Total:</strong> <span id="stat-total">0</span></div>
+            <div class="stat"><strong>Labeled:</strong> <span id="stat-labeled">0</span></div>
+            <div class="stat"><strong>Good:</strong> <span id="stat-good" style="color: #7ae67a;">0</span></div>
+            <div class="stat"><strong>Neutral:</strong> <span id="stat-neutral" style="color: #e6e67a;">0</span></div>
+            <div class="stat"><strong>Bad:</strong> <span id="stat-bad" style="color: #e67a7a;">0</span></div>
+        </div>
+
+        <div class="request-list" id="request-list">
+            <div class="empty-state">No requests to label yet. Make some API calls to the proxy.</div>
+        </div>
+
+        <div class="load-more" id="load-more-container" style="display: none;">
+            <button onclick="loadMore()">Load More</button>
+        </div>
+    </div>
+
+    <script>
+        let currentOffset = 0;
+        const LIMIT = 20;
+        let eventSource = null;
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        async function getModels() {
+            try {
+                const res = await fetch('/label/models');
+                const data = await res.json();
+                const select = document.getElementById('model');
+                data.models.forEach(m => {
+                    const opt = document.createElement('option');
+                    opt.value = m;
+                    opt.textContent = m;
+                    select.appendChild(opt);
+                });
+            } catch (e) {
+                console.error('Failed to load models:', e);
+            }
+        }
+
+        async function updateStats() {
+            try {
+                const res = await fetch('/label/stats');
+                const stats = await res.json();
+                document.getElementById('stat-total').textContent = stats.total;
+                document.getElementById('stat-labeled').textContent = stats.labeled;
+                document.getElementById('stat-good').textContent = stats.good;
+                document.getElementById('stat-neutral').textContent = stats.neutral;
+                document.getElementById('stat-bad').textContent = stats.bad;
+            } catch (e) {
+                console.error('Failed to load stats:', e);
+            }
+        }
+
+        function createRowElement(row) {
+            const qualityScore = row.quality_score;
+            let qualityBadge = '';
+            if (qualityScore === 1) {
+                qualityBadge = '<span class="badge quality good">✓ Good</span>';
+            } else if (qualityScore === 0) {
+                qualityBadge = '<span class="badge quality neutral">◯ Neutral</span>';
+            } else if (qualityScore === -1) {
+                qualityBadge = '<span class="badge quality bad">✗ Bad</span>';
+            } else {
+                qualityBadge = '<span class="badge quality">⊘ Unlabeled</span>';
+            }
+
+            const complexity = row.prompt_complexity_class ? `<span class="badge complexity">Complexity: ${row.prompt_complexity_class}</span>` : '';
+            const tokens = row.prompt_tokens ? `<span class="badge tokens">Tokens: ${row.prompt_tokens}</span>` : '';
+
+            const prompt = row.prompt_text ? `<div class="request-text"><strong>Prompt:</strong><p>${escapeHtml(row.prompt_text)}</p></div>` : '';
+            const response = row.response_text ? `<div class="request-text"><strong>Response:</strong><p>${escapeHtml(row.response_text)}</p></div>` : '';
+
+            return `
+                <div class="request-row" data-id="${row.id}">
+                    <div class="request-header">
+                        <span class="request-id">#${row.id}</span>
+                        <span class="request-model">${escapeHtml(row.model || 'unknown')}</span>
+                        <div class="request-badges">
+                            ${complexity}${tokens}${qualityBadge}
+                        </div>
+                    </div>
+                    ${prompt}${response}
+                    <div class="request-actions">
+                        <button class="action-btn good" onclick="setQuality(${row.id}, 1)">👍 Good</button>
+                        <button class="action-btn neutral" onclick="setQuality(${row.id}, 0)">😐 OK</button>
+                        <button class="action-btn bad" onclick="setQuality(${row.id}, -1)">👎 Bad</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function performSearch() {
+            currentOffset = 0;
+            await loadResults();
+        }
+
+        async function loadResults() {
+            const search = document.getElementById('search').value;
+            const model = document.getElementById('model').value;
+            const complexity = document.getElementById('complexity').value;
+            const quality = document.getElementById('quality').value;
+            const dateFrom = document.getElementById('date_from').value;
+            const dateTo = document.getElementById('date_to').value;
+            const sort = document.getElementById('sort').value;
+
+            const params = new URLSearchParams();
+            if (search) params.append('q', search);
+            if (model) params.append('model', model);
+            if (complexity) params.append('complexity', complexity);
+            if (quality && quality !== 'all') params.append('quality', quality);
+            if (dateFrom) params.append('date_from', dateFrom);
+            if (dateTo) params.append('date_to', dateTo);
+            if (sort) params.append('sort', sort);
+            params.append('limit', LIMIT);
+            params.append('offset', currentOffset);
+
+            try {
+                const res = await fetch(`/label/search?${params}`);
+                const data = await res.json();
+
+                const list = document.getElementById('request-list');
+                if (currentOffset === 0) {
+                    list.innerHTML = '';
+                }
+
+                if (data.results.length === 0) {
+                    if (currentOffset === 0) {
+                        list.innerHTML = '<div class="empty-state">No matching requests found.</div>';
+                    }
+                    document.getElementById('load-more-container').style.display = 'none';
+                } else {
+                    data.results.forEach(row => {
+                        const html = createRowElement(row);
+                        list.insertAdjacentHTML('beforeend', html);
+                    });
+                    document.getElementById('load-more-container').style.display =
+                        data.results.length === LIMIT ? 'block' : 'none';
+                }
+
+                await updateStats();
+            } catch (e) {
+                console.error('Search failed:', e);
+                document.getElementById('request-list').innerHTML =
+                    `<div class="empty-state">Error loading results: ${e.message}</div>`;
+            }
+        }
+
+        function loadMore() {
+            currentOffset += LIMIT;
+            loadResults();
+        }
+
+        async function setQuality(requestId, score) {
+            try {
+                await fetch(`/label/${requestId}/quality`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ score })
+                });
+                performSearch();
+            } catch (e) {
+                console.error('Failed to set quality:', e);
+                alert('Failed to save quality score');
+            }
+        }
+
+        function streamNewRequests() {
+            if (eventSource) eventSource.close();
+            eventSource = new EventSource('/label/stream');
+            eventSource.onmessage = (e) => {
+                const requestId = parseInt(e.data);
+                if (!isNaN(requestId)) {
+                    const list = document.getElementById('request-list');
+                    if (list.querySelector('.empty-state')) {
+                        performSearch();
+                    } else {
+                        loadSingleRequest(requestId);
+                    }
+                }
+            };
+            eventSource.onerror = () => {
+                console.log('SSE connection closed');
+            };
+        }
+
+        async function loadSingleRequest(requestId) {
+            try {
+                const params = new URLSearchParams({ limit: 1, offset: 0 });
+                const res = await fetch(`/label/search?${params}`);
+                const data = await res.json();
+                if (data.results.length > 0) {
+                    const row = data.results[0];
+                    const html = createRowElement(row);
+                    const list = document.getElementById('request-list');
+                    const elem = document.createElement('div');
+                    elem.innerHTML = html;
+                    elem.querySelector('.request-row').classList.add('new');
+                    list.insertAdjacentElement('afterbegin', elem.firstElementChild);
+                    setTimeout(() => {
+                        elem.querySelector('.request-row')?.classList.remove('new');
+                    }, 3000);
+                    await updateStats();
+                }
+            } catch (e) {
+                console.error('Failed to load single request:', e);
+            }
+        }
+
+        // Initialize
+        getModels();
+        updateStats();
+        performSearch();
+        streamNewRequests();
+    </script>
+</body>
+</html>

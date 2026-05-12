@@ -4,6 +4,7 @@ import json
 import sqlite3
 import threading
 import zlib
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -104,6 +105,32 @@ _MIGRATIONS = [
     "ALTER TABLE requests ADD COLUMN quality_label_method TEXT",  # 'user', 'llm_judge_v1', etc
     # Prompt complexity classification for cost-per-complexity routing.
     "ALTER TABLE requests ADD COLUMN prompt_complexity_class INTEGER",  # 1, 2, 3; NULL = not classified
+    # Text extraction for label UI keyword search.
+    "ALTER TABLE requests ADD COLUMN prompt_text TEXT",
+    "ALTER TABLE requests ADD COLUMN response_text TEXT",
+    # FTS5 virtual table for full-text search (content table references requests).
+    """CREATE VIRTUAL TABLE IF NOT EXISTS requests_fts USING fts5(
+    prompt_text,
+    response_text,
+    content='requests',
+    content_rowid='id',
+    tokenize='porter unicode61'
+)""",
+    # Triggers to keep FTS5 in sync with requests table.
+    """CREATE TRIGGER IF NOT EXISTS requests_ai AFTER INSERT ON requests BEGIN
+  INSERT INTO requests_fts(rowid, prompt_text, response_text)
+  VALUES (new.id, new.prompt_text, new.response_text);
+END""",
+    """CREATE TRIGGER IF NOT EXISTS requests_au AFTER UPDATE ON requests BEGIN
+  INSERT INTO requests_fts(requests_fts, rowid, prompt_text, response_text)
+  VALUES ('delete', old.id, old.prompt_text, old.response_text);
+  INSERT INTO requests_fts(rowid, prompt_text, response_text)
+  VALUES (new.id, new.prompt_text, new.response_text);
+END""",
+    """CREATE TRIGGER IF NOT EXISTS requests_ad AFTER DELETE ON requests BEGIN
+  INSERT INTO requests_fts(requests_fts, rowid, prompt_text, response_text)
+  VALUES ('delete', old.id, old.prompt_text, old.response_text);
+END""",
 ]
 
 
@@ -146,6 +173,9 @@ class UsageLogEntry:
     # Complexity classification from embedded instruction in auto-learning requests.
     # 1, 2, or 3; NULL = not classified (non-auto-learning or marker not found).
     prompt_complexity_class: int | None = None
+    # Original OpenAI-format client request dict (before any translation/routing).
+    # Used to extract prompt text for label UI keyword search.
+    client_request: dict | None = None
 
 
 class UsageLog:
@@ -162,6 +192,7 @@ class UsageLog:
         self._path = path
         self._capture_bodies = capture_bodies
         self._lock = threading.Lock()
+        self._new_request_callbacks: list[Callable[[int], None]] = []
         self._conn = sqlite3.connect(
             path,
             check_same_thread=False,
@@ -201,6 +232,10 @@ class UsageLog:
     def capture_bodies(self) -> bool:
         return self._capture_bodies
 
+    def add_new_request_callback(self, cb: Callable[[int], None]) -> None:
+        """Register a callback to be called with request_id when a new request is logged."""
+        self._new_request_callbacks.append(cb)
+
     def record(self, entry: UsageLogEntry) -> int:
         """Insert one row; return its rowid.
 
@@ -212,6 +247,8 @@ class UsageLog:
         crossover = _is_reset_crossover(entry.quota_before, entry.quota_after)
         qb = entry.quota_before
         qa = entry.quota_after
+        prompt_text = _extract_prompt_text(entry.client_request)
+        response_text = _extract_response_text(entry.resp_payload)
         row = (
             entry.ts_start,
             entry.ts_end,
@@ -250,6 +287,8 @@ class UsageLog:
             entry.requested_reasoning_effort,
             entry.routing_mode,
             entry.prompt_complexity_class,
+            prompt_text,
+            response_text,
         )
         with self._lock:
             cursor = self._conn.execute(
@@ -270,12 +309,12 @@ class UsageLog:
                     credits_balance, credits_has_credits, credits_unlimited,
                     quota_reset_crossover,
                     requested_model, requested_reasoning_effort, routing_mode,
-                    prompt_complexity_class
+                    prompt_complexity_class, prompt_text, response_text
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 """,
                 row,
@@ -303,7 +342,14 @@ class UsageLog:
                         ),
                     ),
                 )
-            return int(request_id)
+            row_id = int(request_id)
+        # Call callbacks outside lock to avoid deadlock if callback tries to query
+        for cb in self._new_request_callbacks:
+            try:
+                cb(row_id)
+            except Exception:
+                pass
+        return row_id
 
     def last_session_prompt_tokens(self, session_id: str) -> int | None:
         """Query the most recent prompt_tokens for a session_id.
@@ -340,6 +386,36 @@ class UsageLog:
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+
+
+def _extract_prompt_text(client_request: dict | None) -> str | None:
+    """Extract last user message text from OpenAI-format client request."""
+    if client_request is None:
+        return None
+    try:
+        msgs = client_request.get("messages", [])
+        for m in reversed(msgs):
+            if m.get("role") == "user":
+                c = m.get("content", "")
+                return c if isinstance(c, str) else str(c)
+    except Exception:
+        pass
+    return None
+
+
+def _extract_response_text(resp_payload: bytes | None) -> str | None:
+    """Extract first assistant message text from OpenAI-format response payload."""
+    if resp_payload is None:
+        return None
+    try:
+        resp_dict = json.loads(resp_payload)
+        choices = resp_dict.get("choices", [])
+        if choices and "message" in choices[0]:
+            c = choices[0]["message"].get("content", "")
+            return c if isinstance(c, str) else str(c)
+    except Exception:
+        pass
+    return None
 
 
 def _compress(data: bytes | None) -> bytes | None:

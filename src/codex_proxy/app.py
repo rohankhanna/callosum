@@ -34,6 +34,7 @@ from codex_proxy.selector import select
 from codex_proxy.session import SessionRegistry
 from codex_proxy.synthetic import SyntheticTopper
 from codex_proxy.usage_log import UsageLog, UsageLogEntry
+from codex_proxy.label_ui import install_label_ui
 
 logger = logging.getLogger("codex_proxy.startup")
 
@@ -357,6 +358,10 @@ def create_app(
                 auth_service.db.close()
 
     app = FastAPI(title="codex-proxy", version=__version__, lifespan=lifespan)
+
+    # Install quality labeling UI if usage_log is available
+    if usage_log is not None:
+        install_label_ui(app, usage_log)
 
     # Bearer middleware for /v1/* and /diagnose/* — only enforced when an
     # auth service is configured. In single-operator mode (no auth db) those
@@ -1380,6 +1385,7 @@ def _log_attempt(
         requested_reasoning_effort=requested_reasoning_effort,
         routing_mode=routing_mode,
         prompt_complexity_class=prompt_complexity_class,
+        client_request=body,
     )
     request_id = usage_log.record(entry)
     # Store request_id in context for response handlers to access
