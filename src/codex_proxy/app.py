@@ -86,13 +86,28 @@ def _extract_complexity_class(text: str) -> tuple[int | None, str]:
     or None if the marker is not found. cleaned_text has the marker stripped.
 
     The marker should appear at the very start of the response (after whitespace).
+    Matches both {{{N}}} format and {{{...}}} with numeric content.
     """
     import re
+    # First try strict numeric format {{{1}}}, {{{2}}}, {{{3}}}
     match = re.match(r'^\s*\{\{\{([123])\}\}\}', text)
     if match:
         complexity_class = int(match.group(1))
         cleaned = text[match.end():].lstrip()
         return complexity_class, cleaned
+
+    # Also strip any {{{...}}} marker that appears at the start (even if not numeric)
+    # This handles cases where the backend returns {{{complexity: Low}}} or similar
+    match = re.match(r'^\s*\{\{\{[^}]*\}\}\}', text)
+    if match:
+        cleaned = text[match.end():].lstrip()
+        # Try to parse numeric complexity from the content if possible
+        inner = match.group(0).strip('{}').strip()
+        if inner.isdigit() and inner in ('1', '2', '3'):
+            return int(inner), cleaned
+        # Return None complexity but still strip the marker
+        return None, cleaned
+
     return None, text
 
 
