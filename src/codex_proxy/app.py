@@ -1332,6 +1332,60 @@ async def _log_on_complete(
     )
 
 
+def _clean_sse_blob(blob: bytes | None) -> bytes | None:
+    """Remove complexity markers from SSE blob before storage.
+
+    Parses SSE format, extracts and cleans response content from delta/text fields,
+    and reconstructs the blob for database storage. Ensures markers never persist
+    in the database even if they leak through the stream cleaning phase.
+    """
+    if blob is None:
+        return None
+
+    try:
+        text = blob.decode('utf-8')
+        lines = text.split('\n')
+        cleaned_lines = []
+
+        for line in lines:
+            # Check if this is a data line with JSON content
+            if line.startswith('data: '):
+                try:
+                    json_str = line[6:]  # Strip 'data: '
+                    data = json.loads(json_str)
+
+                    # Handle response.output_text.delta events
+                    if data.get('type') == 'response.output_text.delta':
+                        delta = data.get('delta', '')
+                        if isinstance(delta, str) and delta:
+                            # Clean markers from delta
+                            _, cleaned_delta = _extract_complexity_class(delta)
+                            data['delta'] = cleaned_delta
+
+                    # Handle chat completions format (choices[0].delta.content)
+                    elif 'choices' in data and len(data.get('choices', [])) > 0:
+                        delta = data['choices'][0].get('delta', {})
+                        content = delta.get('content', '')
+                        if isinstance(content, str) and content:
+                            _, cleaned_content = _extract_complexity_class(content)
+                            delta['content'] = cleaned_content
+                            data['choices'][0]['delta'] = delta
+
+                    cleaned_lines.append('data: ' + json.dumps(data))
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    # Not JSON or unexpected format, pass through unchanged
+                    cleaned_lines.append(line)
+            else:
+                # Non-data lines pass through unchanged
+                cleaned_lines.append(line)
+
+        cleaned_text = '\n'.join(cleaned_lines)
+        return cleaned_text.encode('utf-8')
+    except (UnicodeDecodeError, AttributeError):
+        # If we can't decode, return original blob
+        return blob
+
+
 def _log_attempt(
     usage_log: UsageLog | None,
     *,
@@ -1358,6 +1412,8 @@ def _log_attempt(
     req_payload = json.dumps(body).encode()
     if stream and handle.stream_summary is not None:
         resp_payload: bytes | None = handle.stream_summary.raw_blob
+        # Clean markers from raw blob before storing in database
+        resp_payload = _clean_sse_blob(resp_payload)
         response_bytes = handle.stream_summary.total_bytes
         completed = handle.stream_summary.completed_response
         tokens = _extract_tokens(completed.get("usage") if completed else None)
