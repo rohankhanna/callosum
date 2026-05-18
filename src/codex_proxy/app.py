@@ -27,7 +27,7 @@ from codex_proxy.auth import (
 from codex_proxy.auth_db import ApiKey, Session
 from codex_proxy.backend import Backend, CallHandle
 from codex_proxy.cell_grid import VIRTUAL_MODELS, Cell, build_cells, live_completion_models
-from codex_proxy.complexity_classifier import classify_prompt_complexity
+from codex_proxy.cell_recommender import CellRecommender
 from codex_proxy.config import AutoRouterConfig
 from codex_proxy.errors import RETRYABLE, BackendError, ErrorClass
 from codex_proxy.fallback import FallbackExecutor, should_attempt_fallback
@@ -311,6 +311,26 @@ def create_app(
 
     auto_cfg = auto_router_config if auto_router_config is not None else AutoRouterConfig()
 
+    # Cell recommender: ask the cheapest cell to pick the cell that should
+    # handle this prompt. Output IS the routing decision; cost_router stays
+    # as the cold-start / fallback path. Only instantiated when at least one
+    # backend exists — without a backend, the recommender can't call anyone
+    # and the dispatch path will fall back to cost_router naturally.
+    cell_recommender: CellRecommender | None = None
+    if backends_list:
+        cheap_cell = Cell(
+            model=auto_cfg.cell_recommender_cheap_model,
+            reasoning_effort=auto_cfg.cell_recommender_cheap_effort,
+            context_window=None,
+        )
+        cell_recommender = CellRecommender(
+            cheap_backend=backends_list[0],
+            cheap_cell=cheap_cell,
+            cache_max=auto_cfg.cell_recommender_cache_max,
+            cache_ttl_seconds=auto_cfg.cell_recommender_cache_ttl_seconds,
+            upstream_timeout_s=auto_cfg.cell_recommender_upstream_timeout_s,
+        )
+
     async def _synthetic_dispatch(body: dict[str, Any], backend_id: str) -> Any:
         # The topper calls dispatch directly — no Request, no auth attribution,
         # and pinned to the backend the controller picked (the natural selector
@@ -504,11 +524,37 @@ def create_app(
                 ),
                 key=lambda r: (r["complexity"], r["model"], r["reasoning_effort"]),
             )
+        # Recommender state: cache hit rate, upstream-call counts, and
+        # which cells the recommender has been picking. Lets the operator
+        # see at a glance if the cheap classifier is biased (e.g. always
+        # picking itself, or always picking the largest) and whether
+        # off-peak comparison sampling has fired.
+        recommender_block: dict[str, Any] = {
+            "enabled": cell_recommender is not None,
+            "cheap_cell": (
+                f"{auto_cfg.cell_recommender_cheap_model} "
+                f"{auto_cfg.cell_recommender_cheap_effort}"
+            ),
+            "stats": {},
+            "recommendation_counts": {},
+        }
+        if cell_recommender is not None:
+            stats = cell_recommender.stats
+            calls = max(stats.get("calls", 0), 1)
+            recommender_block["stats"] = {
+                **stats,
+                "cache_hit_rate": round(stats.get("cache_hits", 0) / calls, 3),
+                "fallback_rate": round(stats.get("fallback_count", 0) / calls, 3),
+            }
+            recommender_block["recommendation_counts"] = (
+                cell_recommender.recommendation_counts
+            )
         return {
             "backends": entries,
             "pinned": pin_state.get(),
             "sessions": session_registry.snapshot(),
             "router": router_block,
+            "recommender": recommender_block,
         }
 
     if auth_service is not None:
@@ -732,6 +778,9 @@ def create_app(
             stream=lambda b, p, h: b.chat_completions_stream(p, h),
             router_context_safety_margin=auto_cfg.router_context_safety_margin,
             state_store=state_store,
+            auto_cfg=auto_cfg,
+            cell_recommender=cell_recommender,
+            live_cells_fn=_live_cells,
         )
         # Add X-Proxy-Request-ID header if a request was logged
         request_id = _request_id_context.get()
@@ -767,6 +816,9 @@ def create_app(
             stream=lambda b, p, h: b.responses_stream(p, h),
             router_context_safety_margin=auto_cfg.router_context_safety_margin,
             state_store=state_store,
+            auto_cfg=auto_cfg,
+            cell_recommender=cell_recommender,
+            live_cells_fn=_live_cells,
         )
         # Add X-Proxy-Request-ID header if a request was logged
         request_id = _request_id_context.get()
@@ -801,6 +853,9 @@ async def _dispatch_route(
     stream: StreamCall,
     router_context_safety_margin: int = 8192,
     state_store: Any | None = None,
+    auto_cfg: AutoRouterConfig | None = None,
+    cell_recommender: CellRecommender | None = None,
+    live_cells_fn: Callable[[], list[Cell]] | None = None,
 ) -> Any:
     """HTTP entry-point. Pulls session_id + api_key off the Request, then
     hands off to _dispatch_internal for the rewrite + dispatch logic.
@@ -827,7 +882,68 @@ async def _dispatch_route(
         api_key_id=api_key_id,
         router_context_safety_margin=router_context_safety_margin,
         state_store=state_store,
+        auto_cfg=auto_cfg,
+        cell_recommender=cell_recommender,
+        live_cells_fn=live_cells_fn,
     )
+
+
+def _maybe_fire_comparison_sampling(
+    body: dict[str, Any],
+    *,
+    cell_recommender: CellRecommender | None,
+    backends_list: Sequence[Backend],
+    live_cells_fn: Callable[[], list[Cell]],
+    compare_pct: float,
+    compare_max_weekly_pct: float,
+) -> None:
+    """Maybe spawn a fire-and-forget comparison-sampling task.
+
+    Off-peak gating: only fires when this request was randomly selected
+    (pct) AND the first backend's weekly_used% is below the configured
+    ceiling (don't burn quota during peak). Pure observation — fires the
+    same prompt at every live cell as a classifier and logs each one's
+    recommendation, but never affects the routing decision for the
+    actual user request currently in flight.
+
+    Logs are structured: easy to grep + parse for later analysis of
+    "did the cheap classifier disagree with bigger ones?".
+    """
+    if cell_recommender is None:
+        return
+    if compare_pct <= 0:
+        return
+    if random.random() >= compare_pct:
+        return
+    if not backends_list:
+        return
+
+    async def _run() -> None:
+        # Off-peak gate; check inside the task so we don't block dispatch.
+        try:
+            quota = await backends_list[0].quota_snapshot()
+        except Exception:
+            quota = None
+        if quota is not None:
+            wkly = getattr(quota, "weekly_used_percent", None)
+            if isinstance(wkly, (int, float)) and wkly > compare_max_weekly_pct:
+                return  # peak hours — skip comparison spam
+        try:
+            cells = live_cells_fn()
+            results = await cell_recommender.fire_comparisons(
+                body, allowed_cells=cells, comparison_tiers=cells
+            )
+            for r in results:
+                logger.info(
+                    "cell_recommender comparison: tier=%s/%s recommended=%s/%s latency=%.2fs error=%s",
+                    r["tier_model"], r["tier_effort"],
+                    r["recommended_model"], r["recommended_effort"],
+                    r["latency_s"], r["error"],
+                )
+        except Exception:
+            logger.exception("cell_recommender comparison sampling failed")
+
+    asyncio.create_task(_run(), name="cell-recommender-comparison")
 
 
 async def _dispatch_internal(
@@ -849,7 +965,17 @@ async def _dispatch_internal(
     forced_backend_id: str | None = None,
     router_context_safety_margin: int = 8192,
     state_store: Any | None = None,
+    auto_cfg: AutoRouterConfig | None = None,
+    cell_recommender: CellRecommender | None = None,
+    live_cells_fn: Callable[[], list[Cell]] | None = None,
 ) -> Any:
+    # Default auto_cfg so this helper is safe to call without the new kwargs
+    # (e.g. from the synthetic dispatch path, which doesn't use the
+    # recommender). Callers from the user-facing dispatch always pass both.
+    if auto_cfg is None:
+        auto_cfg = AutoRouterConfig()
+    if live_cells_fn is None:
+        live_cells_fn = build_cells
     """Dispatch core, no Request dependency. Used by the HTTP entry-points and
     by the synthetic-request worker.
 
@@ -878,31 +1004,42 @@ async def _dispatch_internal(
         should_use_learned_model = random.randint(0, 100) < learned_model_cap
 
         if should_use_learned_model and cost_router._model is not None and cost_router._model.is_ready:
-            # Route to cost_router (cost-optimal) for this request. Classify
-            # the prompt first so v2 can pick the cheapest cell *for this
-            # complexity bucket* — falls back to v1 averaging when v2 has
-            # no data for the bucket yet (see EfficiencyModel.best_cell).
+            # Route to the cost-optimal cell. Primary path: ask the cell
+            # recommender (cheap upstream classifier). Fallback: cost_router
+            # using a neutral complexity, since we no longer compute a local
+            # heuristic complexity for routing. Cache amortizes the
+            # classifier cost; repeated prompts pay once.
             try:
-                complexity = classify_prompt_complexity(
-                    body, session_prompt_tokens=session_prompt_tokens
-                )
-                decision = cost_router.choose(
-                    complexity=complexity,
+                fallback_decision = cost_router.choose(
+                    complexity=2,
                     session_prompt_tokens=session_prompt_tokens,
                     router_context_safety_margin=router_context_safety_margin,
                 )
-                body["model"] = decision.cell.model
-                body.setdefault("reasoning", {})["effort"] = decision.cell.reasoning_effort
-                routing_mode = "auto"
+                fallback_cell = fallback_decision.cell
             except LearnedModelRouter.NotTrained:
-                # Fallback to explorer if cost_router raises (shouldn't happen with is_ready check)
-                decision = explorer.choose(
-                    session_prompt_tokens=session_prompt_tokens,
-                    router_context_safety_margin=router_context_safety_margin,
+                fallback_cell = Cell(
+                    model=auto_cfg.cell_recommender_cheap_model,
+                    reasoning_effort=auto_cfg.cell_recommender_cheap_effort,
+                    context_window=None,
                 )
-                body["model"] = decision.cell.model
-                body.setdefault("reasoning", {})["effort"] = decision.cell.reasoning_effort
-                routing_mode = "auto-learning"
+            if cell_recommender is not None:
+                rec = await cell_recommender.recommend(
+                    body, allowed_cells=live_cells_fn(), fallback=fallback_cell
+                )
+                body["model"] = rec.cell.model
+                body.setdefault("reasoning", {})["effort"] = rec.cell.reasoning_effort
+            else:
+                body["model"] = fallback_cell.model
+                body.setdefault("reasoning", {})["effort"] = fallback_cell.reasoning_effort
+            routing_mode = "auto"
+            _maybe_fire_comparison_sampling(
+                body,
+                cell_recommender=cell_recommender,
+                backends_list=backends_list,
+                live_cells_fn=live_cells_fn,
+                compare_pct=auto_cfg.cell_recommender_compare_pct,
+                compare_max_weekly_pct=auto_cfg.cell_recommender_compare_max_weekly_pct,
+            )
         else:
             # Route to explorer (data collection) for this request
             decision = explorer.choose(
@@ -942,20 +1079,42 @@ async def _dispatch_internal(
         body.setdefault("reasoning", {})["effort"] = decision.cell.reasoning_effort
         routing_mode = "auto-learning-synthetic"
     elif requested_model == "auto":
+        # Explicit `model=auto`: same recommender-then-fallback path as the
+        # probabilistic learned-model branch. cost_router fills the
+        # fallback role; if cost_router is also not trained, drop to the
+        # cheap cell rather than 503'ing the user — the recommender will
+        # then pick a real cell on its own.
         try:
-            complexity = classify_prompt_complexity(
-                body, session_prompt_tokens=session_prompt_tokens
-            )
-            decision = cost_router.choose(
-                complexity=complexity,
+            fallback_decision = cost_router.choose(
+                complexity=2,
                 session_prompt_tokens=session_prompt_tokens,
                 router_context_safety_margin=router_context_safety_margin,
             )
-        except LearnedModelRouter.NotTrained as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-        body["model"] = decision.cell.model
-        body.setdefault("reasoning", {})["effort"] = decision.cell.reasoning_effort
+            fallback_cell = fallback_decision.cell
+        except LearnedModelRouter.NotTrained:
+            fallback_cell = Cell(
+                model=auto_cfg.cell_recommender_cheap_model,
+                reasoning_effort=auto_cfg.cell_recommender_cheap_effort,
+                context_window=None,
+            )
+        if cell_recommender is not None:
+            rec = await cell_recommender.recommend(
+                body, allowed_cells=live_cells_fn(), fallback=fallback_cell
+            )
+            chosen = rec.cell
+        else:
+            chosen = fallback_cell
+        body["model"] = chosen.model
+        body.setdefault("reasoning", {})["effort"] = chosen.reasoning_effort
         routing_mode = "auto"
+        _maybe_fire_comparison_sampling(
+            body,
+            cell_recommender=cell_recommender,
+            backends_list=backends_list,
+            live_cells_fn=live_cells_fn,
+            compare_pct=auto_cfg.cell_recommender_compare_pct,
+            compare_max_weekly_pct=auto_cfg.cell_recommender_compare_max_weekly_pct,
+        )
     model = _require_model(body)
     pinned = pin_state.get()
     active = _active_pool(backends_list, pinned)
@@ -1141,6 +1300,7 @@ async def _dispatch_nonstream(
         for backend_id, error in excluded_errors.items()
     }
 
+    backend_status = await _collect_backend_status(backends_list)
     if should_attempt_fallback(error_classifications):
         fallback = FallbackExecutor()
         # TODO: Implement fallback retry logic here
@@ -1156,6 +1316,7 @@ async def _dispatch_nonstream(
             excluded_backends=excluded_errors,
             fallback_executor=fallback,
             recovery_ts=recovery_ts,
+            backend_status=backend_status,
         )
 
     raise _no_viable(
@@ -1164,6 +1325,7 @@ async def _dispatch_nonstream(
         excluded_backends=excluded_errors,
         fallback_executor=None,
         recovery_ts=recovery_ts,
+        backend_status=backend_status,
     )
 
 
@@ -1302,6 +1464,7 @@ async def _dispatch_stream(
         for backend_id, error in excluded_errors.items()
     }
 
+    backend_status = await _collect_backend_status(backends_list)
     if should_attempt_fallback(error_classifications):
         fallback = FallbackExecutor()
         # TODO: Implement fallback retry logic here
@@ -1317,6 +1480,7 @@ async def _dispatch_stream(
             excluded_backends=excluded_errors,
             fallback_executor=fallback,
             recovery_ts=recovery_ts,
+            backend_status=backend_status,
         )
 
     raise _no_viable(
@@ -1325,6 +1489,7 @@ async def _dispatch_stream(
         excluded_backends=excluded_errors,
         fallback_executor=None,
         recovery_ts=recovery_ts,
+        backend_status=backend_status,
     )
 
 
@@ -2535,6 +2700,43 @@ def _terminal_http(exc: BackendError) -> HTTPException:
     return HTTPException(status_code=status, detail=exc.message or exc.classification)
 
 
+async def _collect_backend_status(
+    backends_list: Sequence[Backend],
+) -> list[dict[str, Any]]:
+    """Snapshot each backend's diagnosis-relevant state for an error response.
+
+    Built so a 503 detail can be self-explanatory: every downstream tool
+    (Hermes, codex-cli, Cursor) prints the proxy's error verbatim, so the
+    proxy is the only place that can pack this context in once.
+    """
+    out: list[dict[str, Any]] = []
+    now = time.time()
+    for b in backends_list:
+        try:
+            usage = await b.usage_snapshot()
+        except Exception:
+            usage = None
+        try:
+            quota = await b.quota_snapshot()
+        except Exception:
+            quota = None
+        cd = getattr(usage, "cooldown_until_ts", None)
+        cd_in_s = (cd - now) if cd else None
+        out.append({
+            "id": b.id,
+            "kind": getattr(b, "kind", "unknown"),
+            "advertised_models": sorted(b.advertised_models),
+            "cooldown_until_ts": cd,
+            "cooldown_in_seconds": int(cd_in_s) if cd_in_s and cd_in_s > 0 else None,
+            "weekly_exhausted": bool(getattr(usage, "weekly_exhausted", False)),
+            "five_hourly_used_percent": getattr(quota, "five_hourly_used_percent", None),
+            "five_hourly_reset_after_seconds": getattr(quota, "five_hourly_reset_after_seconds", None),
+            "weekly_used_percent": getattr(quota, "weekly_used_percent", None),
+            "weekly_reset_after_seconds": getattr(quota, "weekly_reset_after_seconds", None),
+        })
+    return out
+
+
 def _no_viable(
     *,
     model: str,
@@ -2542,8 +2744,15 @@ def _no_viable(
     excluded_backends: dict[str, BackendError] | None = None,
     fallback_executor: FallbackExecutor | None = None,
     recovery_ts: float | None = None,
+    backend_status: list[dict[str, Any]] | None = None,
 ) -> HTTPException:
-    """Log all failed backends and return appropriate error with Retry-After header."""
+    """Log all failed backends and return appropriate error with Retry-After header.
+
+    When `backend_status` is provided, the response body's `detail` becomes a
+    structured dict including each backend's cooldown + quota state so
+    downstream tools printing the error verbatim have enough information
+    to diagnose without separately curling /status.
+    """
     if excluded_backends:
         # Build error classification map for logging
         error_classifications = {
@@ -2566,8 +2775,28 @@ def _no_viable(
                 msg += f" | Earliest recovery: {recovery_dt.isoformat()} (in {recovery_s}s)"
             logger.warning(msg)
 
+    def _build_detail(short: str) -> Any:
+        if backend_status is None:
+            return short
+        summary = short
+        if recovery_ts:
+            recovery_s = max(1, int(recovery_ts - time.time()))
+            summary += f" | earliest recovery in {recovery_s}s ({recovery_s/60:.1f}min)"
+        return {
+            "error": short,
+            "summary": summary,
+            "model": model,
+            "backends": backend_status,
+            "recovery_in_seconds": (
+                max(1, int(recovery_ts - time.time())) if recovery_ts else None
+            ),
+        }
+
     if last_error is None:
-        return HTTPException(status_code=503, detail=f"no viable backend for model {model!r}")
+        return HTTPException(
+            status_code=503,
+            detail=_build_detail(f"no viable backend for model {model!r}"),
+        )
     status = _EXHAUSTED_STATUS.get(last_error.classification, 502)
 
     # Build response headers with Retry-After if available
@@ -2580,6 +2809,6 @@ def _no_viable(
 
     return HTTPException(
         status_code=status,
-        detail=last_error.message or last_error.classification,
+        detail=_build_detail(last_error.message or last_error.classification),
         headers=headers or None,
     )

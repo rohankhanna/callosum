@@ -139,6 +139,30 @@ class AutoRouterConfig(BaseModel):
     # out of band, original 429 was transient). 0 to disable.
     cooldown_probe_interval_seconds: int = 3600
 
+    # Cell recommender — uses an upstream classifier call to the cheapest
+    # cell to pick the model + reasoning effort for each `auto`-routed
+    # request. Replaces a locally-trained classifier (data was too sparse).
+    cell_recommender_cheap_model: str = "model-a0c3"
+    cell_recommender_cheap_effort: str = "low"
+    # Max prompts to keep in the in-memory recommendation cache. Cache key
+    # is sha256 of the user's prompt text — repeated prompts (e.g. the
+    # Hermes persona, observed 17k copies) pay the upstream call once.
+    cell_recommender_cache_max: int = 4096
+    cell_recommender_cache_ttl_seconds: int = 3600
+    # Hard timeout on the classifier call. If exceeded, dispatch falls back
+    # to cost_router so the user request isn't blocked by classifier slowness.
+    cell_recommender_upstream_timeout_s: float = 5.0
+    # Off-peak comparison sampling. For some fraction of `auto`-routed
+    # requests, fire the same prompt at every live cell as a classifier
+    # in parallel (fire-and-forget after the user's response is dispatched)
+    # so we can measure how often the cheap classifier disagrees with
+    # bigger ones. Gated on weekly_used% being low to avoid burning
+    # quota when usage is tight. Mirrors the synthetic-spam-at-end-of-week
+    # pattern but smarter: only samples a fraction, only during off-peak,
+    # never blocks the user request.
+    cell_recommender_compare_pct: float = 0.05
+    cell_recommender_compare_max_weekly_pct: float = 30.0
+
 
 class BackendConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")

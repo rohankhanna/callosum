@@ -774,6 +774,55 @@ async def test_usage_snapshot_marks_weekly_exhausted_from_quota(tmp_path: Path) 
         await backend.aclose()
 
 
+async def test_weekly_exhausted_unsets_when_current_quota_low(tmp_path: Path) -> None:
+    """Regression: previously the flag was sticky — once set True by a 429 it
+    stayed True for the rest of the proxy run even if the next quota
+    snapshot showed weekly usage well below the threshold. That demoted
+    backends for an entire week on the strength of one momentarily-high
+    reading. Now the flag derives PURELY from the current quota.
+    """
+    from codex_proxy.backend import UsageSnapshot
+    from codex_proxy.state import StateStore
+
+    auth_path = tmp_path / "auth.json"
+    _write_auth_json(auth_path)
+    state_dir = tmp_path / "state"
+    state_store = StateStore(state_dir)
+    # Persist a "stuck True" snapshot from a prior session.
+    state_store.save_usage(
+        "vault-stuck-flag",
+        UsageSnapshot(
+            remaining_fraction=None,
+            cooldown_until_ts=time.time() - 3600,  # already expired
+            weekly_exhausted=True,
+            probed_at_ts=time.time() - 86400,
+        ),
+    )
+
+    vault = _make_vault(auth_path)
+    backend = CodexAuthVaultBackend(
+        id="vault-stuck-flag",
+        vault=vault,
+        advertised_models=frozenset({"model-a0e7"}),
+        transport=httpx.MockTransport(lambda r: httpx.Response(200)),
+        state_store=state_store,
+    )
+    try:
+        # With no fresh quota seen yet, the persisted True is honored
+        # (cold-start safety: better to demote until proven otherwise).
+        snap = await backend.usage_snapshot()
+        assert snap.weekly_exhausted is True
+
+        # First real upstream call observes the actual quota: 44%.
+        backend._last_quota = _make_quota(weekly_used_percent=44)  # type: ignore[attr-defined]
+        snap = await backend.usage_snapshot()
+        assert snap.weekly_exhausted is False, (
+            "weekly_exhausted should clear when current quota shows low usage"
+        )
+    finally:
+        await backend.aclose()
+
+
 # ---------- dynamic codex client_version resolution -------------------------
 
 

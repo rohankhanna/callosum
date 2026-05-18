@@ -223,19 +223,26 @@ class CodexAuthVaultBackend:
         return self._usage
 
     async def usage_snapshot(self) -> UsageSnapshot:
-        # Derive `weekly_exhausted` from the most recent upstream quota snapshot
-        # so the selector demotes accounts at/near their weekly cap before
-        # spending another real request finding out via 429. Threshold is 99%
-        # rather than 100% because the upstream's reported percent is integer-
-        # truncated, and any further organic burn while we wait pushes us
-        # over the next request's quota threshold.
-        weekly_exhausted = self._usage.weekly_exhausted
+        # Derive `weekly_exhausted` PURELY from the most recent upstream
+        # quota snapshot — no sticky propagation. If upstream's most recent
+        # reading says weekly is below the threshold, the flag is False
+        # even if a prior 429 had set it True. Otherwise the proxy could
+        # demote a backend for a whole week based on one early-in-the-
+        # week 429 with a momentarily-high reading.
+        #
+        # Threshold is 99% rather than 100% because upstream's reported
+        # percent is integer-truncated, and any further organic burn
+        # while we wait pushes us over the next request's quota threshold.
+        #
+        # Fallback to the persisted snapshot only when we have no fresh
+        # quota reading yet (cold start before the first call returns).
         if (
             self._last_quota is not None
             and self._last_quota.weekly_used_percent is not None
-            and self._last_quota.weekly_used_percent >= 99
         ):
-            weekly_exhausted = True
+            weekly_exhausted = self._last_quota.weekly_used_percent >= 99
+        else:
+            weekly_exhausted = self._usage.weekly_exhausted
         if weekly_exhausted == self._usage.weekly_exhausted:
             return self._usage
         return UsageSnapshot(
@@ -456,11 +463,16 @@ class CodexAuthVaultBackend:
         else:
             cooldown_until = now + DEFAULT_COOLDOWN_S
 
-        # Determine weekly_exhausted flag
-        weekly_exhausted = (
-            self._usage.weekly_exhausted
-            or (quota is not None and quota.weekly_used_percent is not None and quota.weekly_used_percent >= 99)
-        )
+        # Determine weekly_exhausted flag — purely from the current quota
+        # snapshot, no sticky propagation. If quota is missing, fall back
+        # to whatever the persisted snapshot said (cold start). See
+        # usage_snapshot() for the rationale: a sticky flag wrongly
+        # demotes a backend for the rest of the week based on one
+        # momentarily-high reading.
+        if quota is not None and quota.weekly_used_percent is not None:
+            weekly_exhausted = quota.weekly_used_percent >= 99
+        else:
+            weekly_exhausted = self._usage.weekly_exhausted
 
         self._usage = UsageSnapshot(
             remaining_fraction=self._usage.remaining_fraction,
