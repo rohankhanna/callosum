@@ -1050,17 +1050,18 @@ async def _dispatch_internal(
             body.setdefault("reasoning", {})["effort"] = decision.cell.reasoning_effort
             routing_mode = "auto-learning"
 
-        # Inject complexity classification instruction only for exploration requests
-        # (not for cost-optimal routing, which uses learned costs)
-        if routing_mode == "auto-learning":
-            body.setdefault("instructions", "")
-            if body["instructions"]:
-                body["instructions"] += "\n\n" + _COMPLEXITY_CLASSIFIER_INSTRUCTION
-            else:
-                body["instructions"] = _COMPLEXITY_CLASSIFIER_INSTRUCTION
-            # Signal response handlers to extract and strip the {{{N}}} marker
-            _extract_complexity_context.set(True)
-            _complexity_class_context.set(None)
+        # Complexity-classifier marker injection used to live here — it
+        # asked the model to prefix its answer with {{{N}}} so we could
+        # train a local classifier. That training was abandoned in favor
+        # of the cell recommender (see cell_recommender.py), which uses
+        # the cheapest cell to pick the right cell for each prompt and
+        # logs (prompt, recommended_cell) as a side-effect corpus. With
+        # no consumer for the marker labels, the injection became dead
+        # leakage surface. The defensive marker filter
+        # (_extract_complexity_from_stream, _strip_trailing_complexity_marker,
+        # _clean_sse_blob) is intentionally retained as a belt-and-
+        # suspenders scrub for any in-flight requests that still had the
+        # instruction echoed back by upstream context.
     elif requested_model == "auto-learning-synthetic":
         # Constrain the cell grid to models the forced backend advertises.
         # Without this, choose() may pick a model from the union-of-all-backends
