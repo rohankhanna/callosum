@@ -197,6 +197,31 @@ class CodexAuthVaultBackend:
     async def health(self) -> HealthStatus:
         return HealthStatus(available=True, reason="ok")
 
+    def clear_cooldown(self) -> UsageSnapshot:
+        """Reset cooldown and weekly-exhausted flags to a fresh state.
+
+        The dispatcher excludes any backend whose cooldown_until_ts hasn't
+        passed, and the diagnostic / smoke-test paths deliberately skip
+        cooldown'd backends. Together those create a chicken-and-egg lockout
+        when the persisted cooldown becomes stale (e.g. upstream's
+        weekly_reset_at was inaccurate, account quota was topped up out of
+        band, or the original 429 was a transient mis-classification).
+
+        Called by the periodic cooldown prober when its probe succeeds, and
+        by the /control/clear-cooldown admin endpoint as an explicit operator
+        override. Updates the persisted snapshot so the cleared state
+        survives proxy restart.
+        """
+        self._usage = UsageSnapshot(
+            remaining_fraction=self._usage.remaining_fraction,
+            cooldown_until_ts=None,
+            weekly_exhausted=False,
+            probed_at_ts=time.time(),
+        )
+        if self._state_store is not None:
+            self._state_store.save_usage(self.id, self._usage)
+        return self._usage
+
     async def usage_snapshot(self) -> UsageSnapshot:
         # Derive `weekly_exhausted` from the most recent upstream quota snapshot
         # so the selector demotes accounts at/near their weekly cap before

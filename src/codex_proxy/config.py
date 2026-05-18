@@ -131,6 +131,13 @@ class AutoRouterConfig(BaseModel):
     optimal_min_samples_per_cell: int = 30
     # How often to refit the cost model (seconds). 0 to disable periodic refit.
     optimal_refit_interval_seconds: int = 3600
+    # How often the cooldown prober re-probes any backend whose persisted
+    # cooldown_until_ts is in the future. The probe bypasses the cooldown-
+    # skip guard and clears the cooldown if the probe succeeds — the only
+    # way the proxy can self-heal from a stale-snapshot lockout (e.g.
+    # upstream's reported weekly_reset_at was wrong, account was topped up
+    # out of band, original 429 was transient). 0 to disable.
+    cooldown_probe_interval_seconds: int = 3600
 
 
 class BackendConfig(BaseModel):

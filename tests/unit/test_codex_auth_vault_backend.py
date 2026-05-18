@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import httpx
@@ -234,6 +235,64 @@ async def test_chat_translation_preserves_explicit_store(tmp_path: Path) -> None
         body = captured["body"]
         assert isinstance(body, dict)
         assert body.get("store") is True
+    finally:
+        await backend.aclose()
+
+
+async def test_clear_cooldown_resets_snapshot_and_persists(tmp_path: Path) -> None:
+    """clear_cooldown wipes cooldown_until_ts + weekly_exhausted and the
+    state_store gets the cleared snapshot so a restart doesn't resurrect it.
+
+    Regression: without this, a stale cooldown set from a transient or
+    mis-classified 429 (or an upstream weekly_reset_at that overshot) had
+    no in-process recovery path — the chicken-and-egg with the dispatcher's
+    cooldown-skip guard locked the backend out until the timestamp finally
+    expired or the operator manually edited the JSON on disk.
+    """
+    from codex_proxy.backend import UsageSnapshot
+    from codex_proxy.state import StateStore
+
+    auth_path = tmp_path / "auth.json"
+    _write_auth_json(auth_path)
+    state_dir = tmp_path / "state"
+    state_store = StateStore(state_dir)
+    # Seed a stuck cooldown on disk (mimics the production failure mode).
+    state_store.save_usage(
+        "vault-stuck",
+        UsageSnapshot(
+            remaining_fraction=None,
+            cooldown_until_ts=time.time() + 7 * 86400,
+            weekly_exhausted=True,
+            probed_at_ts=time.time() - 2 * 86400,
+        ),
+    )
+
+    vault = _make_vault(auth_path)
+    backend = CodexAuthVaultBackend(
+        id="vault-stuck",
+        vault=vault,
+        advertised_models=frozenset({"model-a0d0"}),
+        transport=httpx.MockTransport(lambda r: httpx.Response(200)),
+        state_store=state_store,
+    )
+    try:
+        before = await backend.usage_snapshot()
+        assert before.cooldown_until_ts is not None
+        assert before.weekly_exhausted is True
+
+        cleared = backend.clear_cooldown()
+        assert cleared.cooldown_until_ts is None
+        assert cleared.weekly_exhausted is False
+
+        after = await backend.usage_snapshot()
+        assert after.cooldown_until_ts is None
+        assert after.weekly_exhausted is False
+
+        # Persisted: a fresh StateStore reading the same dir sees cleared state.
+        persisted = StateStore(state_dir).load_usage("vault-stuck")
+        assert persisted is not None
+        assert persisted.cooldown_until_ts is None
+        assert persisted.weekly_exhausted is False
     finally:
         await backend.aclose()
 

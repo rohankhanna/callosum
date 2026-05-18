@@ -347,6 +347,10 @@ def create_app(
         interval_s=smoke_test_interval_seconds,
         state_store=state_store,
     )
+    cooldown_prober = _PeriodicCooldownProber(
+        backends=backends_list,
+        interval_s=auto_cfg.cooldown_probe_interval_seconds,
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -388,9 +392,11 @@ def create_app(
         cost_router.fit(min_samples_per_cell=auto_cfg.optimal_min_samples_per_cell)
         topper.start()
         smoke_tester.start()
+        cooldown_prober.start()
         try:
             yield
         finally:
+            await cooldown_prober.stop()
             await smoke_tester.stop()
             await topper.stop()
             for backend in backends_list:
@@ -480,6 +486,37 @@ def create_app(
     async def control_unpin() -> dict[str, str | None]:
         pin_state.clear()
         return {"pinned": None}
+
+    @app.post("/control/clear-cooldown/{backend_id}")
+    async def control_clear_cooldown(backend_id: str) -> dict[str, Any]:
+        """Operator override: clear a stale cooldown on one backend.
+
+        Companion to the periodic cooldown prober (`_PeriodicCooldownProber`)
+        for cases where you'd rather not wait an interval for the next probe
+        — e.g. you know out of band that the account was just topped up.
+        Returns 404 if no backend with that id is configured.
+        """
+        backend = next((b for b in backends_list if b.id == backend_id), None)
+        if backend is None:
+            raise HTTPException(
+                status_code=404, detail=f"backend {backend_id!r} not in pool"
+            )
+        clear = getattr(backend, "clear_cooldown", None)
+        if clear is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"backend {backend_id!r} does not support clear_cooldown",
+            )
+        snap = clear()
+        return {
+            "id": backend_id,
+            "cleared": True,
+            "snapshot": {
+                "cooldown_until_ts": snap.cooldown_until_ts,
+                "weekly_exhausted": snap.weekly_exhausted,
+                "probed_at_ts": snap.probed_at_ts,
+            },
+        }
 
     @app.get("/diagnose/upstream")
     async def diagnose_upstream() -> dict[str, Any]:
@@ -1907,8 +1944,14 @@ _DIAGNOSE_PROMPT = "say only: ok"
 _DIAGNOSE_INSTRUCTIONS = "You are a smoke-test probe. Reply minimally."
 
 
-async def _diagnose_backend(backend: Backend) -> dict[str, Any]:
-    """Send one minimal streaming request and check upstream contract holds."""
+async def _diagnose_backend(backend: Backend, *, force: bool = False) -> dict[str, Any]:
+    """Send one minimal streaming request and check upstream contract holds.
+
+    When `force=True` the cooldown-skip guard is bypassed: the probe goes
+    out even if the persisted snapshot claims the backend is still in
+    cooldown. The periodic cooldown prober uses this to break out of a
+    stale-snapshot lockout (see CodexAuthVaultBackend.clear_cooldown).
+    """
     if not backend.advertised_models:
         return {
             "id": backend.id,
@@ -1919,7 +1962,11 @@ async def _diagnose_backend(backend: Backend) -> dict[str, Any]:
         }
     usage = await backend.usage_snapshot()
     now = time.time()
-    if usage.cooldown_until_ts is not None and usage.cooldown_until_ts > now:
+    if (
+        not force
+        and usage.cooldown_until_ts is not None
+        and usage.cooldown_until_ts > now
+    ):
         return {
             "id": backend.id,
             "ok": True,
@@ -2048,6 +2095,88 @@ class _PeriodicSmokeTester:
                 await _run_startup_smoke_test(self._backends)
             except Exception:
                 logger.exception("periodic smoke test cycle failed")
+
+
+class _PeriodicCooldownProber:
+    """Background task that re-probes cooldown'd backends so the proxy can
+    self-heal from stale-snapshot lockouts.
+
+    The dispatcher excludes any backend whose persisted cooldown_until_ts is
+    in the future, and every other probe path (startup smoke test, periodic
+    smoke test, /diagnose/upstream) also skips cooldown'd backends by design
+    — they're meant to respect a real cooldown rather than burn quota on a
+    backend that just said no. That defensive behavior turns into a
+    chicken-and-egg lockout whenever the persisted snapshot stops matching
+    reality (upstream's reported weekly_reset_at was wrong, account was
+    topped up out of band, original 429 was transient, etc.): the proxy
+    can't learn that headroom returned because nothing inside it is allowed
+    to probe.
+
+    This task is the deliberate counter to that: every `interval_s` it
+    sends a minimal forced probe to each cooldown'd backend and clears the
+    cooldown if the probe comes back clean. Cost is tiny (a handful of
+    tokens per backend per cycle); the failure mode it prevents is days-of-
+    blocked-traffic stuck on stale state. interval_s=0 disables.
+    """
+
+    def __init__(self, *, backends: Sequence[Backend], interval_s: int) -> None:
+        self._backends = list(backends)
+        self._interval_s = interval_s
+        self._task: asyncio.Task[None] | None = None
+        self._stop = asyncio.Event()
+
+    @property
+    def enabled(self) -> bool:
+        return self._interval_s > 0 and bool(self._backends)
+
+    def start(self) -> None:
+        if not self.enabled or self._task is not None:
+            return
+        self._task = asyncio.create_task(self._run(), name="periodic-cooldown-prober")
+
+    async def stop(self) -> None:
+        self._stop.set()
+        if self._task is not None:
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
+            self._task = None
+
+    async def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=self._interval_s)
+            except TimeoutError:
+                pass
+            else:
+                return
+            for backend in self._backends:
+                try:
+                    usage = await backend.usage_snapshot()
+                except Exception:
+                    logger.exception("cooldown prober: usage_snapshot failed for %r", backend.id)
+                    continue
+                now = time.time()
+                if usage.cooldown_until_ts is None or usage.cooldown_until_ts <= now:
+                    continue
+                try:
+                    result = await _diagnose_backend(backend, force=True)
+                except Exception:
+                    logger.exception("cooldown prober: probe raised for %r", backend.id)
+                    continue
+                if result.get("ok") and not result.get("skipped"):
+                    clear = getattr(backend, "clear_cooldown", None)
+                    if clear is not None:
+                        try:
+                            clear()
+                            logger.warning(
+                                "cooldown prober: %r probe succeeded; cooldown cleared "
+                                "(was until %s)",
+                                backend.id, usage.cooldown_until_ts,
+                            )
+                        except Exception:
+                            logger.exception(
+                                "cooldown prober: clear_cooldown raised for %r", backend.id
+                            )
 
 
 async def _run_startup_smoke_test(backends_list: Sequence[Backend]) -> None:
