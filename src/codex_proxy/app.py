@@ -463,10 +463,52 @@ def create_app(
                     "quota": _quota_to_dict(q),
                 }
             )
+        # Router state: lets the operator watch the v1 + v2 cost models ramp
+        # up without poking at SQLite. last_fit / is_ready / per-cell sample
+        # counts answer "is auto routing using up-to-date data?" and "has v2
+        # accumulated enough data for this complexity bucket yet?".
+        router_block: dict[str, Any] = {
+            "is_ready": False,
+            "last_fit_ts": cost_router._last_fit if cost_router._last_fit else None,
+            "last_fit_age_s": (
+                (time.time() - cost_router._last_fit) if cost_router._last_fit else None
+            ),
+            "v1_cells": [],
+            "v2_buckets_with_data": [],
+        }
+        if cost_router._model is not None:
+            em = cost_router._model
+            router_block["is_ready"] = em.is_ready
+            router_block["v1_cells"] = sorted(
+                (
+                    {
+                        "model": m,
+                        "reasoning_effort": e,
+                        "n_samples": em._n_samples.get((m, e), 0),
+                        "avg_tokens": round(em.scores.get((m, e), 0.0), 1),
+                    }
+                    for m, e in em.scores
+                ),
+                key=lambda r: (r["model"], r["reasoning_effort"]),
+            )
+            router_block["v2_buckets_with_data"] = sorted(
+                (
+                    {
+                        "complexity": c,
+                        "model": m,
+                        "reasoning_effort": e,
+                        "n_samples": em._n_samples_by_complexity.get((c, m, e), 0),
+                        "avg_tokens": round(em.scores_by_complexity.get((c, m, e), 0.0), 1),
+                    }
+                    for c, m, e in em.scores_by_complexity
+                ),
+                key=lambda r: (r["complexity"], r["model"], r["reasoning_effort"]),
+            )
         return {
             "backends": entries,
             "pinned": pin_state.get(),
             "sessions": session_registry.snapshot(),
+            "router": router_block,
         }
 
     if auth_service is not None:
@@ -487,6 +529,28 @@ def create_app(
     async def control_unpin() -> dict[str, str | None]:
         pin_state.clear()
         return {"pinned": None}
+
+    @app.post("/control/refit-router")
+    async def control_refit_router() -> dict[str, Any]:
+        """Recompute the v1 + v2 cost-router lookup tables from the usage log.
+
+        Designed to be the payload of a recurring Dispatch job — Dispatch owns
+        the schedule (cron-like, restart-safe, observable as a job), the proxy
+        owns the in-process router state. Synchronous: returns once the refit
+        has completed.
+
+        The refit itself is two SQL GROUP BY queries + an in-memory dict swap;
+        takes milliseconds. Safe to call concurrently with serving traffic —
+        readers see either the old or the new map atomically.
+        """
+        cost_router.fit(min_samples_per_cell=auto_cfg.optimal_min_samples_per_cell)
+        em = cost_router._model
+        return {
+            "refit_at_ts": cost_router._last_fit,
+            "is_ready": em.is_ready if em is not None else False,
+            "v1_cell_count": len(em.scores) if em is not None else 0,
+            "v2_bucket_count": len(em.scores_by_complexity) if em is not None else 0,
+        }
 
     @app.post("/control/clear-cooldown/{backend_id}")
     async def control_clear_cooldown(backend_id: str) -> dict[str, Any]:
