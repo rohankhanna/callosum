@@ -1,11 +1,14 @@
 """Tests for complexity classification extraction and handling."""
 
 import asyncio
+import json
 
 from codex_proxy.app import (
     _extract_and_strip_complexity,
     _extract_complexity_class,
     _extract_complexity_from_stream,
+    _strip_trailing_complexity_marker,
+    _strip_trailing_complexity_marker_text,
 )
 
 
@@ -42,13 +45,18 @@ def test_extract_complexity_class_handles_all_levels() -> None:
         assert cleaned == "Response"
 
 
-def test_extract_complexity_class_ignores_invalid_markers() -> None:
-    """Invalid markers like {{{0}}} or {{{4}}} are not matched."""
-    text = "{{{0}}} This has invalid marker"
+def test_extract_complexity_class_strips_non_numeric_brace_markers() -> None:
+    """Non-numeric {{{...}}} markers are stripped but produce no class.
+
+    The proxy injects an instruction for the model to emit {{{1}}}, {{{2}}},
+    or {{{3}}}; if the model emits any other leading {{{...}}} (e.g.
+    {{{0}}}, {{{complexity: Low}}}), we still strip it so the user never
+    sees a stray marker — we just can't classify it.
+    """
+    text = "{{{0}}} This has non-numeric marker"
     complexity_class, cleaned = _extract_complexity_class(text)
     assert complexity_class is None
-    # Text unchanged since regex doesn't match invalid levels
-    assert cleaned == text
+    assert cleaned == "This has non-numeric marker"
 
 
 def test_extract_and_strip_complexity_modifies_response_dict() -> None:
@@ -267,6 +275,137 @@ class TestStreamingComplexityExtraction:
         # After [DONE], markers should not be extracted
         assert "{{{3}}}" in result_str
 
+    async def _extract_from_event_sequence(self, events: list[bytes]) -> bytes:
+        """Feed events one chunk at a time (each event = its own chunk)."""
+
+        async def source():
+            for ev in events:
+                yield ev
+
+        result_chunks = []
+        async for chunk in _extract_complexity_from_stream(source()):
+            result_chunks.append(chunk)
+        return b"".join(result_chunks)
+
+    async def test_marker_split_across_chunks_chat_completions(self) -> None:
+        """Regression: marker tokenized as multiple SSE events must still be stripped.
+
+        Tokenizers commonly split '{{{2}}}' into pieces like '{{{', '2', '}}}'.
+        Each piece may arrive as its own data: event. The old extractor saw
+        '{{{' in the first event, failed the strict regex, set complexity_found=True
+        anyway, and let '2}}}' leak through to the client.
+        """
+        events = [
+            b'data: {"choices":[{"delta":{"role":"assistant","content":""}}]}\n\n',
+            b'data: {"choices":[{"delta":{"content":"{{{"}}]}\n\n',
+            b'data: {"choices":[{"delta":{"content":"2"}}]}\n\n',
+            b'data: {"choices":[{"delta":{"content":"}}}"}}]}\n\n',
+            b'data: {"choices":[{"delta":{"content":" hello"}}]}\n\n',
+            b'data: [DONE]\n\n',
+        ]
+        result_str = (await self._extract_from_event_sequence(events)).decode("utf-8")
+        assert "{{{" not in result_str
+        assert "}}}" not in result_str
+        assert "hello" in result_str
+
+    async def test_marker_split_across_chunks_responses_api(self) -> None:
+        """Same split-marker case for the Responses API delta format."""
+        events = [
+            b'data: {"type":"response.created","id":"r1"}\n\n',
+            b'data: {"type":"response.output_text.delta","delta":"{{{"}\n\n',
+            b'data: {"type":"response.output_text.delta","delta":"3"}\n\n',
+            b'data: {"type":"response.output_text.delta","delta":"}}}"}\n\n',
+            b'data: {"type":"response.output_text.delta","delta":" world"}\n\n',
+            b'data: [DONE]\n\n',
+        ]
+        result_str = (await self._extract_from_event_sequence(events)).decode("utf-8")
+        assert "{{{" not in result_str
+        assert "}}}" not in result_str
+        assert "world" in result_str
+        assert "response.created" in result_str
+
+    async def test_event_split_across_byte_chunks(self) -> None:
+        """One SSE event split across multiple TCP byte chunks (no \\n\\n yet)."""
+
+        async def source():
+            yield b'data: {"choices":[{"delta":{"content":"{{{1}'
+            yield b'}} hello"}}]}\n\n'
+            yield b'data: [DONE]\n\n'
+
+        result_chunks = []
+        async for chunk in _extract_complexity_from_stream(source()):
+            result_chunks.append(chunk)
+        result_str = b"".join(result_chunks).decode("utf-8")
+        assert "{{{1}}}" not in result_str
+        assert "hello" in result_str
+
+    async def test_bare_digit_marker_chat_completions(self) -> None:
+        """Model dropped the braces and emitted just '2\\n\\n' before the answer."""
+        events = [
+            b'data: {"choices":[{"delta":{"role":"assistant","content":""}}]}\n\n',
+            b'data: {"choices":[{"delta":{"content":"2"}}]}\n\n',
+            b'data: {"choices":[{"delta":{"content":"\\n\\n"}}]}\n\n',
+            b'data: {"choices":[{"delta":{"content":"I checked the things."}}]}\n\n',
+            b'data: [DONE]\n\n',
+        ]
+        result_str = (await self._extract_from_event_sequence(events)).decode("utf-8")
+        # The bare leading "2" + blank line should be gone, but the real answer remains.
+        assert "I checked the things." in result_str
+        # Reconstruct visible delta content and confirm no leading bare digit.
+        visible = ""
+        for line in result_str.split("\n"):
+            if line.startswith("data: ") and line[6:].strip() != "[DONE]":
+                try:
+                    data = json.loads(line[6:])
+                    choices = data.get("choices")
+                    if choices:
+                        visible += choices[0].get("delta", {}).get("content") or ""
+                except (json.JSONDecodeError, AttributeError, KeyError, IndexError, TypeError):
+                    pass
+        assert visible.lstrip().startswith("I checked"), f"visible content was {visible!r}"
+
+    async def test_bare_digit_marker_responses_api(self) -> None:
+        """Same bare-digit case on Responses API delta events."""
+        events = [
+            b'data: {"type":"response.created","id":"r1"}\n\n',
+            b'data: {"type":"response.output_text.delta","delta":"3"}\n\n',
+            b'data: {"type":"response.output_text.delta","delta":"\\n\\n"}\n\n',
+            b'data: {"type":"response.output_text.delta","delta":"The answer is here."}\n\n',
+            b'data: [DONE]\n\n',
+        ]
+        result_str = (await self._extract_from_event_sequence(events)).decode("utf-8")
+        assert "The answer is here." in result_str
+        visible = ""
+        for line in result_str.split("\n"):
+            if line.startswith("data: ") and line[6:].strip() != "[DONE]":
+                try:
+                    data = json.loads(line[6:])
+                    if data.get("type") == "response.output_text.delta":
+                        visible += data.get("delta") or ""
+                except (json.JSONDecodeError, AttributeError, KeyError, IndexError, TypeError):
+                    pass
+        assert visible.lstrip().startswith("The answer"), f"visible content was {visible!r}"
+
+    async def test_leading_digit_in_legit_content_not_stripped(self) -> None:
+        """Response like '2 minutes is the limit' must NOT have its leading 2 stripped."""
+        events = [
+            b'data: {"choices":[{"delta":{"role":"assistant","content":""}}]}\n\n',
+            b'data: {"choices":[{"delta":{"content":"2 minutes is the limit"}}]}\n\n',
+            b'data: [DONE]\n\n',
+        ]
+        result_str = (await self._extract_from_event_sequence(events)).decode("utf-8")
+        visible = ""
+        for line in result_str.split("\n"):
+            if line.startswith("data: ") and line[6:].strip() != "[DONE]":
+                try:
+                    data = json.loads(line[6:])
+                    choices = data.get("choices")
+                    if choices:
+                        visible += choices[0].get("delta", {}).get("content") or ""
+                except (json.JSONDecodeError, AttributeError, KeyError, IndexError, TypeError):
+                    pass
+        assert visible == "2 minutes is the limit", f"visible content was {visible!r}"
+
 
 # Async test wrapper for pytest
 def test_chat_completions_format_with_marker() -> None:
@@ -299,3 +438,152 @@ def test_empty_stream() -> None:
 
 def test_done_marker_stops_extraction() -> None:
     asyncio.run(TestStreamingComplexityExtraction().test_done_marker_stops_extraction())
+
+
+def test_marker_split_across_chunks_chat_completions() -> None:
+    asyncio.run(TestStreamingComplexityExtraction().test_marker_split_across_chunks_chat_completions())
+
+
+def test_marker_split_across_chunks_responses_api() -> None:
+    asyncio.run(TestStreamingComplexityExtraction().test_marker_split_across_chunks_responses_api())
+
+
+def test_event_split_across_byte_chunks() -> None:
+    asyncio.run(TestStreamingComplexityExtraction().test_event_split_across_byte_chunks())
+
+
+def test_bare_digit_marker_chat_completions() -> None:
+    asyncio.run(TestStreamingComplexityExtraction().test_bare_digit_marker_chat_completions())
+
+
+def test_bare_digit_marker_responses_api() -> None:
+    asyncio.run(TestStreamingComplexityExtraction().test_bare_digit_marker_responses_api())
+
+
+def test_leading_digit_in_legit_content_not_stripped() -> None:
+    asyncio.run(TestStreamingComplexityExtraction().test_leading_digit_in_legit_content_not_stripped())
+
+
+# ---------- Trailing-marker stripper tests ----------
+
+
+def test_strip_trailing_marker_text_closing_tag() -> None:
+    """{{{/2}}} at the very end is stripped."""
+    text = "Here is the answer.\n\n{{{/2}}}"
+    assert _strip_trailing_complexity_marker_text(text) == "Here is the answer.\n\n"
+
+
+def test_strip_trailing_marker_text_no_marker() -> None:
+    """Plain trailing content is preserved verbatim."""
+    text = "Here is the answer."
+    assert _strip_trailing_complexity_marker_text(text) == text
+
+
+def test_strip_trailing_marker_text_marker_not_at_end_kept() -> None:
+    """A {{{...}}} in the middle of the response is NOT stripped."""
+    text = "Refer to {{{node_id}}} in the graph."
+    assert _strip_trailing_complexity_marker_text(text) == text
+
+
+class TestTrailingMarkerStream:
+    async def _run(self, events: list[bytes]) -> str:
+        async def source():
+            for ev in events:
+                yield ev
+        chunks = []
+        async for chunk in _strip_trailing_complexity_marker(source()):
+            chunks.append(chunk)
+        return b"".join(chunks).decode("utf-8")
+
+    @staticmethod
+    def _visible_chat(sse: str) -> str:
+        out = ""
+        for line in sse.split("\n"):
+            if not line.startswith("data: "):
+                continue
+            payload = line[6:]
+            if payload.strip() == "[DONE]":
+                continue
+            try:
+                d = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            ch = d.get("choices")
+            if ch:
+                out += ch[0].get("delta", {}).get("content") or ""
+            elif d.get("type") == "response.output_text.delta":
+                out += d.get("delta") or ""
+        return out
+
+    async def test_trailing_closing_tag_chat_completions(self) -> None:
+        events = [
+            b'data: {"choices":[{"delta":{"content":"Step A: check\\n"}}]}\n\n',
+            b'data: {"choices":[{"delta":{"content":"Step B: confirm."}}]}\n\n',
+            b'data: {"choices":[{"delta":{"content":"\\n\\n{{{/2}}}"}}]}\n\n',
+            b'data: [DONE]\n\n',
+        ]
+        visible = self._visible_chat(await self._run(events))
+        assert visible == "Step A: check\nStep B: confirm.\n\n"
+
+    async def test_trailing_closing_tag_responses_api(self) -> None:
+        events = [
+            b'data: {"type":"response.created","id":"r1"}\n\n',
+            b'data: {"type":"response.output_text.delta","delta":"Here is the brief.\\n\\n"}\n\n',
+            b'data: {"type":"response.output_text.delta","delta":"{{{/2}}}"}\n\n',
+            b'data: {"type":"response.completed"}\n\n',
+            b'data: [DONE]\n\n',
+        ]
+        visible = self._visible_chat(await self._run(events))
+        assert visible == "Here is the brief.\n\n"
+
+    async def test_trailing_marker_split_across_events(self) -> None:
+        """Closing tag is split into pieces: '{{{', '/2', '}}}'."""
+        events = [
+            b'data: {"choices":[{"delta":{"content":"Done."}}]}\n\n',
+            b'data: {"choices":[{"delta":{"content":"\\n\\n"}}]}\n\n',
+            b'data: {"choices":[{"delta":{"content":"{{{"}}]}\n\n',
+            b'data: {"choices":[{"delta":{"content":"/2"}}]}\n\n',
+            b'data: {"choices":[{"delta":{"content":"}}}"}}]}\n\n',
+            b'data: [DONE]\n\n',
+        ]
+        visible = self._visible_chat(await self._run(events))
+        assert "{{{" not in visible and "}}}" not in visible
+        assert visible == "Done.\n\n"
+
+    async def test_no_trailing_marker_passthrough(self) -> None:
+        events = [
+            b'data: {"choices":[{"delta":{"content":"Just a plain answer."}}]}\n\n',
+            b'data: [DONE]\n\n',
+        ]
+        visible = self._visible_chat(await self._run(events))
+        assert visible == "Just a plain answer."
+
+    async def test_marker_in_middle_not_stripped(self) -> None:
+        """A {{{node_id}}} in the middle is NOT a trailing marker; preserve it."""
+        events = [
+            b'data: {"choices":[{"delta":{"content":"See {{{node_id}}}"}}]}\n\n',
+            b'data: {"choices":[{"delta":{"content":" for details."}}]}\n\n',
+            b'data: [DONE]\n\n',
+        ]
+        visible = self._visible_chat(await self._run(events))
+        assert visible == "See {{{node_id}}} for details."
+
+
+def test_trailing_closing_tag_chat_completions() -> None:
+    asyncio.run(TestTrailingMarkerStream().test_trailing_closing_tag_chat_completions())
+
+
+def test_trailing_closing_tag_responses_api() -> None:
+    asyncio.run(TestTrailingMarkerStream().test_trailing_closing_tag_responses_api())
+
+
+def test_trailing_marker_split_across_events() -> None:
+    asyncio.run(TestTrailingMarkerStream().test_trailing_marker_split_across_events())
+
+
+def test_no_trailing_marker_passthrough() -> None:
+    asyncio.run(TestTrailingMarkerStream().test_no_trailing_marker_passthrough())
+
+
+def test_marker_in_middle_not_stripped() -> None:
+    asyncio.run(TestTrailingMarkerStream().test_marker_in_middle_not_stripped())

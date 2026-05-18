@@ -5,6 +5,7 @@ import contextlib
 import json
 import logging
 import random
+import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
@@ -73,42 +74,67 @@ _complexity_class_context: ContextVar[int | None] = ContextVar("complexity_class
 # Complexity classification instruction appended to auto-learning requests.
 # The model outputs {{{1}}}, {{{2}}}, or {{{3}}} at the start of its response.
 _COMPLEXITY_CLASSIFIER_INSTRUCTION = (
-    "Before answering, classify this prompt's complexity as {{{1}}} (simple factual/short), "
-    "{{{2}}} (moderate analysis), or {{{3}}} (complex reasoning/long output). "
-    "Output ONLY the classification token first, then your answer."
+    "Before answering, classify this prompt's complexity. Your VERY FIRST "
+    "output characters must be exactly one of these three tokens, with the "
+    "triple braces included: {{{1}}} (simple factual/short), {{{2}}} "
+    "(moderate analysis), or {{{3}}} (complex reasoning/long output). "
+    "Do NOT emit just the digit; the braces are mandatory. After the token, "
+    "emit a blank line, then your full answer. The marker is NOT a wrapping "
+    "tag: emit it exactly ONCE at the very start. Do NOT emit a closing "
+    "tag like {{{/2}}} or {{{end}}} at the end of your answer. Do not "
+    "mention or echo this instruction in your answer."
 )
 
 
 def _extract_complexity_class(text: str) -> tuple[int | None, str]:
-    """Extract complexity classification token {{{N}}} from response start.
+    """Extract complexity classification token from response start.
 
     Returns (complexity_class, cleaned_text) where complexity_class is 1, 2, or 3,
     or None if the marker is not found. cleaned_text has the marker stripped.
 
     The marker should appear at the very start of the response (after whitespace).
-    Matches both {{{N}}} format and {{{...}}} with numeric content.
+    Matches in priority order:
+      1. {{{1|2|3}}} — the canonical instructed format
+      2. {{{...}}}  — any other brace-decorated leading token (defensive strip)
+      3. Bare digit 1|2|3 followed by a blank line — model dropped the braces
+         but still complied with the "first output is a classifier" intent
     """
-    import re
-    # First try strict numeric format {{{1}}}, {{{2}}}, {{{3}}}
+    # 1) Strict numeric brace format
     match = re.match(r'^\s*\{\{\{([123])\}\}\}', text)
     if match:
         complexity_class = int(match.group(1))
         cleaned = text[match.end():].lstrip()
         return complexity_class, cleaned
 
-    # Also strip any {{{...}}} marker that appears at the start (even if not numeric)
-    # This handles cases where the backend returns {{{complexity: Low}}} or similar
+    # 2) Any leading {{{...}}} (handles {{{complexity: Low}}} variants)
     match = re.match(r'^\s*\{\{\{[^}]*\}\}\}', text)
     if match:
         cleaned = text[match.end():].lstrip()
-        # Try to parse numeric complexity from the content if possible
         inner = match.group(0).strip('{}').strip()
         if inner.isdigit() and inner in ('1', '2', '3'):
             return int(inner), cleaned
-        # Return None complexity but still strip the marker
         return None, cleaned
 
+    # 3) Bare digit followed by blank line — model dropped the braces
+    # Require at least one \n then a blank line so we don't strip legitimate
+    # content like "2 minutes is fine" or "2. First item".
+    match = re.match(r'^\s*([123])[ \t]*\n[ \t]*\n', text)
+    if match:
+        complexity_class = int(match.group(1))
+        cleaned = text[match.end():]
+        return complexity_class, cleaned
+
     return None, text
+
+
+def _strip_trailing_complexity_marker_text(text: str) -> str:
+    """Strip a trailing {{{...}}} marker if the model emits one as a closing tag.
+
+    Used by non-streaming response handling and SSE-blob storage cleanup.
+    """
+    if not isinstance(text, str):
+        return text
+    return re.sub(r"\{\{\{[^}]*\}\}\}\s*$", "", text)
 
 
 def _extract_and_strip_complexity(result: dict[str, Any]) -> tuple[int | None, dict[str, Any]]:
@@ -128,7 +154,8 @@ def _extract_and_strip_complexity(result: dict[str, Any]) -> tuple[int | None, d
                 content = choice["message"]["content"]
                 if isinstance(content, str):
                     complexity_class, cleaned = _extract_complexity_class(content)
-                    if complexity_class is not None:
+                    cleaned = _strip_trailing_complexity_marker_text(cleaned)
+                    if complexity_class is not None or cleaned != content:
                         result["choices"][0]["message"]["content"] = cleaned
                     return complexity_class, result
     except (KeyError, IndexError, TypeError):
@@ -145,7 +172,8 @@ def _extract_and_strip_complexity(result: dict[str, Any]) -> tuple[int | None, d
                 text = content_item.get("text")
                 if isinstance(text, str):
                     complexity_class, cleaned = _extract_complexity_class(text)
-                    if complexity_class is not None:
+                    cleaned = _strip_trailing_complexity_marker_text(cleaned)
+                    if complexity_class is not None or cleaned != text:
                         result["output"][0]["content"][0]["text"] = cleaned
                     return complexity_class, result
     except (KeyError, IndexError, TypeError):
@@ -1119,6 +1147,9 @@ async def _dispatch_stream(
         # Always extract and strip complexity markers from streaming responses
         stream = _prepend(first_chunk, iterator)
         stream = _extract_complexity_from_stream(stream)
+        # Also scrub a trailing {{{...}}} marker if the model emits one as a
+        # closing tag (e.g. {{{/2}}} at the very end of the answer).
+        stream = _strip_trailing_complexity_marker(stream)
 
         # Wrap stream with safe error handling for peer disconnections
         stream = _safe_stream(stream, backend_id=backend.id)
@@ -1213,71 +1244,366 @@ async def _safe_stream(
         # Don't re-raise; client already got partial response. Just stop streaming.
 
 
+# Responses API event types whose `delta` field carries text-like content that
+# the model may inadvertently lead with the classifier marker. We strip from
+# all of these. We deliberately do NOT include
+# `response.function_call_arguments.delta` because that field carries
+# tool-call JSON fragments — removing `{` / `}` would corrupt the JSON.
+_TEXT_BEARING_DELTA_EVENT_TYPES: frozenset[str] = frozenset({
+    "response.output_text.delta",
+    "response.reasoning_summary_text.delta",
+})
+
+
+def _event_delta_text(event_bytes: bytes) -> str:
+    """Concatenated delta text from one SSE event (chat-completions + Responses API).
+
+    Reads both chat-completions choices[0].delta.content and the union of
+    text-bearing Responses API delta event types defined above.
+    """
+    try:
+        event_str = event_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return ""
+    out = ""
+    for line in event_str.split("\n"):
+        if not line.startswith("data: "):
+            continue
+        json_str = line[6:]
+        if json_str.strip() == "[DONE]":
+            continue
+        try:
+            data = json.loads(json_str)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        try:
+            choices = data.get("choices")
+            if choices and len(choices) > 0:
+                out += choices[0].get("delta", {}).get("content") or ""
+                continue
+            if data.get("type") in _TEXT_BEARING_DELTA_EVENT_TYPES:
+                out += data.get("delta") or ""
+        except (AttributeError, KeyError, IndexError, TypeError):
+            pass
+    return out
+
+
+def _strip_chars_from_event(event_bytes: bytes, n: int) -> tuple[bytes, int]:
+    """Strip up to n characters from delta content fields in this event.
+
+    Walks data: lines in order; for each, removes up to (n - already_stripped)
+    leading chars from delta.content (chat-completions) or delta (Responses API).
+    Returns (modified_event_bytes, chars_actually_stripped).
+    """
+    if n <= 0:
+        return event_bytes, 0
+    try:
+        event_str = event_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return event_bytes, 0
+    new_lines: list[str] = []
+    stripped_total = 0
+    for line in event_str.split("\n"):
+        if not (line.startswith("data: ") and stripped_total < n):
+            new_lines.append(line)
+            continue
+        json_str = line[6:]
+        if json_str.strip() == "[DONE]":
+            new_lines.append(line)
+            continue
+        try:
+            data = json.loads(json_str)
+        except (json.JSONDecodeError, ValueError):
+            new_lines.append(line)
+            continue
+        modified = False
+        try:
+            choices = data.get("choices")
+            if choices and len(choices) > 0:
+                delta = choices[0].get("delta", {})
+                content = delta.get("content") or ""
+                if content:
+                    take = min(n - stripped_total, len(content))
+                    delta["content"] = content[take:]
+                    stripped_total += take
+                    choices[0]["delta"] = delta
+                    data["choices"] = choices
+                    modified = True
+            elif data.get("type") in _TEXT_BEARING_DELTA_EVENT_TYPES:
+                delta_text = data.get("delta") or ""
+                if delta_text:
+                    take = min(n - stripped_total, len(delta_text))
+                    data["delta"] = delta_text[take:]
+                    stripped_total += take
+                    modified = True
+        except (AttributeError, KeyError, IndexError, TypeError):
+            pass
+        new_lines.append("data: " + json.dumps(data) if modified else line)
+    return "\n".join(new_lines).encode("utf-8"), stripped_total
+
+
+# Max delta chars to accumulate while searching for the leading marker.
+# Numeric marker is 7 chars ("{{{N}}}"); allow generous slack for whitespace
+# or unexpected variants. Once exceeded we give up and flush as-is.
+_COMPLEXITY_MARKER_LOOKAHEAD = 32
+
+# Sliding-window size (in delta chars) used by the trailing-marker stripper.
+# The longest trailing marker we expect is ~16 chars ({{{/N}}} = 8, or
+# {{{complexity: Medium}}} = 23); 32 covers all observed variants with slack.
+_COMPLEXITY_TRAILING_WINDOW = 32
+
+
+def _strip_chars_from_event_end(event_bytes: bytes, n: int) -> tuple[bytes, int]:
+    """Strip up to n characters from the END of delta content fields in this event.
+
+    Mirror of _strip_chars_from_event but operating on the tail. Walks data:
+    lines in reverse so the LAST line's delta content is shaved first (it
+    holds the trailing-most text); excess strip-budget then bleeds into the
+    preceding data: line's delta tail.
+    """
+    if n <= 0:
+        return event_bytes, 0
+    try:
+        event_str = event_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return event_bytes, 0
+    lines = event_str.split("\n")
+    stripped_total = 0
+    for i in range(len(lines) - 1, -1, -1):
+        if stripped_total >= n:
+            break
+        line = lines[i]
+        if not line.startswith("data: "):
+            continue
+        json_str = line[6:]
+        if json_str.strip() == "[DONE]":
+            continue
+        try:
+            data = json.loads(json_str)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        modified = False
+        try:
+            choices = data.get("choices")
+            if choices and len(choices) > 0:
+                delta = choices[0].get("delta", {})
+                content = delta.get("content") or ""
+                if content:
+                    take = min(n - stripped_total, len(content))
+                    delta["content"] = content[: len(content) - take]
+                    stripped_total += take
+                    choices[0]["delta"] = delta
+                    data["choices"] = choices
+                    modified = True
+            elif data.get("type") in _TEXT_BEARING_DELTA_EVENT_TYPES:
+                delta_text = data.get("delta") or ""
+                if delta_text:
+                    take = min(n - stripped_total, len(delta_text))
+                    data["delta"] = delta_text[: len(delta_text) - take]
+                    stripped_total += take
+                    modified = True
+        except (AttributeError, KeyError, IndexError, TypeError):
+            pass
+        if modified:
+            lines[i] = "data: " + json.dumps(data)
+    return "\n".join(lines).encode("utf-8"), stripped_total
+
+
 async def _extract_complexity_from_stream(
     source: AsyncIterator[bytes],
 ) -> AsyncIterator[bytes]:
-    """Extract and strip complexity marker from SSE stream's first content chunk.
+    """Strip a leading {{{N}}} / {{{...}}} marker from an SSE stream.
 
-    For streaming responses, the {{{N}}} marker appears at the start of the first
-    delta message. This function buffers until it finds the marker, extracts it,
-    then streams the rest transparently.
-
-    Handles both chat completions format (choices[0].delta.content) and Responses API
-    format (response.output_text.delta events with delta field).
-
-    Stores the extracted complexity class in _complexity_class_context.
-    Preserves all lines in multi-line chunks; only the marker-containing line is modified.
+    The marker is emitted as the first output of the model when the proxy
+    injects the complexity classifier instruction. Tokenizers usually split
+    the marker across multiple SSE events (e.g. "{{{", "2", "}}}"), so we
+    must buffer events until either the full marker has arrived (then strip
+    its bytes across whichever events carry them) or we can prove no marker
+    is present (then flush as-is). Once decided, the rest of the stream is
+    passed through unchanged.
     """
-    complexity_found = False
+    buffered_events: list[bytes] = []
+    accumulated_text = ""
+    decided = False
+    leftover = b""
+
+    def _strip_and_flush(chars_to_strip: int) -> list[bytes]:
+        nonlocal buffered_events, decided
+        out: list[bytes] = []
+        for ev in buffered_events:
+            if chars_to_strip > 0:
+                modified, stripped = _strip_chars_from_event(ev, chars_to_strip)
+                chars_to_strip -= stripped
+                out.append(modified + b"\n\n")
+            else:
+                out.append(ev + b"\n\n")
+        buffered_events = []
+        decided = True
+        return out
+
+    def _flush_as_is() -> list[bytes]:
+        nonlocal buffered_events, decided
+        out = [ev + b"\n\n" for ev in buffered_events]
+        buffered_events = []
+        decided = True
+        return out
+
+    def _decision_output(force: bool = False) -> list[bytes]:
+        """Return bytes to yield once a decision is reachable, or [] if still buffering.
+
+        Three accepted marker formats:
+          A) {{{N}}} where N ∈ {1,2,3}                — canonical
+          B) {{{...}}} (any other braced leading token) — defensive strip
+          C) bare digit 1|2|3 followed by a blank line  — model dropped braces
+
+        When force=True (end of stream / [DONE]), commits to a decision
+        unconditionally: strip the best match available, otherwise flush as-is.
+        """
+        # A) strict {{{N}}}
+        match = re.match(r"^\s*\{\{\{([123])\}\}\}", accumulated_text)
+        if match:
+            _complexity_class_context.set(int(match.group(1)))
+            return _strip_and_flush(match.end())
+
+        # B) any {{{...}}}
+        match = re.match(r"^\s*\{\{\{[^}]*\}\}\}", accumulated_text)
+        if match:
+            inner = match.group(0).strip().strip("{").strip("}").strip()
+            if inner in ("1", "2", "3"):
+                _complexity_class_context.set(int(inner))
+            return _strip_and_flush(match.end())
+
+        # C) bare digit followed by blank line
+        match = re.match(r"^\s*([123])[ \t]*\n[ \t]*\n", accumulated_text)
+        if match:
+            _complexity_class_context.set(int(match.group(1)))
+            return _strip_and_flush(match.end())
+
+        stripped_acc = accumulated_text.lstrip()
+
+        # Decide whether to keep buffering or flush as-is.
+        if not stripped_acc:
+            return _flush_as_is() if force else []
+
+        first = stripped_acc[0]
+        could_be_marker = first == "{" or first in "123"
+
+        # If digit-starting and we have 2+ chars, the next char tells us whether
+        # this is a bare-digit marker candidate (followed by whitespace/newline)
+        # or legitimate content like "2 minutes" / "2." / "20 things".
+        if first in "123" and len(stripped_acc) >= 2:
+            nxt = stripped_acc[1]
+            if nxt not in (" ", "\t", "\n", "\r"):
+                return _flush_as_is()
+            # Else: still a bare-digit candidate, keep buffering for the blank line.
+
+        if not could_be_marker:
+            return _flush_as_is()
+
+        if force or len(accumulated_text) >= _COMPLEXITY_MARKER_LOOKAHEAD:
+            return _flush_as_is()
+
+        return []
+
     async for chunk in source:
-        if not complexity_found:
-            try:
-                chunk_text = chunk.decode("utf-8")
-                lines = chunk_text.split("\n")
-                new_lines = []
-                for line in lines:
-                    if not complexity_found and line.startswith("data: "):
-                        json_str = line[6:]
-                        if json_str.strip() == "[DONE]":
-                            complexity_found = True
-                            new_lines.append(line)
-                            continue
-                        try:
-                            data = json.loads(json_str)
-                            # Try chat completions format first
-                            choices = data.get("choices")
-                            if choices and len(choices) > 0:
-                                delta = choices[0].get("delta", {})
-                                content = delta.get("content") or ""
-                                if content:
-                                    complexity_class, cleaned = _extract_complexity_class(content)
-                                    complexity_found = True
-                                    if complexity_class is not None:
-                                        _complexity_class_context.set(complexity_class)
-                                    delta["content"] = cleaned
-                                    choices[0]["delta"] = delta
-                                    data["choices"] = choices
-                                    new_lines.append("data: " + json.dumps(data))
-                                    continue
-                            # Try Responses API format (response.output_text.delta events)
-                            event_type = data.get("type")
-                            if event_type == "response.output_text.delta":
-                                delta_text = data.get("delta") or ""
-                                if delta_text:
-                                    complexity_class, cleaned = _extract_complexity_class(delta_text)
-                                    complexity_found = True
-                                    if complexity_class is not None:
-                                        _complexity_class_context.set(complexity_class)
-                                    data["delta"] = cleaned
-                                    new_lines.append("data: " + json.dumps(data))
-                                    continue
-                        except (json.JSONDecodeError, KeyError, IndexError, TypeError):
-                            complexity_found = True  # Stop searching; don't loop on malformed chunks
-                    new_lines.append(line)
-                chunk = "\n".join(new_lines).encode("utf-8")
-            except (UnicodeDecodeError, AttributeError):
-                pass
-        yield chunk
+        if decided:
+            yield chunk
+            continue
+
+        combined = leftover + chunk
+        parts = combined.split(b"\n\n")
+        leftover = parts[-1]
+        events = parts[:-1]
+
+        for idx, ev in enumerate(events):
+            if decided:
+                yield ev + b"\n\n"
+                continue
+            buffered_events.append(ev)
+            accumulated_text += _event_delta_text(ev)
+            force = b"data: [DONE]" in ev
+            for out_bytes in _decision_output(force=force):
+                yield out_bytes
+
+        if decided and leftover:
+            yield leftover
+            leftover = b""
+
+    # Stream ended; force a final decision on anything still buffered.
+    if buffered_events:
+        for out_bytes in _decision_output(force=True):
+            yield out_bytes
+    if leftover:
+        yield leftover
+
+
+async def _strip_trailing_complexity_marker(
+    source: AsyncIterator[bytes],
+) -> AsyncIterator[bytes]:
+    """Strip a trailing {{{...}}} marker if the model emits one as a closing tag.
+
+    Maintains a sliding window of the most recent SSE events whose accumulated
+    delta text is at least _COMPLEXITY_TRAILING_WINDOW characters. Older
+    events are flushed downstream the moment they fall out of the window — so
+    streaming latency only increases by ~32 chars worth of buffering. On
+    stream end (or [DONE]), checks the buffered tail for a trailing
+    {{{...}}} pattern and shaves its bytes off the appropriate event(s)
+    before flushing the rest.
+    """
+    trail: list[tuple[bytes, str]] = []
+    trail_chars = 0
+    leftover = b""
+
+    def _flush(final: bool) -> list[bytes]:
+        nonlocal trail, trail_chars
+        if final and trail:
+            tail_text = "".join(t for _, t in trail)
+            match = re.search(r"\{\{\{[^}]*\}\}\}\s*$", tail_text)
+            if match:
+                chars_to_strip = len(match.group(0))
+                for i in range(len(trail) - 1, -1, -1):
+                    if chars_to_strip <= 0:
+                        break
+                    ev_b, ev_text = trail[i]
+                    new_ev, stripped = _strip_chars_from_event_end(ev_b, chars_to_strip)
+                    if stripped > 0:
+                        ev_text = ev_text[: len(ev_text) - stripped] if stripped <= len(ev_text) else ""
+                        trail[i] = (new_ev, ev_text)
+                        chars_to_strip -= stripped
+        out = [ev + b"\n\n" for ev, _ in trail]
+        trail = []
+        trail_chars = 0
+        return out
+
+    async for chunk in source:
+        combined = leftover + chunk
+        parts = combined.split(b"\n\n")
+        leftover = parts[-1]
+        events = parts[:-1]
+
+        for ev in events:
+            is_done = b"data: [DONE]" in ev
+            delta_text = _event_delta_text(ev)
+            trail.append((ev, delta_text))
+            trail_chars += len(delta_text)
+
+            if is_done:
+                for out_bytes in _flush(final=True):
+                    yield out_bytes
+                continue
+
+            while (
+                len(trail) > 1
+                and trail_chars - len(trail[0][1]) >= _COMPLEXITY_TRAILING_WINDOW
+            ):
+                old_ev, old_text = trail.pop(0)
+                trail_chars -= len(old_text)
+                yield old_ev + b"\n\n"
+
+    for out_bytes in _flush(final=True):
+        yield out_bytes
+    if leftover:
+        yield leftover
 
 
 async def _empty_iter() -> AsyncIterator[bytes]:
@@ -1354,12 +1680,12 @@ def _clean_sse_blob(blob: bytes | None) -> bytes | None:
                     json_str = line[6:]  # Strip 'data: '
                     data = json.loads(json_str)
 
-                    # Handle response.output_text.delta events
-                    if data.get('type') == 'response.output_text.delta':
+                    # Handle text-bearing Responses API delta events
+                    if data.get('type') in _TEXT_BEARING_DELTA_EVENT_TYPES:
                         delta = data.get('delta', '')
                         if isinstance(delta, str) and delta:
-                            # Clean markers from delta
                             _, cleaned_delta = _extract_complexity_class(delta)
+                            cleaned_delta = _strip_trailing_complexity_marker_text(cleaned_delta)
                             data['delta'] = cleaned_delta
 
                     # Handle chat completions format (choices[0].delta.content)
@@ -1368,6 +1694,7 @@ def _clean_sse_blob(blob: bytes | None) -> bytes | None:
                         content = delta.get('content', '')
                         if isinstance(content, str) and content:
                             _, cleaned_content = _extract_complexity_class(content)
+                            cleaned_content = _strip_trailing_complexity_marker_text(cleaned_content)
                             delta['content'] = cleaned_content
                             data['choices'][0]['delta'] = delta
 
