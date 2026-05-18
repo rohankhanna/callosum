@@ -173,3 +173,108 @@ def test_status_recommender_block_shape_when_disabled() -> None:
     assert "cheap_cell" in r
     assert "stats" in r
     assert "recommendation_counts" in r
+    assert "classifier_call_counts" in r
+    assert "alternative_classifier_pct" in r
+
+
+# ---------- bias mitigation: alternative-classifier path ----------
+
+
+def test_alternative_classifier_path_uses_override_not_cheap() -> None:
+    """When classifier_cell is passed, recommend() calls that cell, not cheap_cell."""
+    backend = _FakeBackend(canned_text="model-a0e7 high")
+    rec = _make_recommender(backend)
+    body = {"messages": [{"role": "user", "content": "an alternative-classifier probe"}]}
+    alt = CELLS[2]  # model-a0e7 high — a non-cheap classifier
+    out = asyncio.run(
+        rec.recommend(
+            body, allowed_cells=CELLS, fallback=CELLS[0], classifier_cell=alt
+        )
+    )
+    assert out.source == "alternative"
+    assert rec.stats["alternative_calls"] == 1
+    # Classifier-call tracking attributes the call to the override cell.
+    counts = rec.classifier_call_counts
+    assert counts.get(f"{alt.model} {alt.reasoning_effort}", 0) == 1
+
+
+def test_alternative_classifier_bypasses_cache_on_read() -> None:
+    """A prior cheap-classifier cache entry must NOT short-circuit an
+    alternative-classifier call — the whole point is to get a second opinion.
+    """
+    backend = _FakeBackend(canned_text="model-a0c3 medium")
+    rec = _make_recommender(backend)
+    body = {"messages": [{"role": "user", "content": "same prompt"}]}
+    async def _go() -> tuple:
+        # Warm cache via cheap classifier.
+        first = await rec.recommend(body, allowed_cells=CELLS, fallback=CELLS[0])
+        # Same prompt, but with alternative classifier — must NOT hit cache.
+        second = await rec.recommend(
+            body, allowed_cells=CELLS, fallback=CELLS[0], classifier_cell=CELLS[2]
+        )
+        return first, second
+    first, second = asyncio.run(_go())
+    assert first.source == "upstream"
+    # Even though the cheap-classifier cache has an entry, the alternative
+    # path didn't return source="cache".
+    assert second.source == "alternative"
+    assert rec.stats["upstream_calls"] == 2  # both paths called upstream
+
+
+def test_cheap_cell_resolves_dynamically_when_configured_one_disappears() -> None:
+    """Regression: if the configured cheap classifier is no longer in the
+    live cell grid (model renamed, retired upstream, etc.), the recommender
+    must NOT keep trying to call the dead name. It picks the weakest model
+    in the current grid + lowest effort instead. Keeps routing alive when
+    the model lineup churns underneath us.
+    """
+    # Build a recommender whose configured cheap cell is NOT in `allowed_cells`.
+    # The recommender should resolve to a cell that IS in the list.
+    backend = _FakeBackend(canned_text="model-a0e7 high")
+    rec = CellRecommender(
+        cheap_backend=backend,
+        cheap_cell=Cell(
+            model="gpt-RETIRED-mini",
+            reasoning_effort="low",
+            context_window=None,
+        ),
+        upstream_timeout_s=2.0,
+    )
+    # Allowed cells: no "gpt-RETIRED-mini" present. Weakest model in CELLS
+    # (by model_strength_key) is model-a0c3 → that's what gets picked.
+    resolved = rec._resolve_cheap_cell(CELLS)
+    assert resolved.model == "model-a0c3"
+    assert resolved.reasoning_effort == "low"  # lowest available effort for that model
+
+
+def test_cheap_cell_resolution_prefers_configured_when_present() -> None:
+    """When the configured cheap_cell IS in the grid, use it unchanged —
+    auto-resolution is a fallback for model churn, not a steady-state
+    override of operator config.
+    """
+    backend = _FakeBackend(canned_text="model-a0e7 high")
+    rec = _make_recommender(backend)  # cheap_cell defaults to CELLS[0] (model-a0c3 low)
+    resolved = rec._resolve_cheap_cell(CELLS)
+    assert resolved == CELLS[0]
+
+
+def test_alternative_classifier_does_not_pollute_cache() -> None:
+    """An alternative-classifier result must NOT be written to cache —
+    otherwise the next cheap-classifier request for the same prompt would
+    incorrectly read back the alternative's answer."""
+    backend = _FakeBackend(canned_text="model-a0e7 high")  # the alternative recommends 5.4 high
+    rec = _make_recommender(backend)
+    body = {"messages": [{"role": "user", "content": "test prompt"}]}
+    async def _go() -> tuple:
+        # First call via alternative classifier.
+        alt_result = await rec.recommend(
+            body, allowed_cells=CELLS, fallback=CELLS[0], classifier_cell=CELLS[2]
+        )
+        # Now via cheap classifier — should be a fresh upstream call, NOT a
+        # cache hit returning the alternative classifier's answer.
+        cheap_result = await rec.recommend(body, allowed_cells=CELLS, fallback=CELLS[0])
+        return alt_result, cheap_result
+    alt_result, cheap_result = asyncio.run(_go())
+    assert alt_result.source == "alternative"
+    assert cheap_result.source == "upstream"  # NOT cache
+    assert rec.stats["upstream_calls"] == 2

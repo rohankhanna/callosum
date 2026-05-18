@@ -27,19 +27,18 @@ from dataclasses import dataclass
 from typing import Any
 
 from codex_proxy.backend import Backend, CallHandle
-from codex_proxy.cell_grid import Cell
+from codex_proxy.cell_grid import Cell, model_strength_key
 from codex_proxy.errors import BackendError
 
 logger = logging.getLogger(__name__)
 
 
-_RECOMMENDER_INSTRUCTION = (
+_RECOMMENDER_INSTRUCTION_PREFIX = (
     "You are a routing classifier. Read the user prompt below and choose "
     "EXACTLY one model + reasoning-effort cell from the available list to "
     "handle it. Pick the cheapest cell that can answer the prompt well — "
     "do not always pick the largest or the smallest. "
-    "Output ONLY the chosen cell as 'model effort' (e.g. 'model-a0c3 medium'). "
-    "No explanation, no quotes, no other text."
+    "Output ONLY the chosen cell as 'model effort' "
 )
 
 
@@ -134,7 +133,7 @@ class CellRecommender:
         upstream_timeout_s: float = 5.0,
     ) -> None:
         self._cheap_backend = cheap_backend
-        self._cheap_cell = cheap_cell
+        self._configured_cheap_cell = cheap_cell
         self._cache: OrderedDict[str, tuple[Cell, float]] = OrderedDict()
         self._cache_max = cache_max
         self._cache_ttl_seconds = cache_ttl_seconds
@@ -145,8 +144,14 @@ class CellRecommender:
             "upstream_calls": 0,
             "upstream_failures": 0,
             "fallback_count": 0,
+            "alternative_calls": 0,
         }
         self._recommendation_counts: dict[str, int] = {}
+        # Per-classifier-cell call counts: how many times each cell was used
+        # AS the classifier (cheap path + alternative path combined). Lets us
+        # see if bias mitigation actually rotated through alternatives at the
+        # configured rate.
+        self._classifier_call_counts: dict[str, int] = {}
 
     @property
     def stats(self) -> dict[str, int]:
@@ -155,6 +160,10 @@ class CellRecommender:
     @property
     def recommendation_counts(self) -> dict[str, int]:
         return dict(self._recommendation_counts)
+
+    @property
+    def classifier_call_counts(self) -> dict[str, int]:
+        return dict(self._classifier_call_counts)
 
     def _cache_get(self, key: str) -> Cell | None:
         entry = self._cache.get(key)
@@ -176,20 +185,74 @@ class CellRecommender:
         while len(self._cache) > self._cache_max:
             self._cache.popitem(last=False)
 
+    def _resolve_cheap_cell(self, allowed_cells: list[Cell]) -> Cell:
+        """Pick the cell that should serve as the classifier for this call.
+
+        Preference order (so the router keeps working when OpenAI's model
+        names churn underneath us):
+          1. The configured cheap cell if it's still in `allowed_cells`.
+          2. The weakest model (by model_strength_key, "weakest last") at
+             the lowest reasoning effort actually present for that model.
+          3. The first allowed cell as a last resort.
+          4. The configured cheap cell unchanged when nothing's available
+             (degenerate / cold-start; upstream call will then fail
+             gracefully and the dispatch path falls back).
+        """
+        configured_tuple = (
+            self._configured_cheap_cell.model,
+            self._configured_cheap_cell.reasoning_effort,
+        )
+        for c in allowed_cells:
+            if (c.model, c.reasoning_effort) == configured_tuple:
+                return c
+        if not allowed_cells:
+            return self._configured_cheap_cell
+        # Configured cheap cell isn't in the live grid (model renamed,
+        # retired, or replaced upstream). Pick a weakest-available cell.
+        weakest_model = sorted(
+            {c.model for c in allowed_cells},
+            key=model_strength_key,
+            reverse=True,  # model_strength_key returns SMALLER==STRONGER, so reverse for weakest first
+        )[0]
+        same_model = [c for c in allowed_cells if c.model == weakest_model]
+        # Stable preference for lower effort first, but tolerate unknown effort labels.
+        _EFFORT_ORDER = {"low": 0, "medium": 1, "high": 2, "xhigh": 3}
+        same_model.sort(
+            key=lambda c: _EFFORT_ORDER.get(c.reasoning_effort, 99)
+        )
+        return same_model[0]
+
     def _build_recommender_body(
-        self, prompt_text: str, allowed_cells: list[Cell]
+        self,
+        prompt_text: str,
+        allowed_cells: list[Cell],
+        *,
+        classifier_cell: Cell | None = None,
     ) -> dict[str, Any]:
+        """Construct the classifier request body.
+
+        Defaults to whatever _resolve_cheap_cell picks from the current
+        allowed_cells; callers can override classifier_cell to fire the same
+        prompt at a different classifier (bias mitigation + comparison
+        sampling). The instruction's example cell name is filled in from
+        the current cell list so the model never sees a stale or invented
+        name as guidance.
+        """
+        cl = classifier_cell if classifier_cell is not None else self._resolve_cheap_cell(allowed_cells)
         cell_list = "\n".join(
             f"- {c.model} {c.reasoning_effort}" for c in allowed_cells
         )
+        example_cell = allowed_cells[0] if allowed_cells else self._configured_cheap_cell
         instructions = (
-            _RECOMMENDER_INSTRUCTION
+            _RECOMMENDER_INSTRUCTION_PREFIX
+            + f"(e.g. '{example_cell.model} {example_cell.reasoning_effort}'). "
+            + "No explanation, no quotes, no other text."
             + "\n\nAvailable cells:\n"
             + cell_list
         )
         return {
-            "model": self._cheap_cell.model,
-            "reasoning": {"effort": self._cheap_cell.reasoning_effort},
+            "model": cl.model,
+            "reasoning": {"effort": cl.reasoning_effort},
             "instructions": instructions,
             "input": [
                 {
@@ -203,10 +266,20 @@ class CellRecommender:
         }
 
     async def _ask_upstream(
-        self, prompt_text: str, allowed_cells: list[Cell]
+        self,
+        prompt_text: str,
+        allowed_cells: list[Cell],
+        *,
+        classifier_cell: Cell | None = None,
     ) -> Cell | None:
-        """One non-streaming responses call to the cheap cell; parse cell name."""
-        body = self._build_recommender_body(prompt_text, allowed_cells)
+        """One non-streaming responses call to a classifier cell; parse cell name.
+
+        Defaults to self._configured_cheap_cell; pass classifier_cell to override (bias
+        mitigation path).
+        """
+        body = self._build_recommender_body(
+            prompt_text, allowed_cells, classifier_cell=classifier_cell
+        )
         try:
             result = await asyncio.wait_for(
                 self._cheap_backend.responses(body, CallHandle()),
@@ -239,13 +312,23 @@ class CellRecommender:
         *,
         allowed_cells: list[Cell],
         fallback: Cell,
+        classifier_cell: Cell | None = None,
     ) -> Recommendation:
         """Return a Cell recommendation for this request body.
 
-        Priority:
+        Priority (normal path, classifier_cell=None):
           1. Cache hit (no upstream call).
           2. Upstream classifier call to cheap_cell.
-          3. Fallback Cell on any failure (timeout, garbage output, unrecognized cell).
+          3. Fallback Cell on any failure (timeout, garbage, unrecognized cell).
+
+        Bias-mitigation path (classifier_cell=<non-cheap Cell>):
+          * Cache is skipped on read AND write — the alternative classifier
+            gives a one-off second opinion; we don't poison the cheap-
+            classifier-cached routing decisions with another classifier's
+            answers, and a cache hit from a prior cheap-classifier call is
+            also bypassed so this request really exercises the alternative.
+          * Stats track per-classifier call counts so /status surfaces how
+            often each classifier was used and what it recommended.
         """
         self._stats["calls"] += 1
         t0 = time.time()
@@ -261,33 +344,61 @@ class CellRecommender:
             )
 
         key = _cache_key(prompt_text)
-        cached = self._cache_get(key)
-        if cached is not None:
-            self._stats["cache_hits"] += 1
-            self._record_recommendation(cached)
-            return Recommendation(
-                cell=cached,
-                source="cache",
-                cache_key=key,
-                latency_s=time.time() - t0,
+        is_alternative = classifier_cell is not None
+        if is_alternative:
+            cls = classifier_cell
+            classifier_key = f"{cls.model} {cls.reasoning_effort}"
+            self._stats["alternative_calls"] = (
+                self._stats.get("alternative_calls", 0) + 1
             )
+            self._classifier_call_counts[classifier_key] = (
+                self._classifier_call_counts.get(classifier_key, 0) + 1
+            )
+        else:
+            # Resolve which cell actually serves as the cheap classifier for
+            # this call against the CURRENT live cell list — handles the
+            # case where the configured cheap_cell isn't in the live grid
+            # anymore (model renamed, retired, or never advertised by any
+            # backend on this machine).
+            cls = self._resolve_cheap_cell(allowed_cells)
+            self._classifier_call_counts[f"{cls.model} {cls.reasoning_effort}"] = (
+                self._classifier_call_counts.get(
+                    f"{cls.model} {cls.reasoning_effort}", 0
+                ) + 1
+            )
+            cached = self._cache_get(key)
+            if cached is not None:
+                self._stats["cache_hits"] += 1
+                self._record_recommendation(cached)
+                return Recommendation(
+                    cell=cached,
+                    source="cache",
+                    cache_key=key,
+                    latency_s=time.time() - t0,
+                )
 
-        chosen = await self._ask_upstream(prompt_text, allowed_cells)
+        chosen = await self._ask_upstream(
+            prompt_text, allowed_cells, classifier_cell=classifier_cell
+        )
         if chosen is None:
             self._stats["fallback_count"] += 1
             self._record_recommendation(fallback)
             return Recommendation(
                 cell=fallback,
-                source="fallback",
+                source="fallback" if not is_alternative else "fallback_alt",
                 cache_key=key,
                 latency_s=time.time() - t0,
             )
 
-        self._cache_put(key, chosen)
+        # Only cache decisions made by the cheap classifier; alternative
+        # classifier decisions are one-off and intentionally don't
+        # influence subsequent routing.
+        if not is_alternative:
+            self._cache_put(key, chosen)
         self._record_recommendation(chosen)
         return Recommendation(
             cell=chosen,
-            source="upstream",
+            source="upstream" if not is_alternative else "alternative",
             cache_key=key,
             latency_s=time.time() - t0,
         )

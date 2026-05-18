@@ -398,8 +398,10 @@ def create_app(
                 f"{auto_cfg.cell_recommender_cheap_model} "
                 f"{auto_cfg.cell_recommender_cheap_effort}"
             ),
+            "alternative_classifier_pct": auto_cfg.cell_recommender_alternative_classifier_pct,
             "stats": {},
             "recommendation_counts": {},
+            "classifier_call_counts": {},
         }
         if cell_recommender is not None:
             stats = cell_recommender.stats
@@ -408,9 +410,13 @@ def create_app(
                 **stats,
                 "cache_hit_rate": round(stats.get("cache_hits", 0) / calls, 3),
                 "fallback_rate": round(stats.get("fallback_count", 0) / calls, 3),
+                "alternative_rate": round(stats.get("alternative_calls", 0) / calls, 3),
             }
             recommender_block["recommendation_counts"] = (
                 cell_recommender.recommendation_counts
+            )
+            recommender_block["classifier_call_counts"] = (
+                cell_recommender.classifier_call_counts
             )
         return {
             "backends": entries,
@@ -829,8 +835,29 @@ async def _dispatch_internal(
             context_window=None,
         )
         if cell_recommender is not None:
+            # Bias mitigation: with a small probability, route THIS request
+            # through a non-cheap classifier rather than the default cheap
+            # one. Prevents the cheap classifier's biases from being the
+            # sole authority on every routing decision. The alternative
+            # classifier's result intentionally bypasses the cache so it
+            # doesn't poison subsequent cheap-classifier routing.
+            cells_now = live_cells_fn()
+            classifier_override: Cell | None = None
+            alt_pct = auto_cfg.cell_recommender_alternative_classifier_pct
+            if alt_pct > 0 and random.random() < alt_pct:
+                cheap = (auto_cfg.cell_recommender_cheap_model,
+                         auto_cfg.cell_recommender_cheap_effort)
+                alternatives = [
+                    c for c in cells_now
+                    if (c.model, c.reasoning_effort) != cheap
+                ]
+                if alternatives:
+                    classifier_override = random.choice(alternatives)
             rec = await cell_recommender.recommend(
-                body, allowed_cells=live_cells_fn(), fallback=fallback_cell
+                body,
+                allowed_cells=cells_now,
+                fallback=fallback_cell,
+                classifier_cell=classifier_override,
             )
             chosen = rec.cell
         else:

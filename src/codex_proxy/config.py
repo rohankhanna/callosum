@@ -157,6 +157,16 @@ class AutoRouterConfig(BaseModel):
     # never blocks the user request.
     cell_recommender_compare_pct: float = 0.05
     cell_recommender_compare_max_weekly_pct: float = 30.0
+    # Bias mitigation: with this probability, the routing decision for a
+    # given request is made by a randomly chosen NON-cheap cell rather
+    # than the configured cheap classifier. Prevents the cheap classifier
+    # from being the sole authority and silently dragging routing in a
+    # consistent direction (e.g. always recommending itself, always
+    # recommending the largest). Independent of comparison sampling —
+    # comparison observes, this varies the live decision. The chosen
+    # alternative classifier's result bypasses the cache so it doesn't
+    # poison subsequent cheap-classifier-cached routing.
+    cell_recommender_alternative_classifier_pct: float = 0.05
 
 
 class BackendConfig(BaseModel):
