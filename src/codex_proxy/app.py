@@ -27,6 +27,7 @@ from codex_proxy.auth import (
 from codex_proxy.auth_db import ApiKey, Session
 from codex_proxy.backend import Backend, CallHandle
 from codex_proxy.cell_grid import VIRTUAL_MODELS, Cell, build_cells, live_completion_models
+from codex_proxy.complexity_classifier import classify_prompt_complexity
 from codex_proxy.config import AutoRouterConfig
 from codex_proxy.errors import RETRYABLE, BackendError, ErrorClass
 from codex_proxy.fallback import FallbackExecutor, should_attempt_fallback
@@ -813,10 +814,16 @@ async def _dispatch_internal(
         should_use_learned_model = random.randint(0, 100) < learned_model_cap
 
         if should_use_learned_model and cost_router._model is not None and cost_router._model.is_ready:
-            # Route to cost_router (cost-optimal) for this request
+            # Route to cost_router (cost-optimal) for this request. Classify
+            # the prompt first so v2 can pick the cheapest cell *for this
+            # complexity bucket* — falls back to v1 averaging when v2 has
+            # no data for the bucket yet (see EfficiencyModel.best_cell).
             try:
+                complexity = classify_prompt_complexity(
+                    body, session_prompt_tokens=session_prompt_tokens
+                )
                 decision = cost_router.choose(
-                    model_hint=None,
+                    complexity=complexity,
                     session_prompt_tokens=session_prompt_tokens,
                     router_context_safety_margin=router_context_safety_margin,
                 )
@@ -872,8 +879,11 @@ async def _dispatch_internal(
         routing_mode = "auto-learning-synthetic"
     elif requested_model == "auto":
         try:
+            complexity = classify_prompt_complexity(
+                body, session_prompt_tokens=session_prompt_tokens
+            )
             decision = cost_router.choose(
-                model_hint=None,
+                complexity=complexity,
                 session_prompt_tokens=session_prompt_tokens,
                 router_context_safety_margin=router_context_safety_margin,
             )

@@ -24,7 +24,8 @@ def _seed_usage_log(db: Path, rows: list[tuple[str, str, int, str, int]]) -> Non
         CREATE TABLE requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             model TEXT, reasoning_effort TEXT, total_tokens INTEGER,
-            routing_mode TEXT, status INTEGER
+            routing_mode TEXT, status INTEGER,
+            prompt_complexity_class INTEGER
         )
         """
     )

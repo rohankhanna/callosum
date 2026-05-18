@@ -192,11 +192,18 @@ class LearnedModelRouter:
     def choose(
         self,
         *,
-        model_hint: str | None = None,
+        complexity: int | None = None,
         session_prompt_tokens: int | None = None,
         router_context_safety_margin: int = 8192,
     ) -> RouterDecision:
-        del model_hint  # Hook for future: complexity-aware routing
+        """Pick the cheapest cell for this request.
+
+        When `complexity` is provided (1/2/3) AND the underlying
+        EfficiencyModel has v2 data for that bucket, scoring switches to the
+        per-complexity averages — so simple prompts route to cheaper cells
+        than complex ones instead of being averaged together. Otherwise
+        falls back to v1 per-cell scoring.
+        """
         if self._model is None or not self._model.is_ready:
             raise LearnedModelRouter.NotTrained(
                 "auto-routing is not ready: the cost model has not been trained yet. "
@@ -205,11 +212,21 @@ class LearnedModelRouter:
         cells = self._cells_fn()
         cell = self._model.best_cell(
             cells,
+            complexity=complexity,
             session_prompt_tokens=session_prompt_tokens,
             router_context_safety_margin=router_context_safety_margin,
         )
-        avg_tokens = self._model.scores.get((cell.model, cell.reasoning_effort), 0)
-        return RouterDecision(
-            cell=cell,
-            reason=f"learned-model: cheapest cell avg_tokens={avg_tokens:.0f}",
+        v2_score = (
+            self._model.scores_by_complexity.get((complexity, cell.model, cell.reasoning_effort))
+            if complexity is not None
+            else None
         )
+        if v2_score is not None:
+            reason = (
+                f"learned-model v2: cheapest cell for complexity={complexity} "
+                f"avg_tokens={v2_score:.0f}"
+            )
+        else:
+            v1_score = self._model.scores.get((cell.model, cell.reasoning_effort), 0)
+            reason = f"learned-model v1: cheapest cell avg_tokens={v1_score:.0f}"
+        return RouterDecision(cell=cell, reason=reason)
