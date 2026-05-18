@@ -31,10 +31,8 @@ from codex_proxy.cell_recommender import CellRecommender
 from codex_proxy.config import AutoRouterConfig
 from codex_proxy.errors import RETRYABLE, BackendError, ErrorClass
 from codex_proxy.fallback import FallbackExecutor, should_attempt_fallback
-from codex_proxy.router import LearnedModelRouter, ExplorerRouter
 from codex_proxy.selector import select
 from codex_proxy.session import SessionRegistry
-from codex_proxy.synthetic import SyntheticTopper
 from codex_proxy.usage_log import UsageLog, UsageLogEntry
 from codex_proxy.label_ui import install_label_ui
 
@@ -184,55 +182,6 @@ def _extract_and_strip_complexity(result: dict[str, Any]) -> tuple[int | None, d
     return None, result
 
 
-def _learned_model_cap_pct(
-    startup_timestamp: float | None,
-    model_release_timestamp: float | None,
-) -> float:
-    """Calculate current learned model usage cap percentage.
-
-    Two phases:
-
-    1. **Initial phase (no model release detected)**:
-       - Ramp from 1% to 90% over 90 days from proxy startup
-       - After 90 days: hold at 90% until new model detected
-
-    2. **After model release detected**:
-       - Reset to 75% when new model appears
-       - Ramp from 75% to 90% over 30 days
-       - After 30 days: hold at 90% until next model release
-
-    Returns the learned model cap as a percentage (0-100).
-    """
-    now_ts = time.time()
-
-    # Phase 2: New model detected
-    if model_release_timestamp is not None and model_release_timestamp <= now_ts:
-        days_since_release = (now_ts - model_release_timestamp) / 86400
-
-        if days_since_release >= 30:
-            # Fully ramped after 30 days
-            return 90.0
-
-        # Linearly ramp from 75% to 90% over 30 days
-        cap = 75.0 + (days_since_release / 30) * 15.0
-        return cap
-
-    # Phase 1: No model release detected yet (or startup)
-    if startup_timestamp is not None and startup_timestamp <= now_ts:
-        days_since_startup = (now_ts - startup_timestamp) / 86400
-
-        if days_since_startup >= 90:
-            # Fully ramped after 90 days
-            return 90.0
-
-        # Linearly ramp from 1% to 90% over 90 days
-        cap = 1.0 + (days_since_startup / 90) * 89.0
-        return cap
-
-    # Fallback (shouldn't happen): conservative default
-    return 1.0
-
-
 class PinState:
     """Process-wide backend pin. Thread-safety not needed under single-loop uvicorn."""
 
@@ -298,24 +247,15 @@ def create_app(
             return build_cells()
         return build_cells(models=models)
 
-    explorer = ExplorerRouter(
-        usage_log_path=usage_log.path if usage_log is not None else None,
-        cells_fn=_live_cells,
-    )
-    synthetic_explorer = ExplorerRouter(
-        usage_log_path=usage_log.path if usage_log is not None else None,
-        routing_mode="auto-learning-synthetic",
-        cells_fn=_live_cells,
-    )
-    cost_router = LearnedModelRouter(usage_log_path=usage_log.path if usage_log is not None else None)
-
     auto_cfg = auto_router_config if auto_router_config is not None else AutoRouterConfig()
 
     # Cell recommender: ask the cheapest cell to pick the cell that should
-    # handle this prompt. Output IS the routing decision; cost_router stays
-    # as the cold-start / fallback path. Only instantiated when at least one
-    # backend exists — without a backend, the recommender can't call anyone
-    # and the dispatch path will fall back to cost_router naturally.
+    # handle this prompt. Output IS the routing decision; the model-based
+    # routing infra (cost router, explorer, synthetic ticker, complexity
+    # heuristic) was removed entirely in favor of this. Only instantiated
+    # when at least one backend exists — without a backend, the recommender
+    # has nothing to call and dispatch falls back to the configured cheap
+    # cell name.
     cell_recommender: CellRecommender | None = None
     if backends_list:
         cheap_cell = Cell(
@@ -331,38 +271,6 @@ def create_app(
             upstream_timeout_s=auto_cfg.cell_recommender_upstream_timeout_s,
         )
 
-    async def _synthetic_dispatch(body: dict[str, Any], backend_id: str) -> Any:
-        # The topper calls dispatch directly — no Request, no auth attribution,
-        # and pinned to the backend the controller picked (the natural selector
-        # ranks by 5h capacity, which isn't the same as "weekly headroom that
-        # won't be human-consumed in time"). Routes through the responses path.
-        return await _dispatch_internal(
-            body,
-            route_name="responses",
-            backends_list=backends_list,
-            pin_state=pin_state,
-            session_registry=session_registry,
-            usage_log=usage_log,
-            explorer=explorer,
-            synthetic_explorer=synthetic_explorer,
-            cost_router=cost_router,
-            nonstream=lambda b, p, h: b.responses(p, h),
-            stream=lambda b, p, h: b.responses_stream(p, h),
-            session_id=None,
-            user_id=None,
-            api_key_id=None,
-            forced_backend_id=backend_id,
-            router_context_safety_margin=auto_cfg.router_context_safety_margin,
-            state_store=state_store,
-        )
-
-    topper = SyntheticTopper(
-        cfg=auto_cfg,
-        usage_log_path=usage_log.path if usage_log is not None else None,
-        backends=backends_list,
-        dispatch=_synthetic_dispatch,
-        cost_router=cost_router,
-    )
     smoke_tester = _PeriodicSmokeTester(
         backends=backends_list,
         interval_s=smoke_test_interval_seconds,
@@ -409,9 +317,6 @@ def create_app(
                     logger.exception("startup model-list refresh failed for %r", backend.id)
         if startup_smoke_test and backends_list:
             await _run_startup_smoke_test(backends_list)
-        # Prime the cost_router cost model if data exists
-        cost_router.fit(min_samples_per_cell=auto_cfg.optimal_min_samples_per_cell)
-        topper.start()
         smoke_tester.start()
         cooldown_prober.start()
         try:
@@ -419,7 +324,6 @@ def create_app(
         finally:
             await cooldown_prober.stop()
             await smoke_tester.stop()
-            await topper.stop()
             for backend in backends_list:
                 await backend.aclose()
             if usage_log is not None:
@@ -483,47 +387,6 @@ def create_app(
                     "quota": _quota_to_dict(q),
                 }
             )
-        # Router state: lets the operator watch the v1 + v2 cost models ramp
-        # up without poking at SQLite. last_fit / is_ready / per-cell sample
-        # counts answer "is auto routing using up-to-date data?" and "has v2
-        # accumulated enough data for this complexity bucket yet?".
-        router_block: dict[str, Any] = {
-            "is_ready": False,
-            "last_fit_ts": cost_router._last_fit if cost_router._last_fit else None,
-            "last_fit_age_s": (
-                (time.time() - cost_router._last_fit) if cost_router._last_fit else None
-            ),
-            "v1_cells": [],
-            "v2_buckets_with_data": [],
-        }
-        if cost_router._model is not None:
-            em = cost_router._model
-            router_block["is_ready"] = em.is_ready
-            router_block["v1_cells"] = sorted(
-                (
-                    {
-                        "model": m,
-                        "reasoning_effort": e,
-                        "n_samples": em._n_samples.get((m, e), 0),
-                        "avg_tokens": round(em.scores.get((m, e), 0.0), 1),
-                    }
-                    for m, e in em.scores
-                ),
-                key=lambda r: (r["model"], r["reasoning_effort"]),
-            )
-            router_block["v2_buckets_with_data"] = sorted(
-                (
-                    {
-                        "complexity": c,
-                        "model": m,
-                        "reasoning_effort": e,
-                        "n_samples": em._n_samples_by_complexity.get((c, m, e), 0),
-                        "avg_tokens": round(em.scores_by_complexity.get((c, m, e), 0.0), 1),
-                    }
-                    for c, m, e in em.scores_by_complexity
-                ),
-                key=lambda r: (r["complexity"], r["model"], r["reasoning_effort"]),
-            )
         # Recommender state: cache hit rate, upstream-call counts, and
         # which cells the recommender has been picking. Lets the operator
         # see at a glance if the cheap classifier is biased (e.g. always
@@ -553,7 +416,6 @@ def create_app(
             "backends": entries,
             "pinned": pin_state.get(),
             "sessions": session_registry.snapshot(),
-            "router": router_block,
             "recommender": recommender_block,
         }
 
@@ -575,28 +437,6 @@ def create_app(
     async def control_unpin() -> dict[str, str | None]:
         pin_state.clear()
         return {"pinned": None}
-
-    @app.post("/control/refit-router")
-    async def control_refit_router() -> dict[str, Any]:
-        """Recompute the v1 + v2 cost-router lookup tables from the usage log.
-
-        Designed to be the payload of a recurring Dispatch job — Dispatch owns
-        the schedule (cron-like, restart-safe, observable as a job), the proxy
-        owns the in-process router state. Synchronous: returns once the refit
-        has completed.
-
-        The refit itself is two SQL GROUP BY queries + an in-memory dict swap;
-        takes milliseconds. Safe to call concurrently with serving traffic —
-        readers see either the old or the new map atomically.
-        """
-        cost_router.fit(min_samples_per_cell=auto_cfg.optimal_min_samples_per_cell)
-        em = cost_router._model
-        return {
-            "refit_at_ts": cost_router._last_fit,
-            "is_ready": em.is_ready if em is not None else False,
-            "v1_cell_count": len(em.scores) if em is not None else 0,
-            "v2_bucket_count": len(em.scores_by_complexity) if em is not None else 0,
-        }
 
     @app.post("/control/clear-cooldown/{backend_id}")
     async def control_clear_cooldown(backend_id: str) -> dict[str, Any]:
@@ -771,9 +611,6 @@ def create_app(
             pin_state=pin_state,
             session_registry=session_registry,
             usage_log=usage_log,
-            explorer=explorer,
-            synthetic_explorer=synthetic_explorer,
-            cost_router=cost_router,
             nonstream=lambda b, p, h: b.chat_completions(p, h),
             stream=lambda b, p, h: b.chat_completions_stream(p, h),
             router_context_safety_margin=auto_cfg.router_context_safety_margin,
@@ -809,9 +646,6 @@ def create_app(
             pin_state=pin_state,
             session_registry=session_registry,
             usage_log=usage_log,
-            explorer=explorer,
-            synthetic_explorer=synthetic_explorer,
-            cost_router=cost_router,
             nonstream=lambda b, p, h: b.responses(p, h),
             stream=lambda b, p, h: b.responses_stream(p, h),
             router_context_safety_margin=auto_cfg.router_context_safety_margin,
@@ -846,9 +680,6 @@ async def _dispatch_route(
     pin_state: PinState,
     session_registry: SessionRegistry,
     usage_log: UsageLog | None,
-    explorer: ExplorerRouter,
-    synthetic_explorer: ExplorerRouter,
-    cost_router: LearnedModelRouter,
     nonstream: NonstreamCall,
     stream: StreamCall,
     router_context_safety_margin: int = 8192,
@@ -872,9 +703,6 @@ async def _dispatch_route(
         pin_state=pin_state,
         session_registry=session_registry,
         usage_log=usage_log,
-        explorer=explorer,
-        synthetic_explorer=synthetic_explorer,
-        cost_router=cost_router,
         nonstream=nonstream,
         stream=stream,
         session_id=session_id,
@@ -954,9 +782,6 @@ async def _dispatch_internal(
     pin_state: PinState,
     session_registry: SessionRegistry,
     usage_log: UsageLog | None,
-    explorer: ExplorerRouter,
-    synthetic_explorer: ExplorerRouter,
-    cost_router: LearnedModelRouter,
     nonstream: NonstreamCall,
     stream: StreamCall,
     session_id: str | None,
@@ -969,9 +794,6 @@ async def _dispatch_internal(
     cell_recommender: CellRecommender | None = None,
     live_cells_fn: Callable[[], list[Cell]] | None = None,
 ) -> Any:
-    # Default auto_cfg so this helper is safe to call without the new kwargs
-    # (e.g. from the synthetic dispatch path, which doesn't use the
-    # recommender). Callers from the user-facing dispatch always pass both.
     if auto_cfg is None:
         auto_cfg = AutoRouterConfig()
     if live_cells_fn is None:
@@ -992,112 +814,20 @@ async def _dispatch_internal(
     if session_id is not None and usage_log is not None:
         session_prompt_tokens = usage_log.last_session_prompt_tokens(session_id)
 
-    # Virtual model rewrite. The body is mutated in place so the downstream
-    # selector and backend see the resolved (model, reasoning) pair.
-    if requested_model == "auto-learning":
-        # Per-request learned model routing: occasionally route to cost_router instead of explorer
-        # to test the learned model and keep it fresh against changing landscape.
-        learned_model_cap = _learned_model_cap_pct(
-            startup_timestamp=state_store.get_proxy_startup_timestamp() if state_store is not None else None,
-            model_release_timestamp=state_store.get_model_release_timestamp() if state_store is not None else None,
+    # Virtual model rewrite. Every model=auto / model=auto-learning /
+    # model=auto-learning-synthetic request now goes through the cell
+    # recommender — the cheap upstream classifier picks which (model,
+    # effort) cell should handle the prompt. The two "learning" virtual
+    # names are kept as aliases for backward compatibility with clients
+    # that still set them, but they no longer drive data collection
+    # (model-based routing was abandoned). The body is mutated in place
+    # so the downstream selector and backend see the resolved pair.
+    if requested_model in ("auto", "auto-learning", "auto-learning-synthetic"):
+        fallback_cell = Cell(
+            model=auto_cfg.cell_recommender_cheap_model,
+            reasoning_effort=auto_cfg.cell_recommender_cheap_effort,
+            context_window=None,
         )
-        should_use_learned_model = random.randint(0, 100) < learned_model_cap
-
-        if should_use_learned_model and cost_router._model is not None and cost_router._model.is_ready:
-            # Route to the cost-optimal cell. Primary path: ask the cell
-            # recommender (cheap upstream classifier). Fallback: cost_router
-            # using a neutral complexity, since we no longer compute a local
-            # heuristic complexity for routing. Cache amortizes the
-            # classifier cost; repeated prompts pay once.
-            try:
-                fallback_decision = cost_router.choose(
-                    complexity=2,
-                    session_prompt_tokens=session_prompt_tokens,
-                    router_context_safety_margin=router_context_safety_margin,
-                )
-                fallback_cell = fallback_decision.cell
-            except LearnedModelRouter.NotTrained:
-                fallback_cell = Cell(
-                    model=auto_cfg.cell_recommender_cheap_model,
-                    reasoning_effort=auto_cfg.cell_recommender_cheap_effort,
-                    context_window=None,
-                )
-            if cell_recommender is not None:
-                rec = await cell_recommender.recommend(
-                    body, allowed_cells=live_cells_fn(), fallback=fallback_cell
-                )
-                body["model"] = rec.cell.model
-                body.setdefault("reasoning", {})["effort"] = rec.cell.reasoning_effort
-            else:
-                body["model"] = fallback_cell.model
-                body.setdefault("reasoning", {})["effort"] = fallback_cell.reasoning_effort
-            routing_mode = "auto"
-            _maybe_fire_comparison_sampling(
-                body,
-                cell_recommender=cell_recommender,
-                backends_list=backends_list,
-                live_cells_fn=live_cells_fn,
-                compare_pct=auto_cfg.cell_recommender_compare_pct,
-                compare_max_weekly_pct=auto_cfg.cell_recommender_compare_max_weekly_pct,
-            )
-        else:
-            # Route to explorer (data collection) for this request
-            decision = explorer.choose(
-                session_prompt_tokens=session_prompt_tokens,
-                router_context_safety_margin=router_context_safety_margin,
-            )
-            body["model"] = decision.cell.model
-            body.setdefault("reasoning", {})["effort"] = decision.cell.reasoning_effort
-            routing_mode = "auto-learning"
-
-        # Complexity-classifier marker injection used to live here — it
-        # asked the model to prefix its answer with {{{N}}} so we could
-        # train a local classifier. That training was abandoned in favor
-        # of the cell recommender (see cell_recommender.py), which uses
-        # the cheapest cell to pick the right cell for each prompt and
-        # logs (prompt, recommended_cell) as a side-effect corpus. With
-        # no consumer for the marker labels, the injection became dead
-        # leakage surface. The defensive marker filter
-        # (_extract_complexity_from_stream, _strip_trailing_complexity_marker,
-        # _clean_sse_blob) is intentionally retained as a belt-and-
-        # suspenders scrub for any in-flight requests that still had the
-        # instruction echoed back by upstream context.
-    elif requested_model == "auto-learning-synthetic":
-        # Constrain the cell grid to models the forced backend advertises.
-        # Without this, choose() may pick a model from the union-of-all-backends
-        # that the forced backend doesn't serve, causing _no_viable at dispatch time.
-        allowed: frozenset[str] | None = None
-        if forced_backend_id is not None:
-            fb = next((b for b in backends_list if b.id == forced_backend_id), None)
-            if fb is not None:
-                allowed = frozenset(fb.advertised_models)
-        decision = synthetic_explorer.choose(
-            allowed_models=allowed,
-            session_prompt_tokens=session_prompt_tokens,
-            router_context_safety_margin=router_context_safety_margin,
-        )
-        body["model"] = decision.cell.model
-        body.setdefault("reasoning", {})["effort"] = decision.cell.reasoning_effort
-        routing_mode = "auto-learning-synthetic"
-    elif requested_model == "auto":
-        # Explicit `model=auto`: same recommender-then-fallback path as the
-        # probabilistic learned-model branch. cost_router fills the
-        # fallback role; if cost_router is also not trained, drop to the
-        # cheap cell rather than 503'ing the user — the recommender will
-        # then pick a real cell on its own.
-        try:
-            fallback_decision = cost_router.choose(
-                complexity=2,
-                session_prompt_tokens=session_prompt_tokens,
-                router_context_safety_margin=router_context_safety_margin,
-            )
-            fallback_cell = fallback_decision.cell
-        except LearnedModelRouter.NotTrained:
-            fallback_cell = Cell(
-                model=auto_cfg.cell_recommender_cheap_model,
-                reasoning_effort=auto_cfg.cell_recommender_cheap_effort,
-                context_window=None,
-            )
         if cell_recommender is not None:
             rec = await cell_recommender.recommend(
                 body, allowed_cells=live_cells_fn(), fallback=fallback_cell
