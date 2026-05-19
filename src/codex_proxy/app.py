@@ -1213,6 +1213,10 @@ async def _dispatch_stream(
         # Also scrub a trailing {{{...}}} marker if the model emits one as a
         # closing tag (e.g. {{{/2}}} at the very end of the answer).
         stream = _strip_trailing_complexity_marker(stream)
+        # Final scrub: full-text .done events (which Hermes / codex-cli
+        # often read for the final UI render). The delta filters above
+        # never touch these — see _scrub_full_text_events docstring.
+        stream = _scrub_full_text_events(stream)
 
         # Wrap stream with safe error handling for peer disconnections
         stream = _safe_stream(stream, backend_id=backend.id)
@@ -1319,6 +1323,108 @@ _TEXT_BEARING_DELTA_EVENT_TYPES: frozenset[str] = frozenset({
     "response.output_text.delta",
     "response.reasoning_summary_text.delta",
 })
+
+# Final / accumulated-text events. These carry the FULL response text after
+# streaming completes, and Hermes / codex-cli often read from them for the
+# final display (bypassing the delta stream). Marker scrubbing has to cover
+# these too or a model that voluntarily echoes "{{{N}}}\n\n..." at the start
+# of its response (because its conversation history is poisoned with prior
+# marker-prefixed turns) will leak through to the user even though every
+# delta event was stripped clean.
+#
+# Map: event_type -> JSON path to the string field that holds the full text.
+# Path syntax is dot-separated keys, with `[N]` for list indexing.
+_FULL_TEXT_EVENT_PATHS: dict[str, str] = {
+    "response.output_text.done": "text",
+    "response.content_part.done": "part.text",
+    "response.output_item.done": "item.content[0].text",
+}
+
+
+def _get_at_path(obj: Any, path: str) -> Any:
+    """Read a value out of a nested JSON-like dict/list using a 'a.b[0].c'
+    style path. Returns None if any step is missing or wrongly typed.
+    Cheap parser; not a full JSONPath impl."""
+    cur = obj
+    for part in path.split("."):
+        # Split off any list indices like 'content[0]'
+        while "[" in part and part.endswith("]"):
+            head, idx_str = part[: part.index("[")], part[part.index("[") + 1 : -1]
+            try:
+                idx = int(idx_str)
+            except ValueError:
+                return None
+            if head:
+                cur = cur.get(head) if isinstance(cur, dict) else None
+            if not isinstance(cur, list) or idx >= len(cur):
+                return None
+            cur = cur[idx]
+            part = ""
+        if part:
+            if not isinstance(cur, dict):
+                return None
+            cur = cur.get(part)
+        if cur is None:
+            return None
+    return cur
+
+
+def _set_at_path(obj: Any, path: str, value: Any) -> bool:
+    """In-place set a value at the given path. Returns True on success."""
+    cur = obj
+    parts = path.split(".")
+    for i, part in enumerate(parts):
+        last = i == len(parts) - 1
+        while "[" in part and part.endswith("]"):
+            head, idx_str = part[: part.index("[")], part[part.index("[") + 1 : -1]
+            try:
+                idx = int(idx_str)
+            except ValueError:
+                return False
+            if head:
+                if not isinstance(cur, dict):
+                    return False
+                cur = cur.get(head)
+            if not isinstance(cur, list) or idx >= len(cur):
+                return False
+            if last and "[" not in part[part.index("[") + 1 :]:
+                cur[idx] = value
+                return True
+            cur = cur[idx]
+            part = ""
+        if part:
+            if not isinstance(cur, dict):
+                return False
+            if last:
+                cur[part] = value
+                return True
+            cur = cur.get(part)
+            if cur is None:
+                return False
+    return False
+
+
+def _scrub_full_text_event(data: dict[str, Any]) -> bool:
+    """If this event is a known full-text 'done' event, strip leading +
+    trailing {{{...}}} markers from its text field. Returns True if the
+    event was mutated.
+    """
+    et = data.get("type")
+    if not isinstance(et, str):
+        return False
+    path = _FULL_TEXT_EVENT_PATHS.get(et)
+    if path is None:
+        return False
+    text = _get_at_path(data, path)
+    if not isinstance(text, str) or not text:
+        return False
+    # Reuse the existing leading + trailing strippers.
+    _, cleaned = _extract_complexity_class(text)
+    cleaned = _strip_trailing_complexity_marker_text(cleaned)
+    if cleaned == text:
+        return False
+    _set_at_path(data, path, cleaned)
+    return True
 
 
 def _event_delta_text(event_bytes: bytes) -> str:
@@ -1603,6 +1709,64 @@ async def _extract_complexity_from_stream(
         yield leftover
 
 
+async def _scrub_full_text_events(
+    source: AsyncIterator[bytes],
+) -> AsyncIterator[bytes]:
+    """Strip leading / trailing {{{...}}} markers from full-text 'done' events.
+
+    The streaming filters (_extract_complexity_from_stream and
+    _strip_trailing_complexity_marker) scrub the .delta event stream only.
+    Codex also emits accumulated-text events at the end of each output:
+    response.output_text.done, response.content_part.done,
+    response.output_item.done — each carries the FULL response text and
+    Hermes / codex-cli often read from those for the final display. If a
+    marker was in the deltas (because the model voluntarily echoed it from
+    its conversation history), it ends up in these too, bypassing both
+    delta filters. This pass rewrites those events in-place so the
+    consumer never sees the marker.
+
+    Single-pass, no buffering: every event is parsed, the known .done
+    event types have their text field scrubbed, then the (possibly
+    modified) event is reserialized and yielded.
+    """
+    leftover = b""
+    async for chunk in source:
+        combined = leftover + chunk
+        parts = combined.split(b"\n\n")
+        leftover = parts[-1]
+        events = parts[:-1]
+        for ev in events:
+            try:
+                ev_str = ev.decode("utf-8")
+            except UnicodeDecodeError:
+                yield ev + b"\n\n"
+                continue
+            lines = ev_str.split("\n")
+            modified_any = False
+            new_lines: list[str] = []
+            for line in lines:
+                if not line.startswith("data: "):
+                    new_lines.append(line)
+                    continue
+                json_str = line[6:]
+                if json_str.strip() == "[DONE]":
+                    new_lines.append(line)
+                    continue
+                try:
+                    data = json.loads(json_str)
+                except (json.JSONDecodeError, ValueError):
+                    new_lines.append(line)
+                    continue
+                if _scrub_full_text_event(data):
+                    new_lines.append("data: " + json.dumps(data))
+                    modified_any = True
+                else:
+                    new_lines.append(line)
+            yield ("\n".join(new_lines)).encode("utf-8") + b"\n\n"
+    if leftover:
+        yield leftover
+
+
 async def _strip_trailing_complexity_marker(
     source: AsyncIterator[bytes],
 ) -> AsyncIterator[bytes]:
@@ -1753,6 +1917,11 @@ def _clean_sse_blob(blob: bytes | None) -> bytes | None:
                             _, cleaned_delta = _extract_complexity_class(delta)
                             cleaned_delta = _strip_trailing_complexity_marker_text(cleaned_delta)
                             data['delta'] = cleaned_delta
+
+                    # Handle full-text 'done' events (Hermes / codex-cli often
+                    # read these for final UI render — must be scrubbed too)
+                    elif data.get('type') in _FULL_TEXT_EVENT_PATHS:
+                        _scrub_full_text_event(data)
 
                     # Handle chat completions format (choices[0].delta.content)
                     elif 'choices' in data and len(data.get('choices', [])) > 0:

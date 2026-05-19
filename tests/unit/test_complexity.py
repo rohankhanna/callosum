@@ -587,3 +587,96 @@ def test_no_trailing_marker_passthrough() -> None:
 
 def test_marker_in_middle_not_stripped() -> None:
     asyncio.run(TestTrailingMarkerStream().test_marker_in_middle_not_stripped())
+
+
+# ---------- done-event scrubbing (full-text accumulated events) ----------
+
+
+class TestDoneEventScrubbing:
+    """The delta filters strip incremental markers, but Codex also emits
+    accumulated-text 'done' events at the end of each output. Hermes /
+    codex-cli often read those for the final UI render, so they need
+    their own scrub pass — otherwise a marker the model voluntarily
+    echoed from poisoned conversation history leaks through the delta
+    filters into the user's display via response.output_text.done.
+    """
+
+    async def _run(self, events: list[bytes]) -> str:
+        from codex_proxy.app import _scrub_full_text_events
+
+        async def source():
+            for ev in events:
+                yield ev
+
+        chunks = []
+        async for c in _scrub_full_text_events(source()):
+            chunks.append(c)
+        return b"".join(chunks).decode("utf-8")
+
+    async def test_output_text_done_text_field_scrubbed(self) -> None:
+        events = [
+            b'data: {"type":"response.output_text.done","text":"{{{2}}}\\nHello world."}\n\n',
+            b'data: [DONE]\n\n',
+        ]
+        result = await self._run(events)
+        assert "{{{2}}}" not in result
+        assert "Hello world." in result
+
+    async def test_content_part_done_nested_text_field_scrubbed(self) -> None:
+        events = [
+            b'data: {"type":"response.content_part.done","part":{"type":"output_text","text":"{{{3}}}\\nThe answer."}}\n\n',
+            b'data: [DONE]\n\n',
+        ]
+        result = await self._run(events)
+        assert "{{{3}}}" not in result
+        assert "The answer." in result
+
+    async def test_output_item_done_deep_nested_text_field_scrubbed(self) -> None:
+        events = [
+            b'data: {"type":"response.output_item.done","item":{"id":"msg_x","content":[{"type":"output_text","text":"{{{1}}}\\nResponse here"}]}}\n\n',
+            b'data: [DONE]\n\n',
+        ]
+        result = await self._run(events)
+        assert "{{{1}}}" not in result
+        assert "Response here" in result
+
+    async def test_trailing_closing_tag_in_done_event_scrubbed(self) -> None:
+        events = [
+            b'data: {"type":"response.output_text.done","text":"Done.\\n\\n{{{/2}}}"}\n\n',
+            b'data: [DONE]\n\n',
+        ]
+        result = await self._run(events)
+        assert "{{{" not in result
+        assert "Done." in result
+
+    async def test_non_done_events_passed_through_unchanged(self) -> None:
+        events = [
+            b'data: {"type":"response.output_text.delta","delta":"hello"}\n\n',
+            b'data: {"type":"response.function_call_arguments.delta","delta":"{\\"key\\":1}"}\n\n',
+            b'data: [DONE]\n\n',
+        ]
+        result = await self._run(events)
+        # delta events left untouched by this pass (separate filters scrub them)
+        assert '"delta":"hello"' in result
+        # function-call JSON braces preserved (the escaped form survives untouched)
+        assert "\\\"key\\\"" in result
+
+
+def test_output_text_done_text_field_scrubbed() -> None:
+    asyncio.run(TestDoneEventScrubbing().test_output_text_done_text_field_scrubbed())
+
+
+def test_content_part_done_nested_text_field_scrubbed() -> None:
+    asyncio.run(TestDoneEventScrubbing().test_content_part_done_nested_text_field_scrubbed())
+
+
+def test_output_item_done_deep_nested_text_field_scrubbed() -> None:
+    asyncio.run(TestDoneEventScrubbing().test_output_item_done_deep_nested_text_field_scrubbed())
+
+
+def test_trailing_closing_tag_in_done_event_scrubbed() -> None:
+    asyncio.run(TestDoneEventScrubbing().test_trailing_closing_tag_in_done_event_scrubbed())
+
+
+def test_non_done_events_passed_through_unchanged() -> None:
+    asyncio.run(TestDoneEventScrubbing().test_non_done_events_passed_through_unchanged())
