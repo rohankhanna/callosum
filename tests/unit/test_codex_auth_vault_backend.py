@@ -706,6 +706,114 @@ async def test_refresh_advertised_models_handles_data_shape(tmp_path: Path) -> N
         await backend.aclose()
 
 
+async def test_refresh_advertised_models_extracts_full_metadata(tmp_path: Path) -> None:
+    """When the upstream `/models` response includes the rich ModelInfo shape
+    (supported_reasoning_levels, supported_in_api, priority, visibility, etc.),
+    the backend captures it all under `model_metadata`. Removes the need to
+    hardcode reasoning levels / completion-shape heuristics on this side.
+    """
+    auth_path = tmp_path / "auth.json"
+    _write_auth_json(auth_path)
+    vault = _make_vault(auth_path)
+
+    rich_payload = {
+        "models": [
+            {
+                "slug": "model-a0e7",
+                "display_name": "model-a0e7",
+                "description": "Strong model for everyday coding.",
+                "context_window": 272000,
+                "supported_in_api": True,
+                "visibility": "list",
+                "priority": 16,
+                "default_reasoning_level": "medium",
+                "supported_reasoning_levels": [
+                    {"effort": "low"},
+                    {"effort": "medium"},
+                    {"effort": "high"},
+                    {"effort": "xhigh"},
+                ],
+                "input_modalities": ["text", "image"],
+            },
+            {
+                "slug": "codex-auto-review",
+                "supported_in_api": True,
+                "visibility": "hide",  # internal helper; should still be captured
+                "priority": 43,
+                "supported_reasoning_levels": [{"effort": "low"}],
+            },
+        ]
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=rich_payload)
+
+    backend = CodexAuthVaultBackend(
+        id="vault-a",
+        vault=vault,
+        advertised_models=frozenset({"cold"}),
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        await backend.refresh_advertised_models()
+        # advertised set still has both (filtering happens at the cell grid)
+        assert backend.advertised_models == frozenset({"model-a0e7", "codex-auto-review"})
+        md = backend.model_metadata
+        assert set(md.keys()) == {"model-a0e7", "codex-auto-review"}
+        gpt = md["model-a0e7"]
+        assert gpt.display_name == "model-a0e7"
+        assert gpt.context_window == 272000
+        assert gpt.supported_in_api is True
+        assert gpt.visibility == "list"
+        assert gpt.priority == 16
+        assert gpt.default_reasoning_level == "medium"
+        assert gpt.supported_reasoning_levels == ("low", "medium", "high", "xhigh")
+        assert gpt.input_modalities == ("text", "image")
+        # Hidden model is captured with full metadata too — filter is downstream.
+        hidden = md["codex-auto-review"]
+        assert hidden.visibility == "hide"
+        assert hidden.priority == 43
+    finally:
+        await backend.aclose()
+
+
+async def test_refresh_advertised_models_minimal_legacy_shape_still_works(
+    tmp_path: Path,
+) -> None:
+    """When the upstream returns only the legacy minimal shape (slug + maybe
+    context_length, no ModelInfo extras), advertised_models still populates
+    and model_metadata records exist with defensive None fields. The cell
+    grid then falls back to the regex + REASONING_LEVELS path.
+    """
+    auth_path = tmp_path / "auth.json"
+    _write_auth_json(auth_path)
+    vault = _make_vault(auth_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"models": [{"slug": "model-a0d8", "context_length": 100000}]}
+        )
+
+    backend = CodexAuthVaultBackend(
+        id="vault-a",
+        vault=vault,
+        advertised_models=frozenset({"cold"}),
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        await backend.refresh_advertised_models()
+        assert backend.advertised_models == frozenset({"model-a0d8"})
+        md = backend.model_metadata
+        assert "model-a0d8" in md
+        assert md["model-a0d8"].context_window == 100000
+        # All the ModelInfo extras are None / empty.
+        assert md["model-a0d8"].priority is None
+        assert md["model-a0d8"].supported_in_api is None
+        assert md["model-a0d8"].supported_reasoning_levels == ()
+    finally:
+        await backend.aclose()
+
+
 # ---------- weekly-exhaustion derivation from quota snapshot ----------------
 
 

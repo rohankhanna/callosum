@@ -223,18 +223,50 @@ def create_app(
 
     def _live_cells() -> list[Cell]:
         """Build the auto-learning cell grid from the union of every Codex
-        backend's CURRENT advertised_models (excluding OpenRouter's shadow
-        set since OpenRouter doesn't participate in the cost-model corpus).
+        backend's CURRENT advertised_models.
 
-        Filters to chat-completion-shaped ids only (skips codex-auto-review,
-        embeddings, audio, etc.) and orders strongest-model-first so any
-        ties in coverage round-robin break in favor of the more useful cell.
+        Prefers per-model metadata from the upstream catalog
+        (supported_in_api, visibility, priority, supported_reasoning_levels,
+        context_window) when backends provide it. Falls back to the regex-
+        and-static-list path for backends that don't expose metadata.
 
         Recomputed on every router decision — when CodexAuthVaultBackend's
         hourly catalog refresh discovers a new model, the cell grid follows
         without a proxy restart. When a model is retired upstream, it drops
         out of the grid the next time the router consults it.
         """
+        from codex_proxy.cell_grid import (
+            ModelMetadata,
+            build_cells_from_metadata,
+        )
+
+        # Merge metadata from every Codex auth-vault backend. When two
+        # backends both advertise the same slug, keep the one with the
+        # MOST-populated record (more fields → fewer "Unknown" defaults).
+        merged_metadata: dict[str, ModelMetadata] = {}
+        for b in backends_list:
+            if b.kind != "codex_auth_vault":
+                continue
+            backend_meta = getattr(b, "model_metadata", None) or {}
+            for slug, m in backend_meta.items():
+                existing = merged_metadata.get(slug)
+                if existing is None:
+                    merged_metadata[slug] = m
+                else:
+                    # Pick the record with more populated fields.
+                    new_filled = sum(1 for f in (m.supported_in_api, m.visibility, m.priority, m.context_window) if f is not None)
+                    old_filled = sum(1 for f in (existing.supported_in_api, existing.visibility, existing.priority, existing.context_window) if f is not None)
+                    if new_filled > old_filled:
+                        merged_metadata[slug] = m
+
+        if merged_metadata:
+            cells = build_cells_from_metadata(merged_metadata)
+            if cells:
+                return cells
+
+        # Fallback path: no metadata yet (cold start) or backend doesn't
+        # expose it. Use the legacy regex filter + static reasoning-level
+        # enumeration so the router still operates.
         pool: set[str] = set()
         for b in backends_list:
             if b.kind != "codex_auth_vault":

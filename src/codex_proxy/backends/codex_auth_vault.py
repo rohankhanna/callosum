@@ -103,6 +103,11 @@ class CodexAuthVaultBackend:
         self._static_advertised_models: frozenset[str] = advertised_models
         self._dynamic_advertised_models: frozenset[str] | None = None
         self._model_context_windows: dict[str, int] = {}  # slug → context_window tokens
+        # Full per-model metadata from the upstream catalog (ModelMetadata
+        # records). Empty when we haven't fetched yet OR when the upstream
+        # response omitted the fields. Callers fall back to local defaults.
+        from codex_proxy.cell_grid import ModelMetadata
+        self._model_metadata: dict[str, ModelMetadata] = {}
         self._models_fetched_at: float = 0.0
         self._models_refresh_s = models_refresh_s
         self._vault = vault
@@ -144,6 +149,16 @@ class CodexAuthVaultBackend:
         if not yet fetched or if the upstream API doesn't include context_length.
         """
         return self._model_context_windows
+
+    @property
+    def model_metadata(self):  # type: ignore[no-untyped-def]
+        """Return the most recently fetched per-model metadata (ModelMetadata
+        records keyed by slug). Empty dict if not yet fetched or the upstream
+        response was missing the relevant fields. Loose-typed in the
+        signature to avoid an import cycle; callers should treat values as
+        codex_proxy.cell_grid.ModelMetadata.
+        """
+        return self._model_metadata
 
     async def refresh_advertised_models(self, *, now: float | None = None) -> None:
         """Fetch the upstream model catalog for this account and update the
@@ -188,10 +203,11 @@ class CodexAuthVaultBackend:
             payload = response.json()
         except (ValueError, json.JSONDecodeError):
             return
-        models, context_windows = _extract_model_catalog(payload)
+        models, context_windows, metadata = _extract_model_catalog(payload)
         if models:
             self._dynamic_advertised_models = models
             self._model_context_windows = context_windows
+            self._model_metadata = metadata
             self._models_fetched_at = ts
 
     async def health(self) -> HealthStatus:
@@ -485,25 +501,34 @@ class CodexAuthVaultBackend:
         _log_cooldown_set(self.id, cooldown_until, quota)
 
 
-def _extract_model_catalog(payload: Any) -> tuple[frozenset[str], dict[str, int]]:
-    """Pull model slugs and context windows from an upstream `/backend-api/codex/models`
-    response. Tolerates both the documented shape {"models": [{"slug": ..., "context_length": ...}]}
-    and the OpenAI-compatible {"data": [{"id": ..., "context_length": ...}]} shape, since the
-    upstream surface has shipped both at different times.
+def _extract_model_catalog(
+    payload: Any,
+) -> tuple[frozenset[str], dict[str, int], dict[str, "ModelMetadata"]]:
+    """Pull model slugs, context windows, and full per-model metadata from an
+    upstream `/backend-api/codex/models` response.
 
-    Returns (frozenset of slugs, dict of slug→context_window). Context window is None
-    for any model not present in the API response. Returns empty set on malformed payload
-    — callers treat empty as "fall back to the cold-start static set."
+    Tolerates two shapes the upstream has shipped over time:
+      {"models": [{"slug": ..., "context_window": ..., ...}]}
+      {"data":   [{"id":   ..., "context_length": ..., ...}]}
+
+    Returns (frozenset of slugs, dict of slug→context_window, dict of
+    slug→ModelMetadata). Every metadata field is defensive — only `slug`
+    is required, everything else falls back to None / empty when absent.
+    Returns empty results on malformed payload; callers treat empty as
+    "fall back to the cold-start static set."
     """
+    from codex_proxy.cell_grid import ModelMetadata
+
     if not isinstance(payload, dict):
-        return frozenset(), {}
+        return frozenset(), {}, {}
     items: Any = payload.get("models")
     if not isinstance(items, list):
         items = payload.get("data")
     if not isinstance(items, list):
-        return frozenset(), {}
+        return frozenset(), {}, {}
     slugs: set[str] = set()
     context_windows: dict[str, int] = {}
+    metadata: dict[str, ModelMetadata] = {}
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -513,12 +538,54 @@ def _extract_model_catalog(payload: Any) -> tuple[frozenset[str], dict[str, int]
         if not isinstance(slug, str) or not slug:
             continue
         slugs.add(slug)
-        # Capture context_length if present, but don't fail if absent
-        if "context_length" in item:
+        # context_window (new shape) or context_length (legacy / OpenAI shape)
+        ctx_len = item.get("context_window")
+        if not isinstance(ctx_len, int) or ctx_len <= 0:
             ctx_len = item.get("context_length")
-            if isinstance(ctx_len, int) and ctx_len > 0:
-                context_windows[slug] = ctx_len
-    return frozenset(slugs), context_windows
+        if isinstance(ctx_len, int) and ctx_len > 0:
+            context_windows[slug] = ctx_len
+
+        # supported_reasoning_levels: list[{"effort": "low", ...}] → tuple[str, ...]
+        levels_raw = item.get("supported_reasoning_levels")
+        levels: tuple[str, ...] = ()
+        if isinstance(levels_raw, list):
+            picked: list[str] = []
+            for lvl in levels_raw:
+                if isinstance(lvl, dict):
+                    eff = lvl.get("effort")
+                    if isinstance(eff, str) and eff:
+                        picked.append(eff)
+                elif isinstance(lvl, str) and lvl:
+                    picked.append(lvl)
+            levels = tuple(picked)
+
+        modalities_raw = item.get("input_modalities")
+        modalities: tuple[str, ...] = ()
+        if isinstance(modalities_raw, list):
+            modalities = tuple(
+                m for m in modalities_raw if isinstance(m, str) and m
+            )
+
+        # Build the metadata record — every field optional except slug.
+        metadata[slug] = ModelMetadata(
+            slug=slug,
+            display_name=item.get("display_name")
+                if isinstance(item.get("display_name"), str) else None,
+            description=item.get("description")
+                if isinstance(item.get("description"), str) else None,
+            context_window=context_windows.get(slug),
+            supported_in_api=item.get("supported_in_api")
+                if isinstance(item.get("supported_in_api"), bool) else None,
+            visibility=item.get("visibility")
+                if isinstance(item.get("visibility"), str) else None,
+            priority=item.get("priority")
+                if isinstance(item.get("priority"), int) else None,
+            default_reasoning_level=item.get("default_reasoning_level")
+                if isinstance(item.get("default_reasoning_level"), str) else None,
+            supported_reasoning_levels=levels,
+            input_modalities=modalities,
+        )
+    return frozenset(slugs), context_windows, metadata
 
 
 def _extract_model_slugs(payload: Any) -> frozenset[str]:
@@ -526,7 +593,7 @@ def _extract_model_slugs(payload: Any) -> frozenset[str]:
     response. Deprecated: use _extract_model_catalog instead to get context windows.
     Kept for backward compat. Returns an empty frozenset on anything malformed.
     """
-    slugs, _ = _extract_model_catalog(payload)
+    slugs, _, _ = _extract_model_catalog(payload)
     return slugs
 
 

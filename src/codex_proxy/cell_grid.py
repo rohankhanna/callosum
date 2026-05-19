@@ -51,6 +51,29 @@ class Cell:
 
 
 @dataclass(frozen=True, slots=True)
+class ModelMetadata:
+    """Per-model metadata extracted from /backend-api/codex/models.
+
+    Every field is defensive: only `slug` is required, everything else
+    falls back to None / empty / sensible defaults when the API response
+    doesn't include it. The proxy's cell-grid logic prefers these fields
+    over its own hardcoded constants whenever they're populated.
+    """
+
+    slug: str
+    display_name: str | None = None
+    description: str | None = None
+    context_window: int | None = None
+    supported_in_api: bool | None = None
+    visibility: str | None = None  # 'list' | 'hide' | etc.
+    priority: int | None = None  # lower == stronger; higher == weaker
+    default_reasoning_level: str | None = None
+    # Empty tuple if the API didn't tell us; callers fall back to a default.
+    supported_reasoning_levels: tuple[str, ...] = ()
+    input_modalities: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class CellCoverage:
     """Sample counts per cell, used to pick the next variation target."""
 
@@ -128,10 +151,90 @@ def live_completion_models(model_pool: frozenset[str] | set[str]) -> tuple[str, 
     """Filter a backend's advertised_models to just completion-style ids and
     return them sorted strongest-first. Used by app.py to build a cell grid
     that adapts to the current upstream catalog without a hardcoded list.
+
+    This is the legacy regex-only path — works without per-model metadata
+    from the API. See `live_completion_models_from_metadata` for the
+    API-driven version which uses `supported_in_api` + `visibility` +
+    `priority` instead of the regex and a name-shape sort.
     """
     completion_only = [m for m in model_pool if is_completion_model(m)]
     completion_only.sort(key=model_strength_key)
     return tuple(completion_only)
+
+
+def live_completion_models_from_metadata(
+    metadata: dict[str, ModelMetadata],
+) -> tuple[str, ...]:
+    """Filter and rank models using upstream-provided metadata when present.
+
+    Filter rules (each applied only when the field is populated):
+      * `supported_in_api == True`     — model must be callable via this surface.
+      * `visibility == 'list'`         — model is meant to be user-routable;
+                                          excludes 'hide' models like
+                                          codex-auto-review.
+
+    Rank: ascending `priority` (lower == stronger per upstream's convention).
+    Models missing `priority` sort to the end via a high sentinel.
+
+    Falls back to a name-shape filter (`is_completion_model`) only for
+    slugs whose metadata lacks `supported_in_api` — defensive against
+    older or unexpectedly stripped API responses.
+    """
+    out: list[tuple[int, str, str]] = []
+    for slug, m in metadata.items():
+        if m.supported_in_api is False:
+            continue
+        if m.visibility is not None and m.visibility != "list":
+            continue
+        # If neither supported_in_api nor visibility was given, fall back
+        # to the name-shape filter so we don't accidentally route to
+        # embeddings / audio / review-style models.
+        if m.supported_in_api is None and m.visibility is None:
+            if not is_completion_model(slug):
+                continue
+        # Sort key: priority asc (lower=stronger), with high sentinel for missing.
+        prio = m.priority if m.priority is not None else 10_000
+        out.append((prio, slug, slug))
+    out.sort()
+    return tuple(slug for _, _, slug in out)
+
+
+def reasoning_levels_for(
+    slug: str,
+    metadata: dict[str, ModelMetadata],
+    fallback: tuple[str, ...] = REASONING_LEVELS,
+) -> tuple[str, ...]:
+    """Return the reasoning effort levels supported by this model.
+
+    Prefers `metadata[slug].supported_reasoning_levels` when populated.
+    Falls back to the global REASONING_LEVELS constant when the API
+    didn't include the field (old responses, fallback paths).
+    """
+    m = metadata.get(slug) if metadata else None
+    if m is not None and m.supported_reasoning_levels:
+        return m.supported_reasoning_levels
+    return fallback
+
+
+def build_cells_from_metadata(
+    metadata: dict[str, ModelMetadata],
+) -> list[Cell]:
+    """Build the cell grid using per-model `supported_reasoning_levels` from
+    upstream when available; falls back to the global REASONING_LEVELS for
+    any model whose metadata is missing or empty.
+
+    Filtering matches `live_completion_models_from_metadata` so the cell
+    grid and the model list stay consistent.
+    """
+    completion_slugs = live_completion_models_from_metadata(metadata)
+    cells: list[Cell] = []
+    for slug in completion_slugs:
+        m = metadata.get(slug)
+        ctx = m.context_window if m is not None else None
+        levels = reasoning_levels_for(slug, metadata)
+        for r in levels:
+            cells.append(Cell(model=slug, reasoning_effort=r, context_window=ctx))
+    return cells
 
 
 def coverage_from_db(
