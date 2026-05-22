@@ -112,6 +112,22 @@ def test_unknown_api_key_is_rejected(tmp_path: Path) -> None:
     svc.db.close()
 
 
+def test_count_active_api_keys(tmp_path: Path) -> None:
+    """count_active_api_keys backs the 401 diagnostics — must count only
+    non-revoked keys across all users."""
+    svc = _service(tmp_path)
+    assert svc.db.count_active_api_keys() == 0
+    alice = svc.register(username="alice", password="x")
+    bob = svc.register(username="bob", password="y")
+    k1 = svc.create_api_key(user_id=alice.id, label="a1")
+    svc.create_api_key(user_id=alice.id, label="a2")
+    svc.create_api_key(user_id=bob.id, label="b1")
+    assert svc.db.count_active_api_keys() == 3
+    svc.revoke_api_key(key_id=k1.api_key.id, user_id=alice.id)
+    assert svc.db.count_active_api_keys() == 2  # revoked one no longer counted
+    svc.db.close()
+
+
 def test_passwords_are_not_stored_plaintext(tmp_path: Path) -> None:
     svc = _service(tmp_path)
     svc.register(username="alice", password="hunter2")

@@ -201,6 +201,15 @@ class AuthDB:
         ).fetchall()
         return [_row_to_api_key(r) for r in rows]
 
+    def count_active_api_keys(self) -> int:
+        """Number of non-revoked API keys across all users. Used by the auth
+        middleware's 401 diagnostics to distinguish 'wrong key' from
+        'empty auth store'."""
+        row = self._conn.execute(
+            "SELECT COUNT(*) FROM api_keys WHERE revoked_at IS NULL"
+        ).fetchone()
+        return int(row[0]) if row else 0
+
     def revoke_api_key(self, *, key_id: int, user_id: int, revoked_at: float) -> bool:
         """Revoke a key. Returns True if a row was actually updated.
 

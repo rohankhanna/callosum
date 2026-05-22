@@ -378,14 +378,40 @@ def create_app(
             return await call_next(request)
         plaintext = _bearer(request)
         if plaintext is None:
+            logger.warning(
+                "auth 401: no bearer token on %s %s",
+                request.method, request.url.path,
+            )
             return JSONResponse(
                 status_code=401,
-                content={"detail": "Authorization: Bearer <api-key> required"},
+                content={
+                    "detail": "Authorization: Bearer <api-key> required",
+                    "reason": "missing_bearer",
+                },
             )
         try:
             api_key = auth_service.resolve_api_key(plaintext)
         except ApiKeyInvalidError as exc:
-            return JSONResponse(status_code=401, content={"detail": str(exc)})
+            # Log + return the rejected key's PREFIX (never the secret) and how
+            # many active keys exist, so a downstream tool printing the error
+            # — or an operator scanning logs — can immediately tell whether
+            # this is a wrong-key vs empty-auth-store situation. Auth failures
+            # used to be completely silent, which made post-mortems impossible.
+            prefix = plaintext[:8] if len(plaintext) >= 8 else plaintext[:4]
+            active = _active_api_key_count(auth_service)
+            logger.warning(
+                "auth 401: %s on %s %s — rejected key prefix=%r (%d active keys registered)",
+                exc, request.method, request.url.path, prefix, active,
+            )
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "detail": str(exc),
+                    "reason": "key_not_recognized",
+                    "rejected_key_prefix": prefix,
+                    "active_keys_registered": active,
+                },
+            )
         request.state.api_key = api_key
         return await call_next(request)
 
@@ -2116,6 +2142,15 @@ def _quota_to_dict(q: Any) -> dict[str, Any] | None:
         "credits_unlimited": q.credits_unlimited,
         "observed_at": q.observed_at,
     }
+
+
+def _active_api_key_count(auth_service: Any) -> int:
+    """Best-effort count of active API keys for 401 diagnostics. Returns -1
+    if the count can't be obtained — the error path must never raise."""
+    try:
+        return auth_service.db.count_active_api_keys()
+    except Exception:
+        return -1
 
 
 def _bearer(request: Request) -> str | None:
