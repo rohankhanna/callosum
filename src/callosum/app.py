@@ -240,12 +240,14 @@ def create_app(
             build_cells_from_metadata,
         )
 
-        # Merge metadata from every Codex auth-vault backend. When two
-        # backends both advertise the same slug, keep the one with the
-        # MOST-populated record (more fields → fewer "Unknown" defaults).
+        # Merge metadata from every backend that exposes it. Today: Codex
+        # auth-vault backends (real upstream metadata) + LiteLLM gateway
+        # (synthesizes a default-shape ModelMetadata per local model). When
+        # two backends advertise the same slug, keep the record with more
+        # populated fields (fewer "Unknown" defaults).
         merged_metadata: dict[str, ModelMetadata] = {}
         for b in backends_list:
-            if b.kind != "codex_auth_vault":
+            if b.kind not in ("codex_auth_vault", "litellm_gateway"):
                 continue
             backend_meta = getattr(b, "model_metadata", None) or {}
             for slug, m in backend_meta.items():

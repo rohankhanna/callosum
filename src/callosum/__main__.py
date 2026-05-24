@@ -11,6 +11,10 @@ import uvicorn
 from callosum.app import create_app
 from callosum.auth import AuthService
 from callosum.auth_db import AuthDB
+from callosum.backends.litellm_gateway import (
+    DEFAULT_BASE_URL as LITELLM_GATEWAY_DEFAULT_BASE_URL,
+)
+from callosum.backends.litellm_gateway import LiteLLMGatewayBackend
 from callosum.backends.openrouter_free import OpenRouterFreeBackend
 from callosum.config import build_backends, load_config
 from callosum.usage_log import UsageLog
@@ -63,6 +67,22 @@ def main() -> None:
                 id="openrouter-free",
                 api_key=openrouter_key,
                 shadow_models=_shadow_models_now,
+            )
+        )
+    # Auto-register a LiteLLM gateway backend when the operator points us at
+    # one. Gateway is provided by `local LLM gateway` and exposes local models
+    # (ollama / vllm / model-a0e0 / etc.) behind one OpenAI-compatible URL.
+    # Optional and additive: when CALLOSUM_LITELLM_GATEWAY_URL is unset (or
+    # the gateway is unreachable), Codex backends remain authoritative.
+    litellm_url = os.environ.get(
+        "CALLOSUM_LITELLM_GATEWAY_URL", LITELLM_GATEWAY_DEFAULT_BASE_URL
+    )
+    if os.environ.get("CALLOSUM_LITELLM_GATEWAY_ENABLED") == "1":
+        backends.append(
+            LiteLLMGatewayBackend(
+                id="local LLM gateway",
+                base_url=litellm_url,
+                master_key=os.environ.get("CALLOSUM_LITELLM_MASTER_KEY"),
             )
         )
     usage_log = (
