@@ -393,6 +393,22 @@ def test_recommender_filters_cells_before_asking_classifier() -> None:
         assert big in visible
 
 
+def test_recommendation_candidates_put_primary_first_then_compat_set() -> None:
+    """The dispatch layer walks `candidates` on retryable failure. The
+    classifier's pick must be at index 0; the rest of the compatible
+    cell set follows in its grid-priority order (deduped against
+    primary). No duplication, no surprise reordering.
+    """
+    backend = _FakeBackend(canned_text="model-a0e7 high")
+    rec = _make_recommender(backend)
+    body = {"messages": [{"role": "user", "content": "p"}]}
+    out = asyncio.run(rec.recommend(body, allowed_cells=CELLS, fallback=CELLS[0]))
+    assert out.candidates[0] == CELLS[2]  # the classifier's pick (model-a0e7 high)
+    # Everything else in the grid (excluding the primary), in order.
+    expected_rest = [c for c in CELLS if c != CELLS[2]]
+    assert list(out.candidates[1:]) == expected_rest
+
+
 def test_recommender_falls_back_to_full_grid_when_filter_empties() -> None:
     """If every known-context cell is too small, the recommender uses the
     full grid as a last resort rather than refusing the request."""

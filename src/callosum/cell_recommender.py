@@ -52,6 +52,14 @@ class Recommendation:
     None — there's no per-decision classifier output to record, and we
     don't want training data to confuse 'classifier said X' with
     'we reused a prior decision'.
+
+    `candidates` is an ordered tuple of cells the dispatch layer may try
+    if the primary `cell` fails with a retryable error. Index 0 is
+    always `cell`; remaining entries are the rest of the compatible cell
+    set in grid-priority order (Codex first by upstream priority, local
+    after — same order build_cells_from_metadata produces). Streams use
+    only index 0 (mid-stream failover stays a non-goal); non-streaming
+    requests walk candidates up to dispatch's cell-retry cap.
     """
 
     cell: Cell
@@ -60,6 +68,7 @@ class Recommendation:
     latency_s: float
     classifier_cell: Cell | None = None
     raw_output: str | None = None
+    candidates: tuple[Cell, ...] = ()
 
 
 def _walk_text(node: Any) -> str:
@@ -112,6 +121,19 @@ def _approx_input_tokens(prompt_text: str) -> int:
     will reject it).
     """
     return max(256, len(prompt_text) // 2)
+
+
+def _candidates_ordered(primary: Cell, pool: list[Cell]) -> tuple[Cell, ...]:
+    """Build the ordered candidates tuple for cell-level retry.
+
+    Index 0 is the primary pick. Remaining entries are the rest of `pool`
+    in its existing order — typically the cell grid's priority ranking
+    from build_cells_from_metadata, so the dispatch loop's "next-best"
+    cell is the next-strongest compatible model. `primary` is deduped
+    out if it appears in `pool`.
+    """
+    rest = tuple(c for c in pool if c != primary)
+    return (primary,) + rest
 
 
 def _filter_cells_by_context(
@@ -452,6 +474,7 @@ class CellRecommender:
                     source="cache",
                     cache_key=key,
                     latency_s=time.time() - t0,
+                    candidates=_candidates_ordered(cached, compatible_cells),
                 )
 
         chosen, raw_output = await self._ask_upstream(
@@ -470,6 +493,7 @@ class CellRecommender:
                 # actually happened.
                 classifier_cell=cls,
                 raw_output=raw_output,
+                candidates=_candidates_ordered(fallback, compatible_cells),
             )
 
         # Only cache decisions made by the cheap classifier; alternative
@@ -485,6 +509,7 @@ class CellRecommender:
             latency_s=time.time() - t0,
             classifier_cell=cls,
             raw_output=raw_output,
+            candidates=_candidates_ordered(chosen, compatible_cells),
         )
 
     def _record_recommendation(self, cell: Cell) -> None:

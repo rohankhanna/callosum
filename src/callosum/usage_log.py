@@ -61,6 +61,26 @@ CREATE TABLE IF NOT EXISTS request_bodies (
     resp_payload BLOB,
     upstream_headers BLOB
 );
+
+-- One row per cell-level attempt within a single user request. The
+-- `requests` row records the final outcome (last attempted cell, success
+-- or failure); this table preserves the full attempt chain so future
+-- training can learn from rerouted requests ("recommender picked X, X
+-- failed with classification=Y, Y succeeded — when do we see this?").
+CREATE TABLE IF NOT EXISTS request_routing_attempts (
+    request_id INTEGER NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+    attempt_idx INTEGER NOT NULL,
+    backend_id TEXT,
+    model TEXT,
+    reasoning_effort TEXT,
+    status INTEGER,
+    classification TEXT,
+    latency_ms INTEGER,
+    error_message TEXT,
+    PRIMARY KEY (request_id, attempt_idx)
+);
+CREATE INDEX IF NOT EXISTS idx_request_routing_attempts_request_id
+    ON request_routing_attempts(request_id);
 """
 
 # Columns added after the initial v1 schema. ALTER TABLE on each one (guarded
@@ -196,6 +216,27 @@ class UsageLogEntry:
     recommender_classifier_cell: str | None = None
     recommender_raw_output: str | None = None
     recommender_source: str | None = None
+
+
+@dataclass(slots=True)
+class RoutingAttempt:
+    """One cell-level dispatch attempt within a single user request.
+
+    The dispatch loop records one of these per cell it tries. attempt_idx
+    starts at 0 (the recommender's primary pick) and increments for each
+    reroute. A successful request produces one row with the success's
+    backend_id + status=200; a failed-then-rerouted request produces
+    multiple, with intermediate rows carrying the BackendError details.
+    """
+
+    attempt_idx: int
+    backend_id: str | None
+    model: str
+    reasoning_effort: str
+    status: int
+    classification: str
+    latency_ms: int
+    error_message: str | None = None
 
 
 class UsageLog:
@@ -375,6 +416,44 @@ class UsageLog:
             except Exception:
                 pass
         return row_id
+
+    def record_routing_attempts(
+        self,
+        request_id: int,
+        attempts: list["RoutingAttempt"],
+    ) -> None:
+        """Bulk-insert per-attempt rows for a single request.
+
+        Called by the dispatch layer at the end of a request after all
+        cell-level retries have settled (success or final failure). A
+        request that succeeded on the first attempt still gets one row
+        here for symmetry — the routing_attempts table is then a complete
+        picture of every cell every request actually touched.
+        """
+        if not attempts:
+            return
+        rows = [
+            (
+                request_id,
+                a.attempt_idx,
+                a.backend_id,
+                a.model,
+                a.reasoning_effort,
+                a.status,
+                a.classification,
+                a.latency_ms,
+                a.error_message,
+            )
+            for a in attempts
+        ]
+        with self._lock:
+            self._conn.executemany(
+                "INSERT INTO request_routing_attempts"
+                " (request_id, attempt_idx, backend_id, model, reasoning_effort,"
+                "  status, classification, latency_ms, error_message)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                rows,
+            )
 
     def last_session_prompt_tokens(self, session_id: str) -> int | None:
         """Query the most recent prompt_tokens for a session_id.

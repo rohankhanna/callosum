@@ -33,7 +33,7 @@ from callosum.errors import RETRYABLE, BackendError, ErrorClass
 from callosum.fallback import FallbackExecutor, should_attempt_fallback
 from callosum.selector import select
 from callosum.session import SessionRegistry
-from callosum.usage_log import UsageLog, UsageLogEntry
+from callosum.usage_log import RoutingAttempt, UsageLog, UsageLogEntry
 from callosum.label_ui import install_label_ui
 
 logger = logging.getLogger("callosum.startup")
@@ -879,6 +879,7 @@ async def _dispatch_internal(
     recommender_classifier_cell: str | None = None
     recommender_raw_output: str | None = None
     recommender_source: str | None = None
+    cell_candidates: tuple[Cell, ...] = ()
 
     # Look up current session context size for context-safe routing
     session_prompt_tokens: int | None = None
@@ -942,6 +943,11 @@ async def _dispatch_internal(
                 else None
             )
             recommender_source = rec.source
+            # Top-N (default 3) candidate cells the dispatch layer will walk
+            # if the primary cell's backend pool errors. Recommender returns
+            # them ordered: classifier's pick first, rest of the compatible
+            # set in grid-priority order.
+            cell_candidates: tuple[Cell, ...] = rec.candidates[:MAX_CELL_ATTEMPTS]
         else:
             chosen = fallback_cell
             # No recommender wired up — leave all three columns NULL so
@@ -950,6 +956,7 @@ async def _dispatch_internal(
             recommender_classifier_cell = None
             recommender_raw_output = None
             recommender_source = None
+            cell_candidates = ()
         body["model"] = chosen.model
         body.setdefault("reasoning", {})["effort"] = chosen.reasoning_effort
         # Preserve the requested virtual-model name in the log so synthetic vs
@@ -978,8 +985,9 @@ async def _dispatch_internal(
             )
     preferred_id = session_registry.get(session_id) if session_id is not None else None
     if body.get("stream") is True:
-        return await _dispatch_stream(
+        return await _dispatch_stream_with_cell_retry(
             body,
+            candidates=cell_candidates,
             model=model,
             route_name=route_name,
             backends_list=active,
@@ -997,8 +1005,9 @@ async def _dispatch_internal(
             recommender_raw_output=recommender_raw_output,
             recommender_source=recommender_source,
         )
-    return await _dispatch_nonstream(
+    return await _dispatch_nonstream_with_cell_retry(
         body,
+        candidates=cell_candidates,
         model=model,
         route_name=route_name,
         backends_list=active,
@@ -1046,6 +1055,197 @@ def _remember_binding(registry: SessionRegistry, session_id: str | None, backend
     if session_id is None:
         return
     registry.set(session_id, backend_id)
+
+
+# Maximum number of cells the dispatch layer will try before giving up on
+# a request. The recommender returns its primary pick at index 0 plus the
+# rest of the compatible cell set in priority order; the dispatch layer
+# walks them on retryable failures (5xx from a cell's backend pool). Cap
+# is intentionally small — three attempts cover the common "primary cell
+# is rate-limited" + "next-best cell unhealthy" sequence without blowing
+# user-perceived latency. There's no wall-clock cap; latency is bounded
+# only by upstream timeouts.
+MAX_CELL_ATTEMPTS = 3
+
+
+async def _dispatch_nonstream_with_cell_retry(
+    body: dict[str, Any],
+    *,
+    candidates: tuple["Cell", ...],
+    usage_log: UsageLog | None,
+    model: str,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Walk up to MAX_CELL_ATTEMPTS candidate cells, rerouting on 5xx.
+
+    Empty `candidates` short-circuits to a single _dispatch_nonstream call,
+    preserving existing behavior for pass-through requests. Per-cell
+    attempt history is persisted to request_routing_attempts via the
+    final request_id (success row, or last failure row written by the
+    inner dispatch's _log_attempt path).
+    """
+    cells_to_try = list(candidates[:MAX_CELL_ATTEMPTS])
+    if not cells_to_try:
+        return await _dispatch_nonstream(
+            body, model=model, usage_log=usage_log, **kwargs
+        )
+
+    attempts: list[RoutingAttempt] = []
+    final_request_id: int | None = None
+
+    for cell_idx, cell in enumerate(cells_to_try):
+        body["model"] = cell.model
+        body.setdefault("reasoning", {})["effort"] = cell.reasoning_effort
+        attempt_start = time.time()
+        try:
+            result = await _dispatch_nonstream(
+                body, model=cell.model, usage_log=usage_log, **kwargs
+            )
+        except HTTPException as exc:
+            attempt_ms = int((time.time() - attempt_start) * 1000)
+            final_request_id = _request_id_context.get()
+            attempts.append(
+                RoutingAttempt(
+                    attempt_idx=cell_idx,
+                    # Cell may have spanned multiple backends inside the inner
+                    # loop; backend_id at the cell level is intentionally NULL.
+                    # Consumers wanting that join requests on (request_id, model).
+                    backend_id=None,
+                    model=cell.model,
+                    reasoning_effort=cell.reasoning_effort,
+                    status=exc.status_code,
+                    classification=(
+                        "retried_next_cell"
+                        if exc.status_code >= 500
+                        and cell_idx + 1 < len(cells_to_try)
+                        else "failed"
+                    ),
+                    latency_ms=attempt_ms,
+                    error_message=(str(exc.detail)[:500] if exc.detail else None),
+                )
+            )
+            # 4xx → non-retryable (auth_invalid, malformed request, etc).
+            # 5xx + cells remaining → reroute. 5xx + no cells left → propagate.
+            if exc.status_code < 500 or cell_idx + 1 >= len(cells_to_try):
+                if usage_log is not None and final_request_id is not None:
+                    usage_log.record_routing_attempts(final_request_id, attempts)
+                raise
+            continue
+        # Success.
+        attempt_ms = int((time.time() - attempt_start) * 1000)
+        final_request_id = _request_id_context.get()
+        attempts.append(
+            RoutingAttempt(
+                attempt_idx=cell_idx,
+                backend_id=None,
+                model=cell.model,
+                reasoning_effort=cell.reasoning_effort,
+                status=200,
+                classification="ok",
+                latency_ms=attempt_ms,
+            )
+        )
+        # Persist only multi-attempt histories. Single-attempt requests are the
+        # common case and the requests row already tells the whole story —
+        # keeping the sibling table to the reroute cohort makes "how often did
+        # we have to reroute?" a one-line query.
+        if (
+            usage_log is not None
+            and final_request_id is not None
+            and len(attempts) > 1
+        ):
+            usage_log.record_routing_attempts(final_request_id, attempts)
+        return result
+
+    # Unreachable: the loop above either returns on success or raises after
+    # the final cell. Kept for type-checker clarity.
+    raise RuntimeError(
+        "cell-level retry exhausted without raising"
+    )  # pragma: no cover
+
+
+async def _dispatch_stream_with_cell_retry(
+    body: dict[str, Any],
+    *,
+    candidates: tuple["Cell", ...],
+    usage_log: UsageLog | None,
+    model: str,
+    **kwargs: Any,
+) -> StreamingResponse:
+    """Stream-path mirror of _dispatch_nonstream_with_cell_retry.
+
+    Reroute happens only on pre-first-chunk HTTPException from the inner
+    dispatch — once StreamingResponse is committed and bytes start flowing,
+    mid-stream failover stays a non-goal (per The Project Documentation). The inner
+    dispatch raises HTTPException only before first-chunk; after that, it
+    returns StreamingResponse and any backend failure is bubbled in-band.
+    """
+    cells_to_try = list(candidates[:MAX_CELL_ATTEMPTS])
+    if not cells_to_try:
+        return await _dispatch_stream(
+            body, model=model, usage_log=usage_log, **kwargs
+        )
+
+    attempts: list[RoutingAttempt] = []
+    final_request_id: int | None = None
+
+    for cell_idx, cell in enumerate(cells_to_try):
+        body["model"] = cell.model
+        body.setdefault("reasoning", {})["effort"] = cell.reasoning_effort
+        attempt_start = time.time()
+        try:
+            result = await _dispatch_stream(
+                body, model=cell.model, usage_log=usage_log, **kwargs
+            )
+        except HTTPException as exc:
+            attempt_ms = int((time.time() - attempt_start) * 1000)
+            final_request_id = _request_id_context.get()
+            attempts.append(
+                RoutingAttempt(
+                    attempt_idx=cell_idx,
+                    backend_id=None,
+                    model=cell.model,
+                    reasoning_effort=cell.reasoning_effort,
+                    status=exc.status_code,
+                    classification=(
+                        "retried_next_cell"
+                        if exc.status_code >= 500
+                        and cell_idx + 1 < len(cells_to_try)
+                        else "failed"
+                    ),
+                    latency_ms=attempt_ms,
+                    error_message=(str(exc.detail)[:500] if exc.detail else None),
+                )
+            )
+            if exc.status_code < 500 or cell_idx + 1 >= len(cells_to_try):
+                if usage_log is not None and final_request_id is not None:
+                    usage_log.record_routing_attempts(final_request_id, attempts)
+                raise
+            continue
+        attempt_ms = int((time.time() - attempt_start) * 1000)
+        final_request_id = _request_id_context.get()
+        attempts.append(
+            RoutingAttempt(
+                attempt_idx=cell_idx,
+                backend_id=None,
+                model=cell.model,
+                reasoning_effort=cell.reasoning_effort,
+                status=200,
+                classification="ok",
+                latency_ms=attempt_ms,
+            )
+        )
+        if (
+            usage_log is not None
+            and final_request_id is not None
+            and len(attempts) > 1
+        ):
+            usage_log.record_routing_attempts(final_request_id, attempts)
+        return result
+
+    raise RuntimeError(
+        "cell-level stream retry exhausted without raising"
+    )  # pragma: no cover
 
 
 async def _dispatch_nonstream(
