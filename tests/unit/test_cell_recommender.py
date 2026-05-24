@@ -258,6 +258,73 @@ def test_cheap_cell_resolution_prefers_configured_when_present() -> None:
     assert resolved == CELLS[0]
 
 
+def test_recommendation_carries_classifier_cell_and_raw_output_on_upstream() -> None:
+    """Provenance fields on Recommendation feed the request log so a future
+    training pipeline can filter to live upstream calls + know which
+    classifier produced each label."""
+    backend = _FakeBackend(canned_text="model-a0e7 high")
+    rec = _make_recommender(backend)
+    body = {"messages": [{"role": "user", "content": "test"}]}
+    out = asyncio.run(rec.recommend(body, allowed_cells=CELLS, fallback=CELLS[0]))
+    assert out.source == "upstream"
+    assert out.classifier_cell == CELLS[0]  # the default cheap_cell
+    assert out.raw_output == "model-a0e7 high"
+
+
+def test_recommendation_carries_alt_classifier_on_alternative_path() -> None:
+    """When the alternative-classifier path fires, classifier_cell on the
+    result must be the alternative cell (not the cheap default), so the
+    log row attributes the decision correctly."""
+    backend = _FakeBackend(canned_text="model-a0e7 high")
+    rec = _make_recommender(backend)
+    body = {"messages": [{"role": "user", "content": "alt probe"}]}
+    out = asyncio.run(
+        rec.recommend(
+            body, allowed_cells=CELLS, fallback=CELLS[0], classifier_cell=CELLS[2]
+        )
+    )
+    assert out.source == "alternative"
+    assert out.classifier_cell == CELLS[2]
+    assert out.raw_output == "model-a0e7 high"
+
+
+def test_recommendation_carries_raw_output_even_on_fallback_when_parse_fails() -> None:
+    """If the classifier responded with text we couldn't parse (unknown
+    cell), we still record what it said — diagnoses why fallback fired."""
+    backend = _FakeBackend(canned_text="claude-opus high")
+    rec = _make_recommender(backend)
+    body = {"messages": [{"role": "user", "content": "x"}]}
+    out = asyncio.run(rec.recommend(body, allowed_cells=CELLS, fallback=CELLS[0]))
+    assert out.source == "fallback"
+    assert out.raw_output == "claude-opus high"
+    # classifier_cell still records who responded.
+    assert out.classifier_cell == CELLS[0]
+
+
+def test_recommendation_has_no_raw_output_on_cache_hit() -> None:
+    """Cache hits intentionally lack provenance — the cached decision came
+    from a prior upstream row whose log row already recorded the raw output.
+    A training pipeline filtering to recommender_source = 'upstream' won't
+    see cache rows at all, so cache hits leaving raw_output=None keeps the
+    columns truthful: NULL means 'this row has no classifier output of its
+    own', not 'we forgot to record it'."""
+    backend = _FakeBackend(canned_text="model-a0e7 high")
+    rec = _make_recommender(backend)
+    body = {"messages": [{"role": "user", "content": "same"}]}
+
+    async def _twice() -> tuple:
+        a = await rec.recommend(body, allowed_cells=CELLS, fallback=CELLS[0])
+        b = await rec.recommend(body, allowed_cells=CELLS, fallback=CELLS[0])
+        return a, b
+
+    a, b = asyncio.run(_twice())
+    assert a.source == "upstream"
+    assert a.raw_output == "model-a0e7 high"
+    assert b.source == "cache"
+    assert b.raw_output is None
+    assert b.classifier_cell is None
+
+
 def test_alternative_classifier_does_not_pollute_cache() -> None:
     """An alternative-classifier result must NOT be written to cache —
     otherwise the next cheap-classifier request for the same prompt would

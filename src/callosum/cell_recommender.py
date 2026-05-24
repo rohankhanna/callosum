@@ -44,12 +44,22 @@ _RECOMMENDER_INSTRUCTION_PREFIX = (
 
 @dataclass(frozen=True, slots=True)
 class Recommendation:
-    """Result of CellRecommender.recommend()."""
+    """Result of CellRecommender.recommend().
+
+    `classifier_cell` and `raw_output` are populated only when this
+    decision came from a live upstream classifier call (source =
+    'upstream' or 'alternative'). Cache hits and fallbacks leave them
+    None — there's no per-decision classifier output to record, and we
+    don't want training data to confuse 'classifier said X' with
+    'we reused a prior decision'.
+    """
 
     cell: Cell
-    source: str  # "upstream" | "cache" | "fallback"
+    source: str  # "upstream" | "cache" | "fallback" | "alternative" | "fallback_alt"
     cache_key: str | None
     latency_s: float
+    classifier_cell: Cell | None = None
+    raw_output: str | None = None
 
 
 def _walk_text(node: Any) -> str:
@@ -271,11 +281,17 @@ class CellRecommender:
         allowed_cells: list[Cell],
         *,
         classifier_cell: Cell | None = None,
-    ) -> Cell | None:
+    ) -> tuple[Cell | None, str | None]:
         """One non-streaming responses call to a classifier cell; parse cell name.
 
-        Defaults to self._configured_cheap_cell; pass classifier_cell to override (bias
-        mitigation path).
+        Returns (parsed_cell_or_None, raw_classifier_text_or_None). The raw
+        text is returned even when parsing fails so the caller (and the
+        request log via Recommendation.raw_output) can record what the
+        classifier actually said — useful for training data and for
+        debugging why a fallback fired.
+
+        Defaults to self._configured_cheap_cell; pass classifier_cell to
+        override (bias mitigation path).
         """
         body = self._build_recommender_body(
             prompt_text, allowed_cells, classifier_cell=classifier_cell
@@ -291,20 +307,26 @@ class CellRecommender:
                 "cell_recommender: upstream call failed (%s); falling back",
                 type(exc).__name__,
             )
-            return None
+            return (None, None)
 
         self._stats["upstream_calls"] += 1
-        # Parse model output from the Responses API shape.
+        # Pull the literal text out of the Responses API shape.
+        raw_text: str | None = None
         try:
             output = result.get("output") or []
             for item in output:
                 for c in item.get("content") or []:
                     text = c.get("text")
                     if isinstance(text, str) and text.strip():
-                        return _parse_cell_from_output(text, allowed_cells)
+                        raw_text = text
+                        break
+                if raw_text is not None:
+                    break
         except (AttributeError, KeyError, IndexError, TypeError):
             pass
-        return None
+        if raw_text is None:
+            return (None, None)
+        return (_parse_cell_from_output(raw_text, allowed_cells), raw_text)
 
     async def recommend(
         self,
@@ -377,7 +399,7 @@ class CellRecommender:
                     latency_s=time.time() - t0,
                 )
 
-        chosen = await self._ask_upstream(
+        chosen, raw_output = await self._ask_upstream(
             prompt_text, allowed_cells, classifier_cell=classifier_cell
         )
         if chosen is None:
@@ -388,6 +410,11 @@ class CellRecommender:
                 source="fallback" if not is_alternative else "fallback_alt",
                 cache_key=key,
                 latency_s=time.time() - t0,
+                # Even on fallback, surface the classifier identity + its
+                # garbled output (if any) so the request log records what
+                # actually happened.
+                classifier_cell=cls,
+                raw_output=raw_output,
             )
 
         # Only cache decisions made by the cheap classifier; alternative
@@ -401,6 +428,8 @@ class CellRecommender:
             source="upstream" if not is_alternative else "alternative",
             cache_key=key,
             latency_s=time.time() - t0,
+            classifier_cell=cls,
+            raw_output=raw_output,
         )
 
     def _record_recommendation(self, cell: Cell) -> None:

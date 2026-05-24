@@ -874,6 +874,11 @@ async def _dispatch_internal(
     requested_model = _require_model(body)
     requested_reasoning = _extract_reasoning_effort(body)
     routing_mode = "pass-through"
+    # Recommender provenance for the request log. Stays None on pass-through
+    # requests; populated below when the recommender fires.
+    recommender_classifier_cell: str | None = None
+    recommender_raw_output: str | None = None
+    recommender_source: str | None = None
 
     # Look up current session context size for context-safe routing
     session_prompt_tokens: int | None = None
@@ -920,8 +925,31 @@ async def _dispatch_internal(
                 classifier_cell=classifier_override,
             )
             chosen = rec.cell
+            # Capture recommender provenance for the request log — training
+            # consumers downstream filter on recommender_source IN
+            # ('upstream', 'alternative') to get unbiased classifier picks.
+            recommender_classifier_cell = (
+                f"{rec.classifier_cell.model} {rec.classifier_cell.reasoning_effort}"
+                if rec.classifier_cell is not None
+                else None
+            )
+            # Truncate raw output to bound request-log row size; the parser
+            # only ever expects a short "model effort" reply, so 500 chars
+            # is plenty even for chatty classifier outputs.
+            recommender_raw_output = (
+                rec.raw_output[:500]
+                if isinstance(rec.raw_output, str) and rec.raw_output
+                else None
+            )
+            recommender_source = rec.source
         else:
             chosen = fallback_cell
+            # No recommender wired up — leave all three columns NULL so
+            # the training pipeline can distinguish "no classifier ran" from
+            # "classifier ran and fell back".
+            recommender_classifier_cell = None
+            recommender_raw_output = None
+            recommender_source = None
         body["model"] = chosen.model
         body.setdefault("reasoning", {})["effort"] = chosen.reasoning_effort
         # Preserve the requested virtual-model name in the log so synthetic vs
@@ -965,6 +993,9 @@ async def _dispatch_internal(
             requested_model=requested_model,
             requested_reasoning_effort=requested_reasoning,
             routing_mode=routing_mode,
+            recommender_classifier_cell=recommender_classifier_cell,
+            recommender_raw_output=recommender_raw_output,
+            recommender_source=recommender_source,
         )
     return await _dispatch_nonstream(
         body,
@@ -981,6 +1012,9 @@ async def _dispatch_internal(
         requested_model=requested_model,
         requested_reasoning_effort=requested_reasoning,
         routing_mode=routing_mode,
+        recommender_classifier_cell=recommender_classifier_cell,
+        recommender_raw_output=recommender_raw_output,
+        recommender_source=recommender_source,
     )
 
 
@@ -1030,6 +1064,9 @@ async def _dispatch_nonstream(
     requested_model: str | None = None,
     requested_reasoning_effort: str | None = None,
     routing_mode: str = "pass-through",
+    recommender_classifier_cell: str | None = None,
+    recommender_raw_output: str | None = None,
+    recommender_source: str | None = None,
 ) -> dict[str, Any]:
     excluded: set[str] = set()
     excluded_errors: dict[str, BackendError] = {}
@@ -1068,6 +1105,9 @@ async def _dispatch_nonstream(
                 requested_reasoning_effort=requested_reasoning_effort,
                 routing_mode=routing_mode,
                 prompt_complexity_class=None,
+                recommender_classifier_cell=recommender_classifier_cell,
+                recommender_raw_output=recommender_raw_output,
+                recommender_source=recommender_source,
             )
             last_error = exc
             if exc.classification not in RETRYABLE:
@@ -1103,6 +1143,9 @@ async def _dispatch_nonstream(
             requested_reasoning_effort=requested_reasoning_effort,
             routing_mode=routing_mode,
             prompt_complexity_class=_complexity_class_context.get(),
+            recommender_classifier_cell=recommender_classifier_cell,
+            recommender_raw_output=recommender_raw_output,
+            recommender_source=recommender_source,
         )
         return result
 
@@ -1168,6 +1211,9 @@ async def _dispatch_stream(
     requested_model: str | None = None,
     requested_reasoning_effort: str | None = None,
     routing_mode: str = "pass-through",
+    recommender_classifier_cell: str | None = None,
+    recommender_raw_output: str | None = None,
+    recommender_source: str | None = None,
 ) -> StreamingResponse:
     excluded: set[str] = set()
     excluded_errors: dict[str, BackendError] = {}
@@ -1207,6 +1253,9 @@ async def _dispatch_stream(
                 requested_reasoning_effort=requested_reasoning_effort,
                 routing_mode=routing_mode,
                 prompt_complexity_class=None,
+                recommender_classifier_cell=recommender_classifier_cell,
+                recommender_raw_output=recommender_raw_output,
+                recommender_source=recommender_source,
             )
             _remember_binding(session_registry, session_id, backend.id)
             return StreamingResponse(_empty_iter(), media_type="text/event-stream")
@@ -1231,6 +1280,9 @@ async def _dispatch_stream(
                 requested_reasoning_effort=requested_reasoning_effort,
                 routing_mode=routing_mode,
                 prompt_complexity_class=None,
+                recommender_classifier_cell=recommender_classifier_cell,
+                recommender_raw_output=recommender_raw_output,
+                recommender_source=recommender_source,
             )
             last_error = exc
             if exc.classification not in RETRYABLE:
@@ -1270,6 +1322,9 @@ async def _dispatch_stream(
                 requested_model=requested_model,
                 requested_reasoning_effort=requested_reasoning_effort,
                 routing_mode=routing_mode,
+                recommender_classifier_cell=recommender_classifier_cell,
+                recommender_raw_output=recommender_raw_output,
+                recommender_source=recommender_source,
             ),
             media_type="text/event-stream",
         )
@@ -1890,6 +1945,9 @@ async def _log_on_complete(
     requested_model: str | None = None,
     requested_reasoning_effort: str | None = None,
     routing_mode: str = "pass-through",
+    recommender_classifier_cell: str | None = None,
+    recommender_raw_output: str | None = None,
+    recommender_source: str | None = None,
 ) -> AsyncIterator[bytes]:
     """Pass-through wrapper that writes the usage log row when the stream ends.
 
@@ -1918,6 +1976,9 @@ async def _log_on_complete(
         requested_reasoning_effort=requested_reasoning_effort,
         routing_mode=routing_mode,
         prompt_complexity_class=_complexity_class_context.get(),
+        recommender_classifier_cell=recommender_classifier_cell,
+        recommender_raw_output=recommender_raw_output,
+        recommender_source=recommender_source,
     )
 
 
@@ -2001,6 +2062,9 @@ def _log_attempt(
     requested_reasoning_effort: str | None = None,
     routing_mode: str = "pass-through",
     prompt_complexity_class: int | None = None,
+    recommender_classifier_cell: str | None = None,
+    recommender_raw_output: str | None = None,
+    recommender_source: str | None = None,
 ) -> None:
     if usage_log is None:
         return
@@ -2052,6 +2116,9 @@ def _log_attempt(
         routing_mode=routing_mode,
         prompt_complexity_class=prompt_complexity_class,
         client_request=body,
+        recommender_classifier_cell=recommender_classifier_cell,
+        recommender_raw_output=recommender_raw_output,
+        recommender_source=recommender_source,
     )
     request_id = usage_log.record(entry)
     # Store request_id in context for response handlers to access

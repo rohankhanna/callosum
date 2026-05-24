@@ -276,6 +276,43 @@ async def test_responses_end_to_end_translates_through_chat_completions() -> Non
 # ---------- error path ------------------------------------------------------
 
 
+async def test_codex_only_fields_stripped_before_send() -> None:
+    """The recommender writes `reasoning.effort` on every routed request,
+    including local cells. Local backends don't take that field; the
+    gateway backend must strip it before forwarding so ollama/vllm/etc.
+    don't choke on an unknown key."""
+    seen_body: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json=_models_payload("model-a0d3"))
+        seen_body.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "x",
+                "model": "model-a0d3",
+                "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+            },
+        )
+
+    backend = LiteLLMGatewayBackend(
+        id="local", transport=httpx.MockTransport(handler)
+    )
+    await backend.chat_completions(
+        {
+            "model": "model-a0d3",
+            "messages": [{"role": "user", "content": "hi"}],
+            "reasoning": {"effort": "default"},  # would normally land here from recommender
+        }
+    )
+    assert "reasoning" not in seen_body
+    # Other keys still make it through untouched.
+    assert seen_body["model"] == "model-a0d3"
+    assert seen_body["messages"] == [{"role": "user", "content": "hi"}]
+    await backend.aclose()
+
+
 async def test_chat_completions_raises_backenderror_on_4xx() -> None:
     from callosum.errors import BackendError
 

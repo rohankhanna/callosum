@@ -147,7 +147,7 @@ class LiteLLMGatewayBackend:
         self, body: dict[str, Any], handle: CallHandle | None = None
     ) -> dict[str, Any]:
         await self._refresh_catalog_if_stale()
-        out_body = {**body, "stream": False}
+        out_body = _strip_codex_only_fields({**body, "stream": False})
         try:
             response = await self._client.post(
                 f"{self._base_url}/v1/chat/completions",
@@ -167,7 +167,7 @@ class LiteLLMGatewayBackend:
         self, body: dict[str, Any], handle: CallHandle | None = None
     ) -> AsyncIterator[bytes]:
         await self._refresh_catalog_if_stale()
-        out_body = {**body, "stream": True}
+        out_body = _strip_codex_only_fields({**body, "stream": True})
         try:
             stream_ctx = self._client.stream(
                 "POST",
@@ -259,6 +259,30 @@ class LiteLLMGatewayBackend:
         self._catalog_fetched_at = ts
         self._healthy = True
         self._last_health_reason = "ok"
+
+
+# ---------- body hygiene ------------------------------------------------
+# Local backends don't understand Codex-specific request fields. The cell
+# recommender writes `reasoning.effort = "<level>"` for whichever cell it
+# picks (including local cells, where the synthesized effort is "default").
+# LiteLLM may forward unknown fields blindly to ollama/vllm/etc., which can
+# reject them or behave unpredictably. Strip the keys the local side
+# definitely doesn't take before sending.
+
+_CODEX_ONLY_BODY_KEYS = ("reasoning",)
+
+
+def _strip_codex_only_fields(body: dict[str, Any]) -> dict[str, Any]:
+    """Drop Codex-only request keys from a body destined for a local backend.
+
+    Pure-fn returns a new dict; the caller's `body` is untouched. Add new
+    keys to `_CODEX_ONLY_BODY_KEYS` as we discover more that local servers
+    refuse — kept conservative (only `reasoning` today) to minimize the
+    chance of silently dropping a field a local server actually supports.
+    """
+    if not any(k in body for k in _CODEX_ONLY_BODY_KEYS):
+        return body
+    return {k: v for k, v in body.items() if k not in _CODEX_ONLY_BODY_KEYS}
 
 
 # ---------- /v1/responses ↔ /v1/chat/completions translation -------------

@@ -131,6 +131,19 @@ END""",
   INSERT INTO requests_fts(requests_fts, rowid, prompt_text, response_text)
   VALUES ('delete', old.id, old.prompt_text, old.response_text);
 END""",
+    # Recommender provenance — captures which classifier cell made the
+    # routing decision, the literal text it returned, and whether the row
+    # came from a live upstream call vs cache/fallback/alternative. NULL on
+    # pass-through (recommender didn't fire) and on cache/fallback rows
+    # (no classifier output to capture). The intended consumer is a future
+    # local-classifier training pipeline: filter to
+    # recommender_source IN ('upstream', 'alternative') and learn
+    # input=prompt_text → label=(model, reasoning_effort).
+    "ALTER TABLE requests ADD COLUMN recommender_classifier_cell TEXT",
+    "ALTER TABLE requests ADD COLUMN recommender_raw_output TEXT",
+    "ALTER TABLE requests ADD COLUMN recommender_source TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_requests_recommender_source"
+    " ON requests(recommender_source)",
 ]
 
 
@@ -176,6 +189,13 @@ class UsageLogEntry:
     # Original OpenAI-format client request dict (before any translation/routing).
     # Used to extract prompt text for label UI keyword search.
     client_request: dict | None = None
+    # Recommender provenance — see _MIGRATIONS for column-level docs. Populated
+    # only on rows where the cell recommender fired and got a live upstream
+    # decision (upstream/alternative); NULL on pass-through, cache, and
+    # fallback rows.
+    recommender_classifier_cell: str | None = None
+    recommender_raw_output: str | None = None
+    recommender_source: str | None = None
 
 
 class UsageLog:
@@ -289,6 +309,9 @@ class UsageLog:
             entry.prompt_complexity_class,
             prompt_text,
             response_text,
+            entry.recommender_classifier_cell,
+            entry.recommender_raw_output,
+            entry.recommender_source,
         )
         with self._lock:
             cursor = self._conn.execute(
@@ -309,12 +332,14 @@ class UsageLog:
                     credits_balance, credits_has_credits, credits_unlimited,
                     quota_reset_crossover,
                     requested_model, requested_reasoning_effort, routing_mode,
-                    prompt_complexity_class, prompt_text, response_text
+                    prompt_complexity_class, prompt_text, response_text,
+                    recommender_classifier_cell, recommender_raw_output,
+                    recommender_source
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 """,
                 row,
