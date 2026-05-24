@@ -14,7 +14,13 @@ dependencies = [
 ]
 
 [project.scripts]
+# Primary entry point under the new name.
 callosum = "callosum.__main__:main"
+# Backward-compat alias kept during the rename so the existing systemd
+# unit (`system-dependency-codex-proxy.service`, which execs
+# `uv run codex-proxy`) continues to work between Phase 1 and Phase 3.
+# Drop this once Phase 3 cuts the service unit over to `callosum`.
+codex-proxy = "callosum.__main__:main"
 
 [dependency-groups]
 dev = [

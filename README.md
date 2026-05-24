@@ -1,5 +1,11 @@
 # Callosum
 
+> **Rename in progress.** This repo is being renamed from `codex-proxy` to
+> `callosum`. Code, package paths, state directories, and the service
+> unit still use the old name and will migrate in phases — see
+> `docs/operations/rename-plan.md`. The operator-facing behavior below
+> is unchanged during the migration.
+
 A local, adaptive HTTP routing layer that decides which underlying model
 should handle each prompt and forwards it there, behind one
 OpenAI-compatible endpoint on `127.0.0.1`. Multiple upstream backends
