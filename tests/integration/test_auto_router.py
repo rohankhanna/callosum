@@ -52,36 +52,6 @@ def test_auto_learning_rewrites_body_and_logs_router_columns(tmp_path: Path) -> 
     assert reasoning in REASONING_LEVELS
 
 
-def test_auto_learning_distributes_across_cells(tmp_path: Path) -> None:
-    # Round-robin: four sequential calls into a fresh log should hit four
-    # different cells (the explorer picks min-coverage; coverage updates after
-    # each call lands in the log).
-    log = UsageLog(tmp_path / "u.sqlite")
-    backend = _backend()
-    served: list[tuple[str, str]] = []
-    with TestClient(create_app(backends=[backend], usage_log=log)) as client:
-        for _ in range(4):
-            r = client.post("/v1/responses", json={"model": "auto-learning", "input": []})
-            assert r.status_code == 200
-
-    conn = sqlite3.connect(tmp_path / "u.sqlite")
-    served = conn.execute("SELECT model, reasoning_effort FROM requests ORDER BY id").fetchall()
-    # Four distinct cells visited.
-    assert len(set(served)) == 4
-
-
-def test_auto_returns_503_with_not_trained_message() -> None:
-    backend = _backend()
-    with TestClient(create_app(backends=[backend])) as client:
-        response = client.post(
-            "/v1/responses",
-            json={"model": "auto", "input": []},
-        )
-    assert response.status_code == 503
-    detail = response.json()["detail"]
-    assert "not ready" in detail.lower() or "not trained" in detail.lower()
-
-
 def test_synthetic_virtual_model_tags_rows_separately(tmp_path: Path) -> None:
     # `auto-learning-synthetic` should rewrite to a real cell AND log
     # routing_mode='auto-learning-synthetic' so synthetic rows don't double-
@@ -107,10 +77,12 @@ def test_synthetic_virtual_model_tags_rows_separately(tmp_path: Path) -> None:
     assert reasoning in REASONING_LEVELS
 
 
-def test_synthetic_and_organic_have_independent_coverage(tmp_path: Path) -> None:
-    # Fire one organic + one synthetic. The synthetic explorer's coverage
-    # should NOT count the organic call (and vice versa). After both calls,
-    # each tier should have advanced exactly one cell.
+def test_synthetic_and_organic_are_logged_as_distinct_routing_modes(tmp_path: Path) -> None:
+    # Fire one organic + one synthetic. Both go through the same recommender,
+    # but the request log must preserve which virtual-model name the client
+    # sent so synthetic-tier velocity can be measured separately from organic
+    # traffic. With no recommender configured, both fall back to the same
+    # cheap cell — so they'll match on (model, effort) but differ in routing_mode.
     log = UsageLog(tmp_path / "u.sqlite")
     backend = _backend()
     with TestClient(create_app(backends=[backend], usage_log=log)) as client:
@@ -124,7 +96,8 @@ def test_synthetic_and_organic_have_independent_coverage(tmp_path: Path) -> None
     assert len(rows) == 2
     organic = [r for r in rows if r[0] == "auto-learning"]
     synthetic = [r for r in rows if r[0] == "auto-learning-synthetic"]
-    # Both tiers picked the first cell (since both started from zero coverage).
+    assert len(organic) == 1 and len(synthetic) == 1
+    # No recommender → both fall back to the same cheap cell.
     assert organic[0][1:] == synthetic[0][1:]
 
 

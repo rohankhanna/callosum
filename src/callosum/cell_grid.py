@@ -20,10 +20,13 @@ DEFAULT_MODELS: tuple[str, ...] = (
     "model-a0e6",
 )
 
-# Virtual model names a client can pick to opt into router behavior.
-# - "auto-learning":           organic round-robin explorer
-# - "auto-learning-synthetic": synthetic background topper (separate coverage tier)
-# - "auto":                    cost-optimal router (returns 503 NotTrained)
+# Virtual model names a client can pick to opt into router behavior. All three
+# now route through the same cell recommender; the names are preserved in the
+# request log's `routing_mode` column so synthetic vs organic traffic stays
+# distinguishable for observability.
+# - "auto":                    primary name (recommender-driven)
+# - "auto-learning":           backward-compat alias (recommender-driven)
+# - "auto-learning-synthetic": synthetic background topper (recommender-driven)
 VIRTUAL_MODELS: frozenset[str] = frozenset({"auto-learning", "auto-learning-synthetic", "auto"})
 
 # Known context window limits per model. Used as a fallback when the API

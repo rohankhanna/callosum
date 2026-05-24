@@ -922,7 +922,12 @@ async def _dispatch_internal(
             chosen = fallback_cell
         body["model"] = chosen.model
         body.setdefault("reasoning", {})["effort"] = chosen.reasoning_effort
-        routing_mode = "auto"
+        # Preserve the requested virtual-model name in the log so synthetic vs
+        # organic routing (and any future virtual model) can be distinguished
+        # downstream. All three names route through the same recommender today,
+        # but tracking which alias the client sent has observability value —
+        # e.g. for measuring synthetic-tier velocity against organic traffic.
+        routing_mode = requested_model
         _maybe_fire_comparison_sampling(
             body,
             cell_recommender=cell_recommender,
@@ -2452,8 +2457,15 @@ def _log_smoke_result(result: dict[str, Any]) -> None:
         reason = result.get("reason", "in cooldown")
         if cooldown_until is not None:
             from datetime import datetime, timezone
-            reset_time = datetime.fromtimestamp(cooldown_until, tz=timezone.utc).isoformat()
-            reason = f"{reason} (reset at {reset_time})"
+            try:
+                reset_time = datetime.fromtimestamp(
+                    cooldown_until, tz=timezone.utc
+                ).isoformat()
+                reason = f"{reason} (reset at {reset_time})"
+            except (OverflowError, ValueError, OSError):
+                # Bogus/very-large cooldown timestamps (e.g. test sentinels or
+                # stuck-clock state) shouldn't crash the smoke-test log line.
+                reason = f"{reason} (reset at ts={cooldown_until})"
         logger.info("  [%s] SKIPPED — %s", backend_id, reason)
         return
     if result.get("ok"):
