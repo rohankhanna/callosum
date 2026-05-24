@@ -1,8 +1,28 @@
-# API Proxy
+# Callosum
 
-A small local HTTP proxy that routes requests across multiple upstream accounts and manages request distribution. One endpoint on `127.0.0.1`, many upstream accounts behind it. When one account is rate-limited or otherwise unavailable, the proxy sends the next request to another. When *all* of them are exhausted, the proxy can optionally fall back to free-tier models so you keep working at a slower pace until limits reset.
+> **Rename in progress.** This repo is being renamed from `codex-proxy` to
+> `callosum`. Code, package paths, state directories, and the service
+> unit still use the old name and will migrate in phases — see
+> `docs/operations/rename-plan.md`. The operator-facing behavior below
+> is unchanged during the migration.
 
-It is deliberately a less-than-intelligent router. It does not summarise, retry mid-stream, synthesise continuity, or do anything fancier than "pick an account that can serve this request, and if it fails, try the next one." The OpenAI-compatible routes (`/v1/responses` and `/v1/chat/completions`) exist so any OpenAI-compatible client can point at this proxy without knowing anything changed.
+A local, adaptive HTTP routing layer that decides which underlying model
+should handle each prompt and forwards it there, behind one
+OpenAI-compatible endpoint on `127.0.0.1`. Multiple upstream backends
+(today: Codex Plus/Pro vaults; soon: local models via ollama / lmstudio /
+model-a0e0) sit behind one URL. Routing decisions are made per request by
+asking the cheapest available cell to classify the prompt and pick a
+target; cell discovery, context windows, supported reasoning levels, and
+strength rankings all come from the upstream model catalog — nothing is
+hardcoded against a particular model lineup. When one cell is
+rate-limited, the router picks another; when the recommender can't reach
+its classifier, it falls back to a sensible cheap cell; when everything
+is exhausted, the proxy returns a self-diagnosing error (per-backend
+cooldown, quota, and recovery ETA in the response body).
+
+The OpenAI-compatible routes (`/v1/responses` and `/v1/chat/completions`)
+exist so any OpenAI-compatible client can point at this endpoint without
+knowing anything else is going on.
 
 ## Contents
 
