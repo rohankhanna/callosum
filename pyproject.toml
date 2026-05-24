@@ -1,7 +1,7 @@
 [project]
-name = "codex-proxy"
+name = "callosum"
 version = "0.1.0"
-description = "Local OpenAI-compatible endpoint with backend rotation."
+description = "Local adaptive OpenAI-compatible router across multiple model backends."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -14,7 +14,13 @@ dependencies = [
 ]
 
 [project.scripts]
-codex-proxy = "codex_proxy.__main__:main"
+# Primary entry point under the new name.
+callosum = "callosum.__main__:main"
+# Backward-compat alias kept during the rename so the existing systemd
+# unit (`system-dependency-codex-proxy.service`, which execs
+# `uv run codex-proxy`) continues to work between Phase 1 and Phase 3.
+# Drop this once Phase 3 cuts the service unit over to `callosum`.
+codex-proxy = "callosum.__main__:main"
 
 [dependency-groups]
 dev = [
@@ -30,7 +36,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/codex_proxy"]
+packages = ["src/callosum"]
 
 [tool.ruff]
 line-length = 100
@@ -44,7 +50,7 @@ select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC"]
 python_version = "3.11"
 strict = true
 mypy_path = "src"
-packages = ["codex_proxy"]
+packages = ["callosum"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

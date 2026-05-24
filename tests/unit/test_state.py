@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from codex_proxy.backend import UsageSnapshot
-from codex_proxy.state import StateStore
+from callosum.backend import UsageSnapshot
+from callosum.state import StateStore
 
 
 def test_save_and_load_usage_roundtrip(tmp_path: Path) -> None:

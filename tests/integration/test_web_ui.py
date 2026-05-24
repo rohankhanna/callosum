@@ -4,10 +4,10 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from codex_proxy.app import create_app
-from codex_proxy.auth import AuthService
-from codex_proxy.auth_db import AuthDB
-from codex_proxy.fakes import InMemoryFakeBackend
+from callosum.app import create_app
+from callosum.auth import AuthService
+from callosum.auth_db import AuthDB
+from callosum.fakes import InMemoryFakeBackend
 
 
 def _service(tmp_path: Path) -> AuthService:

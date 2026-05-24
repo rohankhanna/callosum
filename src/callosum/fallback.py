@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-logger = logging.getLogger("codex_proxy.fallback")
+logger = logging.getLogger("callosum.fallback")
 
 
 def _utc_timestamp() -> str:

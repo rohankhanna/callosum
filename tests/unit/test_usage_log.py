@@ -5,8 +5,8 @@ import sqlite3
 import time
 from pathlib import Path
 
-from codex_proxy.codex_quota import CodexQuotaSnapshot
-from codex_proxy.usage_log import UsageLog, UsageLogEntry, decompress
+from callosum.codex_quota import CodexQuotaSnapshot
+from callosum.usage_log import UsageLog, UsageLogEntry, decompress
 
 
 def _snap(*, five_hourly: int, weekly: int) -> CodexQuotaSnapshot:

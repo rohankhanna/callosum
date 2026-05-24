@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_proxy.auth_db import AuthDB, UsernameTakenError
+from callosum.auth_db import AuthDB, UsernameTakenError
 
 
 def _open(tmp_path: Path) -> AuthDB:

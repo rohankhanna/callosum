@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from codex_proxy.config import (
+from callosum.config import (
     BackendConfig,
     Config,
     build_backend,

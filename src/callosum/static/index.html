@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>codex-proxy</title>
+  <title>callosum</title>
   <style>
     :root {
       --bg: #0b0c10;
@@ -82,7 +82,7 @@
 
   <!-- Logged-out view (login + register) -->
   <section id="auth-view">
-    <h1>codex-proxy</h1>
+    <h1>callosum</h1>
     <p class="lead">Sign in to manage your API keys.</p>
 
     <div class="panel">
@@ -119,7 +119,7 @@
   <!-- Logged-in view (dashboard) -->
   <section id="dash-view" class="hide">
     <div class="top">
-      <h1>codex-proxy keys</h1>
+      <h1>callosum keys</h1>
       <div class="who">Signed in as <strong id="who-username"></strong> &middot; <a href="#" id="logout-link">sign out</a></div>
     </div>
     <p class="lead">API keys you mint here go in your shell as <code>CODEX_PROXY_TOKEN</code>. Use them as the bearer when any client (Codex CLI, Aider, curl) calls this proxy.</p>
@@ -155,8 +155,8 @@
 <script>
 "use strict";
 
-const SESSION_KEY = "codex_proxy.session_token";
-const USERNAME_KEY = "codex_proxy.username";
+const SESSION_KEY = "callosum.session_token";
+const USERNAME_KEY = "callosum.username";
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));

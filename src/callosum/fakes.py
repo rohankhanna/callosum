@@ -3,8 +3,8 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
-from codex_proxy.backend import BackendKind, CallHandle, HealthStatus, UsageSnapshot
-from codex_proxy.errors import BackendError
+from callosum.backend import BackendKind, CallHandle, HealthStatus, UsageSnapshot
+from callosum.errors import BackendError
 
 
 class InMemoryFakeBackend:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import httpx
 
-from codex_proxy.errors import BackendError, classify_http_status
+from callosum.errors import BackendError, classify_http_status
 
 DEFAULT_COOLDOWN_S = 60.0
 

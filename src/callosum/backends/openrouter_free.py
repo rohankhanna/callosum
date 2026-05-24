@@ -30,9 +30,9 @@ from typing import Any, cast
 
 import httpx
 
-from codex_proxy.backend import BackendKind, CallHandle, HealthStatus, UsageSnapshot
-from codex_proxy.backends._http import error_from_response
-from codex_proxy.errors import BackendError
+from callosum.backend import BackendKind, CallHandle, HealthStatus, UsageSnapshot
+from callosum.backends._http import error_from_response
+from callosum.errors import BackendError
 
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 
@@ -244,8 +244,8 @@ class OpenRouterFreeBackend:
             "Content-Type": "application/json",
             # OpenRouter recommends these for traffic attribution; harmless if
             # missing on the server side.
-            "HTTP-Referer": "https://github.com/anthropics/codex-proxy",
-            "X-Title": "codex-proxy",
+            "HTTP-Referer": "https://github.com/anthropics/callosum",
+            "X-Title": "callosum",
         }
 
     async def _refresh_catalog_if_stale(self, *, now: float | None = None) -> None:

@@ -8,12 +8,12 @@ from pathlib import Path
 
 import uvicorn
 
-from codex_proxy.app import create_app
-from codex_proxy.auth import AuthService
-from codex_proxy.auth_db import AuthDB
-from codex_proxy.backends.openrouter_free import OpenRouterFreeBackend
-from codex_proxy.config import build_backends, load_config
-from codex_proxy.usage_log import UsageLog
+from callosum.app import create_app
+from callosum.auth import AuthService
+from callosum.auth_db import AuthDB
+from callosum.backends.openrouter_free import OpenRouterFreeBackend
+from callosum.config import build_backends, load_config
+from callosum.usage_log import UsageLog
 
 
 def _default_config_path() -> Path:
@@ -21,10 +21,10 @@ def _default_config_path() -> Path:
 
 
 def main() -> None:
-    # Ensure our `codex_proxy.startup` logger emits INFO + WARNING to stdout.
+    # Ensure our `callosum.startup` logger emits INFO + WARNING to stdout.
     # Without this, the root logger defaults to WARNING and the smoke-test
     # OK/SKIPPED lines get silently dropped — operator only sees FAILED.
-    logging.getLogger("codex_proxy.startup").setLevel(logging.INFO)
+    logging.getLogger("callosum.startup").setLevel(logging.INFO)
     if not logging.getLogger().handlers:
         # Use UTC timestamps in ISO 8601 format per polestar compliance
         logging.basicConfig(
@@ -35,7 +35,7 @@ def main() -> None:
         # Convert to UTC
         logging.Formatter.converter = lambda *args: datetime.now(timezone.utc).timetuple()
 
-    parser = argparse.ArgumentParser(prog="codex-proxy")
+    parser = argparse.ArgumentParser(prog="callosum")
     parser.add_argument("--config", type=Path, default=_default_config_path())
     parser.add_argument("--host", default=None)
     parser.add_argument("--port", type=int, default=None)

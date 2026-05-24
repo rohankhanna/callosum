@@ -12,13 +12,13 @@ from typing import Any
 
 import httpx
 
-from codex_proxy.auth_vault import AuthVault
-from codex_proxy.backend import BackendKind, CallHandle, HealthStatus, UsageSnapshot
-from codex_proxy.backends._http import DEFAULT_COOLDOWN_S, error_from_response
-from codex_proxy.codex_quota import parse_codex_headers
-from codex_proxy.errors import BackendError
-from codex_proxy.sse_tee import ResponsesStreamCollector
-from codex_proxy.state import StateStore
+from callosum.auth_vault import AuthVault
+from callosum.backend import BackendKind, CallHandle, HealthStatus, UsageSnapshot
+from callosum.backends._http import DEFAULT_COOLDOWN_S, error_from_response
+from callosum.codex_quota import parse_codex_headers
+from callosum.errors import BackendError
+from callosum.sse_tee import ResponsesStreamCollector
+from callosum.state import StateStore
 
 DEFAULT_BASE_URL = "https://chatgpt.com/backend-api/codex"
 RESPONSES_BETA_HEADER_VALUE = "responses=v1"
@@ -106,7 +106,7 @@ class CodexAuthVaultBackend:
         # Full per-model metadata from the upstream catalog (ModelMetadata
         # records). Empty when we haven't fetched yet OR when the upstream
         # response omitted the fields. Callers fall back to local defaults.
-        from codex_proxy.cell_grid import ModelMetadata
+        from callosum.cell_grid import ModelMetadata
         self._model_metadata: dict[str, ModelMetadata] = {}
         self._models_fetched_at: float = 0.0
         self._models_refresh_s = models_refresh_s
@@ -156,7 +156,7 @@ class CodexAuthVaultBackend:
         records keyed by slug). Empty dict if not yet fetched or the upstream
         response was missing the relevant fields. Loose-typed in the
         signature to avoid an import cycle; callers should treat values as
-        codex_proxy.cell_grid.ModelMetadata.
+        callosum.cell_grid.ModelMetadata.
         """
         return self._model_metadata
 
@@ -192,7 +192,7 @@ class CodexAuthVaultBackend:
                 detail = response.text[:200]
             except Exception:
                 detail = "(no body)"
-            logging.getLogger("codex_proxy.backend").warning(
+            logging.getLogger("callosum.backend").warning(
                 "models discovery failed for backend %r: HTTP %d %s",
                 self.id,
                 response.status_code,
@@ -517,7 +517,7 @@ def _extract_model_catalog(
     Returns empty results on malformed payload; callers treat empty as
     "fall back to the cold-start static set."
     """
-    from codex_proxy.cell_grid import ModelMetadata
+    from callosum.cell_grid import ModelMetadata
 
     if not isinstance(payload, dict):
         return frozenset(), {}, {}
@@ -741,7 +741,7 @@ def _log_cooldown_set(backend_id: str, cooldown_until: float, quota: Any) -> Non
 
     Emits a single clear line showing backend ID, reason for cooldown, recovery time, and duration.
     """
-    logger = logging.getLogger("codex_proxy.backend")
+    logger = logging.getLogger("callosum.backend")
     now = time.time()
     recovery_seconds = cooldown_until - now
     recovery_dt = datetime.fromtimestamp(cooldown_until, tz=timezone.utc)

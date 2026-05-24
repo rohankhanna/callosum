@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from codex_proxy.errors import RETRYABLE, BackendError, classify_http_status
+from callosum.errors import RETRYABLE, BackendError, classify_http_status
 
 
 @pytest.mark.parametrize(

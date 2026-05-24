@@ -4,7 +4,7 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from codex_proxy.backend import Backend, HealthStatus, UsageSnapshot
+from callosum.backend import Backend, HealthStatus, UsageSnapshot
 
 _UNKNOWN_REMAINING = 0.5
 

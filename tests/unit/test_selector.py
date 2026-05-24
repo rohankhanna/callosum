@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from codex_proxy.backend import HealthStatus, UsageSnapshot
-from codex_proxy.fakes import InMemoryFakeBackend
-from codex_proxy.selector import select
+from callosum.backend import HealthStatus, UsageSnapshot
+from callosum.fakes import InMemoryFakeBackend
+from callosum.selector import select
 
 
 def _usage(

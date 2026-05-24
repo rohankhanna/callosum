@@ -26,9 +26,9 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any
 
-from codex_proxy.backend import Backend, CallHandle
-from codex_proxy.cell_grid import Cell, model_strength_key
-from codex_proxy.errors import BackendError
+from callosum.backend import Backend, CallHandle
+from callosum.cell_grid import Cell, model_strength_key
+from callosum.errors import BackendError
 
 logger = logging.getLogger(__name__)
 

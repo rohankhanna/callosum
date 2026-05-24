@@ -6,9 +6,9 @@ from typing import cast
 import pytest
 from fastapi.testclient import TestClient
 
-from codex_proxy.app import create_app
-from codex_proxy.backend import HealthStatus, UsageSnapshot
-from codex_proxy.fakes import InMemoryFakeBackend
+from callosum.app import create_app
+from callosum.backend import HealthStatus, UsageSnapshot
+from callosum.fakes import InMemoryFakeBackend
 
 
 def _backend(
@@ -35,7 +35,7 @@ def test_startup_smoke_test_runs_on_each_backend(caplog: pytest.LogCaptureFixtur
     showing OK/SKIPPED/FAILED so the operator sees auth health immediately
     on launch instead of via the first failed user request.
     """
-    caplog.set_level(logging.INFO, logger="codex_proxy.startup")
+    caplog.set_level(logging.INFO, logger="callosum.startup")
     a = _backend(id="alpha")
     b = _backend(id="beta", cooldown_until_ts=1e12)  # cooldown far in the future
     app = create_app(backends=[a, b], startup_smoke_test=True)
@@ -43,7 +43,7 @@ def test_startup_smoke_test_runs_on_each_backend(caplog: pytest.LogCaptureFixtur
     with TestClient(app):
         pass  # entering the context fires lifespan startup
 
-    msgs = [r.getMessage() for r in caplog.records if r.name == "codex_proxy.startup"]
+    msgs = [r.getMessage() for r in caplog.records if r.name == "callosum.startup"]
     text = "\n".join(msgs)
     assert "startup smoke test: probing 2 backend(s)" in text
     # alpha should be probed; beta should be skipped (cooldown).
@@ -55,14 +55,14 @@ def test_startup_smoke_test_can_be_disabled(caplog: pytest.LogCaptureFixture) ->
     """When the smoke test is disabled, no smoke-test lines appear (the
     'loaded N backend(s)' roster warning is unrelated and may still fire).
     """
-    caplog.set_level(logging.INFO, logger="codex_proxy.startup")
+    caplog.set_level(logging.INFO, logger="callosum.startup")
     backend = _backend(id="alpha")
     app = create_app(backends=[backend], startup_smoke_test=False)
 
     with TestClient(app):
         pass
 
-    msgs = [r.getMessage() for r in caplog.records if r.name == "codex_proxy.startup"]
+    msgs = [r.getMessage() for r in caplog.records if r.name == "callosum.startup"]
     assert not any("startup smoke test" in m or "[alpha]" in m for m in msgs), (
         f"expected no smoke-test lines when disabled, got: {msgs}"
     )
@@ -73,7 +73,7 @@ def test_startup_smoke_test_no_backends_is_silent(caplog: pytest.LogCaptureFixtu
     warning may still log "loaded 0 backend(s): (none)" — that's intentional
     and orthogonal).
     """
-    caplog.set_level(logging.INFO, logger="codex_proxy.startup")
+    caplog.set_level(logging.INFO, logger="callosum.startup")
     app = create_app(backends=[], startup_smoke_test=True)
 
     with TestClient(app):
@@ -81,7 +81,7 @@ def test_startup_smoke_test_no_backends_is_silent(caplog: pytest.LogCaptureFixtu
 
     msgs = cast(
         list[str],
-        [r.getMessage() for r in caplog.records if r.name == "codex_proxy.startup"],
+        [r.getMessage() for r in caplog.records if r.name == "callosum.startup"],
     )
     assert not any("startup smoke test" in m for m in msgs), (
         f"empty backend list should not trigger smoke test, got: {msgs}"
@@ -93,7 +93,7 @@ def test_startup_smoke_test_no_backends_is_silent(caplog: pytest.LogCaptureFixtu
 
 import asyncio  # noqa: E402
 
-from codex_proxy.app import _PeriodicSmokeTester  # noqa: E402
+from callosum.app import _PeriodicSmokeTester  # noqa: E402
 
 
 async def test_periodic_smoke_tester_fires_after_interval(
@@ -102,7 +102,7 @@ async def test_periodic_smoke_tester_fires_after_interval(
     """Wait for one tick, confirm a 'periodic smoke test cycle' message lands
     in the log, then stop cleanly.
     """
-    caplog.set_level(logging.INFO, logger="codex_proxy.startup")
+    caplog.set_level(logging.INFO, logger="callosum.startup")
     tester = _PeriodicSmokeTester(backends=[_backend(id="alpha")], interval_s=1)
     tester.start()
     try:
@@ -112,10 +112,10 @@ async def test_periodic_smoke_tester_fires_after_interval(
             if any(
                 "periodic smoke test cycle" in r.getMessage()
                 for r in caplog.records
-                if r.name == "codex_proxy.startup"
+                if r.name == "callosum.startup"
             ):
                 break
-        msgs = [r.getMessage() for r in caplog.records if r.name == "codex_proxy.startup"]
+        msgs = [r.getMessage() for r in caplog.records if r.name == "callosum.startup"]
         assert any("periodic smoke test cycle" in m for m in msgs), (
             f"expected a periodic cycle log within 4s, got: {msgs}"
         )
@@ -127,12 +127,12 @@ async def test_periodic_smoke_tester_disabled_when_interval_zero(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """interval_s=0 means start() is a no-op; no background task is spawned."""
-    caplog.set_level(logging.INFO, logger="codex_proxy.startup")
+    caplog.set_level(logging.INFO, logger="callosum.startup")
     tester = _PeriodicSmokeTester(backends=[_backend(id="alpha")], interval_s=0)
     tester.start()
     try:
         await asyncio.sleep(0.2)  # give it a chance to misbehave
-        msgs = [r.getMessage() for r in caplog.records if r.name == "codex_proxy.startup"]
+        msgs = [r.getMessage() for r in caplog.records if r.name == "callosum.startup"]
         assert not any("periodic smoke test cycle" in m for m in msgs), (
             f"expected no cycles when disabled, got: {msgs}"
         )
@@ -147,7 +147,7 @@ async def test_periodic_smoke_tester_stops_cleanly_mid_wait(
     """A long interval should still let stop() return promptly — the tester's
     sleep is interruptible by the stop event, not a fixed-duration sleep.
     """
-    caplog.set_level(logging.INFO, logger="codex_proxy.startup")
+    caplog.set_level(logging.INFO, logger="callosum.startup")
     tester = _PeriodicSmokeTester(backends=[_backend(id="alpha")], interval_s=3600)
     tester.start()
     await asyncio.sleep(0.1)  # let the task park on the wait

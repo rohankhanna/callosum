@@ -5,13 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from codex_proxy.auth import (
+from callosum.auth import (
     ApiKeyInvalidError,
     AuthService,
     InvalidCredentialsError,
     SessionInvalidError,
 )
-from codex_proxy.auth_db import AuthDB
+from callosum.auth_db import AuthDB
 
 
 def _service(tmp_path: Path, *, ttl: int = 1800) -> AuthService:

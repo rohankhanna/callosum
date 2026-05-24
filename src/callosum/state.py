@@ -6,7 +6,7 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 
-from codex_proxy.backend import UsageSnapshot
+from callosum.backend import UsageSnapshot
 
 
 class StateStore:

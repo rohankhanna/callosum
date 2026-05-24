@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from codex_proxy.app import create_app
-from codex_proxy.fakes import InMemoryFakeBackend
+from callosum.app import create_app
+from callosum.fakes import InMemoryFakeBackend
 
 
 def test_v1_models_returns_union_of_advertised_models() -> None:

@@ -8,8 +8,8 @@ from pathlib import Path
 import httpx
 import pytest
 
-from codex_proxy.auth_vault import AuthVault
-from codex_proxy.errors import BackendError
+from callosum.auth_vault import AuthVault
+from callosum.errors import BackendError
 
 
 def _b64url(data: dict[str, object]) -> str:

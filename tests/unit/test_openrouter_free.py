@@ -6,7 +6,7 @@ from typing import Any
 import httpx
 import pytest
 
-from codex_proxy.backends.openrouter_free import (
+from callosum.backends.openrouter_free import (
     OpenRouterFreeBackend,
     _approx_token_budget,
     _is_blocked_provider,
@@ -15,7 +15,7 @@ from codex_proxy.backends.openrouter_free import (
     _parse_param_count_billions,
     _score_model,
 )
-from codex_proxy.errors import BackendError
+from callosum.errors import BackendError
 
 
 def _catalog_payload(*entries: dict[str, Any]) -> dict[str, Any]:

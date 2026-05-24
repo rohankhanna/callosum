@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from codex_proxy.codex_quota import CodexQuotaSnapshot
+from callosum.codex_quota import CodexQuotaSnapshot
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS requests (

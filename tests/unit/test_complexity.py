@@ -3,7 +3,7 @@
 import asyncio
 import json
 
-from codex_proxy.app import (
+from callosum.app import (
     _extract_and_strip_complexity,
     _extract_complexity_class,
     _extract_complexity_from_stream,
@@ -602,7 +602,7 @@ class TestDoneEventScrubbing:
     """
 
     async def _run(self, events: list[bytes]) -> str:
-        from codex_proxy.app import _scrub_full_text_events
+        from callosum.app import _scrub_full_text_events
 
         async def source():
             for ev in events:

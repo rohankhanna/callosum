@@ -6,12 +6,12 @@ from pathlib import Path
 import httpx
 from fastapi.testclient import TestClient
 
-from codex_proxy.app import create_app
-from codex_proxy.auth import AuthService
-from codex_proxy.auth_db import AuthDB
-from codex_proxy.auth_vault import AuthVault
-from codex_proxy.backend import UsageSnapshot
-from codex_proxy.backends.codex_auth_vault import CodexAuthVaultBackend
+from callosum.app import create_app
+from callosum.auth import AuthService
+from callosum.auth_db import AuthDB
+from callosum.auth_vault import AuthVault
+from callosum.backend import UsageSnapshot
+from callosum.backends.codex_auth_vault import CodexAuthVaultBackend
 
 
 def _write_auth_json(path: Path) -> None:

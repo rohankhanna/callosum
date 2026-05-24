@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from codex_proxy.codex_quota import parse_codex_headers
+from callosum.codex_quota import parse_codex_headers
 
 
 def test_returns_none_when_no_codex_headers_present() -> None:

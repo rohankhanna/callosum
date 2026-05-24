@@ -13,8 +13,8 @@ import asyncio
 import time
 from dataclasses import dataclass
 
-from codex_proxy.app import _collect_backend_status, _no_viable
-from codex_proxy.backend import HealthStatus, UsageSnapshot
+from callosum.app import _collect_backend_status, _no_viable
+from callosum.backend import HealthStatus, UsageSnapshot
 
 
 @dataclass

@@ -7,13 +7,13 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from codex_proxy.auth_vault import AuthVault
-from codex_proxy.backend import Backend
-from codex_proxy.backends.codex_auth_vault import (
+from callosum.auth_vault import AuthVault
+from callosum.backend import Backend
+from callosum.backends.codex_auth_vault import (
     DEFAULT_BASE_URL as CODEX_AUTH_VAULT_DEFAULT_BASE_URL,
 )
-from codex_proxy.backends.codex_auth_vault import CodexAuthVaultBackend
-from codex_proxy.state import StateStore
+from callosum.backends.codex_auth_vault import CodexAuthVaultBackend
+from callosum.state import StateStore
 
 BackendType = Literal["codex_auth_vault", "credential_proxy"]
 
@@ -223,7 +223,7 @@ def build_backend(
     if not cfg.models:
         raise ValueError(f"backend {cfg.id!r}: models is required")
     if cfg.type == "credential_proxy":
-        from codex_proxy.backends.credential_proxy import CredentialProxyBackend
+        from callosum.backends.credential_proxy import CredentialProxyBackend
 
         return CredentialProxyBackend(
             id=cfg.id,

@@ -14,9 +14,9 @@ from dataclasses import dataclass
 
 from fastapi.testclient import TestClient
 
-from codex_proxy.app import _diagnose_backend, create_app
-from codex_proxy.backend import HealthStatus, UsageSnapshot
-from codex_proxy.errors import BackendError
+from callosum.app import _diagnose_backend, create_app
+from callosum.backend import HealthStatus, UsageSnapshot
+from callosum.errors import BackendError
 
 
 @dataclass

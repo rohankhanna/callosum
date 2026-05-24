@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator, Sequence
 
 import pytest
 
-from codex_proxy.sse_tee import (
+from callosum.sse_tee import (
     ResponsesStreamCollector,
     parse_response_completed,
 )

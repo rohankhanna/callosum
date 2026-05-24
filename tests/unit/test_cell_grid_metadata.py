@@ -9,7 +9,7 @@ them; the regex + constant remain as fallbacks for older responses.
 
 from __future__ import annotations
 
-from codex_proxy.cell_grid import (
+from callosum.cell_grid import (
     ModelMetadata,
     build_cells_from_metadata,
     live_completion_models_from_metadata,

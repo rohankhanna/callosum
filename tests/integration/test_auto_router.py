@@ -5,10 +5,10 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from codex_proxy.app import create_app
-from codex_proxy.cell_grid import DEFAULT_MODELS, REASONING_LEVELS, build_cells
-from codex_proxy.fakes import InMemoryFakeBackend
-from codex_proxy.usage_log import UsageLog
+from callosum.app import create_app
+from callosum.cell_grid import DEFAULT_MODELS, REASONING_LEVELS, build_cells
+from callosum.fakes import InMemoryFakeBackend
+from callosum.usage_log import UsageLog
 
 
 def _backend() -> InMemoryFakeBackend:

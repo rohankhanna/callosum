@@ -7,14 +7,14 @@ from pathlib import Path
 import httpx
 import pytest
 
-from codex_proxy.auth_vault import AuthVault
-from codex_proxy.backends.codex_auth_vault import (
+from callosum.auth_vault import AuthVault
+from callosum.backends.codex_auth_vault import (
     _DEFAULT_CLIENT_VERSION,
     CodexAuthVaultBackend,
     _resolve_codex_client_version,
 )
-from codex_proxy.codex_quota import CodexQuotaSnapshot
-from codex_proxy.errors import BackendError
+from callosum.codex_quota import CodexQuotaSnapshot
+from callosum.errors import BackendError
 
 
 def _write_auth_json(path: Path, *, access_token: str = "access-codex") -> None:
@@ -249,8 +249,8 @@ async def test_clear_cooldown_resets_snapshot_and_persists(tmp_path: Path) -> No
     cooldown-skip guard locked the backend out until the timestamp finally
     expired or the operator manually edited the JSON on disk.
     """
-    from codex_proxy.backend import UsageSnapshot
-    from codex_proxy.state import StateStore
+    from callosum.backend import UsageSnapshot
+    from callosum.state import StateStore
 
     auth_path = tmp_path / "auth.json"
     _write_auth_json(auth_path)
@@ -889,8 +889,8 @@ async def test_weekly_exhausted_unsets_when_current_quota_low(tmp_path: Path) ->
     backends for an entire week on the strength of one momentarily-high
     reading. Now the flag derives PURELY from the current quota.
     """
-    from codex_proxy.backend import UsageSnapshot
-    from codex_proxy.state import StateStore
+    from callosum.backend import UsageSnapshot
+    from callosum.state import StateStore
 
     auth_path = tmp_path / "auth.json"
     _write_auth_json(auth_path)

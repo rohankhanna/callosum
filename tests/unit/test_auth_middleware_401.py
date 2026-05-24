@@ -14,9 +14,9 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from codex_proxy.app import create_app
-from codex_proxy.auth import AuthService
-from codex_proxy.auth_db import AuthDB
+from callosum.app import create_app
+from callosum.auth import AuthService
+from callosum.auth_db import AuthDB
 
 
 def _app_with_auth(tmp_path: Path):

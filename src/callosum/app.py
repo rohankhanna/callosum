@@ -17,26 +17,26 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
-from codex_proxy import __version__
-from codex_proxy.auth import (
+from callosum import __version__
+from callosum.auth import (
     ApiKeyInvalidError,
     AuthService,
     InvalidCredentialsError,
     SessionInvalidError,
 )
-from codex_proxy.auth_db import ApiKey, Session
-from codex_proxy.backend import Backend, CallHandle
-from codex_proxy.cell_grid import VIRTUAL_MODELS, Cell, build_cells, live_completion_models
-from codex_proxy.cell_recommender import CellRecommender
-from codex_proxy.config import AutoRouterConfig
-from codex_proxy.errors import RETRYABLE, BackendError, ErrorClass
-from codex_proxy.fallback import FallbackExecutor, should_attempt_fallback
-from codex_proxy.selector import select
-from codex_proxy.session import SessionRegistry
-from codex_proxy.usage_log import UsageLog, UsageLogEntry
-from codex_proxy.label_ui import install_label_ui
+from callosum.auth_db import ApiKey, Session
+from callosum.backend import Backend, CallHandle
+from callosum.cell_grid import VIRTUAL_MODELS, Cell, build_cells, live_completion_models
+from callosum.cell_recommender import CellRecommender
+from callosum.config import AutoRouterConfig
+from callosum.errors import RETRYABLE, BackendError, ErrorClass
+from callosum.fallback import FallbackExecutor, should_attempt_fallback
+from callosum.selector import select
+from callosum.session import SessionRegistry
+from callosum.usage_log import UsageLog, UsageLogEntry
+from callosum.label_ui import install_label_ui
 
-logger = logging.getLogger("codex_proxy.startup")
+logger = logging.getLogger("callosum.startup")
 
 
 def _utc_timestamp() -> str:
@@ -208,7 +208,7 @@ def create_app(
     startup_smoke_test: bool = False,
     smoke_test_interval_seconds: int = 0,
 ) -> FastAPI:
-    from codex_proxy.state import StateStore
+    from callosum.state import StateStore
 
     backends_list: list[Backend] = list(backends)
     pin_state = PinState()
@@ -235,7 +235,7 @@ def create_app(
         without a proxy restart. When a model is retired upstream, it drops
         out of the grid the next time the router consults it.
         """
-        from codex_proxy.cell_grid import (
+        from callosum.cell_grid import (
             ModelMetadata,
             build_cells_from_metadata,
         )
@@ -363,7 +363,7 @@ def create_app(
             if auth_service is not None:
                 auth_service.db.close()
 
-    app = FastAPI(title="codex-proxy", version=__version__, lifespan=lifespan)
+    app = FastAPI(title="callosum", version=__version__, lifespan=lifespan)
 
     # Install quality labeling UI if usage_log is available
     if usage_log is not None:
@@ -567,7 +567,7 @@ def create_app(
                     "id": model_id,
                     "object": "model",
                     "created": now_ts,
-                    "owned_by": "codex-proxy",
+                    "owned_by": "callosum",
                 }
                 for model_id in sorted(seen)
             ],
@@ -615,7 +615,7 @@ def create_app(
         operator hitting the proxy in a browser sees something useful.
         """
         return {
-            "service": "codex-proxy",
+            "service": "callosum",
             "version": __version__,
             "docs": "/docs",
             "status": "/status",
@@ -637,7 +637,7 @@ def create_app(
                     "id": model_id,
                     "object": "model",
                     "created": int(time.time()),
-                    "owned_by": "codex-proxy",
+                    "owned_by": "callosum",
                 }
         raise HTTPException(status_code=404, detail=f"model {model_id!r} not found")
 
@@ -658,7 +658,7 @@ def create_app(
         try:
             usage_log.record_quality(request_id, rating, "user")
         except Exception as exc:
-            logging.getLogger("codex_proxy.app").warning("feedback record failed: %s", exc)
+            logging.getLogger("callosum.app").warning("feedback record failed: %s", exc)
             raise HTTPException(status_code=400, detail="request_id not found or feedback failed")
         return {"status": "recorded", "request_id": request_id}
 

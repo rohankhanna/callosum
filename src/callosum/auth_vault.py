@@ -12,7 +12,7 @@ from typing import Any, cast
 
 import httpx
 
-from codex_proxy.errors import BackendError
+from callosum.errors import BackendError
 
 DEFAULT_REFRESH_URL = "https://auth.openai.com/oauth/token"
 DEFAULT_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"

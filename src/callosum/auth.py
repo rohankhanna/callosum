@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 
-from codex_proxy.auth_db import ApiKey, AuthDB, Session, User, UsernameTakenError
+from callosum.auth_db import ApiKey, AuthDB, Session, User, UsernameTakenError
 
 # argon2id parameters: defaults from argon2-cffi (time_cost=2, memory=64MiB,
 # parallelism=8) are appropriate for a localhost service serving humans, not

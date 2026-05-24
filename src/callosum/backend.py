@@ -4,8 +4,8 @@ from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
-from codex_proxy.codex_quota import CodexQuotaSnapshot
-from codex_proxy.sse_tee import ResponsesStreamSummary
+from callosum.codex_quota import CodexQuotaSnapshot
+from callosum.sse_tee import ResponsesStreamSummary
 
 BackendKind = Literal["codex_auth_vault", "credential_proxy", "openrouter_free"]
 HealthReason = Literal["ok", "rate_limited", "auth_invalid", "network", "unknown"]

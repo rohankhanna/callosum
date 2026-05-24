@@ -17,14 +17,14 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from codex_proxy.app import create_app
-from codex_proxy.backend import CallHandle, HealthStatus, UsageSnapshot
-from codex_proxy.cell_grid import Cell
-from codex_proxy.cell_recommender import (
+from callosum.app import create_app
+from callosum.backend import CallHandle, HealthStatus, UsageSnapshot
+from callosum.cell_grid import Cell
+from callosum.cell_recommender import (
     CellRecommender,
     _parse_cell_from_output,
 )
-from codex_proxy.errors import BackendError
+from callosum.errors import BackendError
 
 
 CELLS = [
