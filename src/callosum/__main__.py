@@ -17,7 +17,7 @@ from callosum.usage_log import UsageLog
 
 
 def _default_config_path() -> Path:
-    return Path("~/.config/codex-proxy/config.toml").expanduser()
+    return Path("~/.config/callosum/config.toml").expanduser()
 
 
 def main() -> None:
