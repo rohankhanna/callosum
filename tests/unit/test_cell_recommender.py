@@ -22,6 +22,8 @@ from callosum.backend import CallHandle, HealthStatus, UsageSnapshot
 from callosum.cell_grid import Cell
 from callosum.cell_recommender import (
     CellRecommender,
+    _approx_input_tokens,
+    _filter_cells_by_context,
     _parse_cell_from_output,
 )
 from callosum.errors import BackendError
@@ -323,6 +325,89 @@ def test_recommendation_has_no_raw_output_on_cache_hit() -> None:
     assert b.source == "cache"
     assert b.raw_output is None
     assert b.classifier_cell is None
+
+
+# ---------- compatibility filter (4b.2) ------------------------------------
+
+
+def test_approx_input_tokens_grows_with_prompt_length() -> None:
+    short = _approx_input_tokens("hi")
+    long = _approx_input_tokens("x" * 100_000)
+    assert long > short
+    # Floor: even an empty/short prompt gets a minimum estimate so the
+    # filter doesn't accidentally accept zero-context cells.
+    assert _approx_input_tokens("") >= 256
+
+
+def test_filter_drops_cells_too_small_for_prompt() -> None:
+    """A 50k-token prompt must filter out a 4k-window cell, keep a 128k cell."""
+    small = Cell(model="local-tiny", reasoning_effort="default", context_window=4096)
+    big = Cell(model="model-a0e7", reasoning_effort="high", context_window=128_000)
+    out = _filter_cells_by_context([small, big], estimated_input_tokens=50_000)
+    assert big in out
+    assert small not in out
+
+
+def test_filter_keeps_cells_with_unknown_context_window() -> None:
+    """context_window=None means 'we don't know' — treat as compatible
+    rather than silently exclude. Many local models report no window."""
+    unknown = Cell(model="local-unknown", reasoning_effort="default", context_window=None)
+    out = _filter_cells_by_context([unknown], estimated_input_tokens=200_000)
+    assert out == [unknown]
+
+
+def test_recommender_filters_cells_before_asking_classifier() -> None:
+    """The classifier prompt must only enumerate cells the prompt fits in,
+    so it can't pick a cell that would 4xx on context length.
+    """
+    seen_allowed_cells: list[list[Cell]] = []
+
+    @dataclass
+    class _CaptureBackend(_FakeBackend):
+        async def responses(self, body, handle):
+            # _build_recommender_body puts the available cell list in
+            # `instructions` (Responses-API shape, not chat-completions).
+            instructions = body.get("instructions") or ""
+            visible = [
+                c for c in big_grid
+                if f"{c.model} {c.reasoning_effort}" in instructions
+            ]
+            seen_allowed_cells.append(visible)
+            return await super().responses(body, handle)
+
+    small = Cell(model="local-tiny", reasoning_effort="default", context_window=4096)
+    big = Cell(
+        model="model-a0c3", reasoning_effort="low", context_window=128_000
+    )
+    big_grid = [small, big]
+    backend = _CaptureBackend(canned_text="model-a0c3 low")
+    rec = _make_recommender(backend)
+    # 100k-char prompt → ~50k tokens → too big for small cell, fits big cell.
+    body = {"messages": [{"role": "user", "content": "z" * 100_000}]}
+    out = asyncio.run(rec.recommend(body, allowed_cells=big_grid, fallback=big))
+    assert out.cell == big
+    assert seen_allowed_cells, "classifier should have been called"
+    # Confirm: the small cell never appeared in the classifier's prompt.
+    for visible in seen_allowed_cells:
+        assert small not in visible
+        assert big in visible
+
+
+def test_recommender_falls_back_to_full_grid_when_filter_empties() -> None:
+    """If every known-context cell is too small, the recommender uses the
+    full grid as a last resort rather than refusing the request."""
+    tiny_a = Cell(model="a", reasoning_effort="default", context_window=4096)
+    tiny_b = Cell(model="b", reasoning_effort="default", context_window=4096)
+    backend = _FakeBackend(canned_text="a default")
+    rec = _make_recommender(backend)
+    # 1M-char prompt — neither cell fits, but we still get a recommendation
+    # (rather than a refusal) so the user request isn't blocked at the router.
+    body = {"messages": [{"role": "user", "content": "x" * 1_000_000}]}
+    out = asyncio.run(
+        rec.recommend(body, allowed_cells=[tiny_a, tiny_b], fallback=tiny_a)
+    )
+    assert out.cell == tiny_a
+    assert out.source == "upstream"
 
 
 def test_alternative_classifier_does_not_pollute_cache() -> None:

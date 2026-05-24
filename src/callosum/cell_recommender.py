@@ -97,6 +97,45 @@ def _cache_key(prompt_text: str) -> str:
     return hashlib.sha256(prompt_text.encode("utf-8", errors="replace")).hexdigest()
 
 
+# Conservative buffer above the input-token estimate. Leaves room for the
+# completion, the system prompt, and the recommender prompt overhead. Big
+# enough that small-context cells (e.g. 4096-window local models) are
+# filtered out for non-trivial prompts; small enough not to push every
+# request to the largest cell.
+_CONTEXT_HEADROOM_TOKENS = 4096
+
+
+def _approx_input_tokens(prompt_text: str) -> int:
+    """Rough chars/2 estimate. Overshoots vs real tokenization — that's
+    deliberate, since the filter should err toward larger-context cells
+    (better to send a 4k-prompt to a 128k model than to a 4k model that
+    will reject it).
+    """
+    return max(256, len(prompt_text) // 2)
+
+
+def _filter_cells_by_context(
+    cells: list[Cell], estimated_input_tokens: int
+) -> list[Cell]:
+    """Drop cells whose known context_window can't fit input + headroom.
+
+    Cells with `context_window=None` are kept — unknown context is treated
+    as compatible rather than excluded. This is intentional: many local
+    models report no window via /v1/models, and excluding them entirely
+    would defeat the point of having local cells in the grid.
+
+    If every cell with a known window is too small, callers should treat
+    an empty return as "filter found nothing usable" and fall back to the
+    full grid — better to ask a backend that may reject than to refuse
+    the user request outright.
+    """
+    threshold = estimated_input_tokens + _CONTEXT_HEADROOM_TOKENS
+    return [
+        c for c in cells
+        if c.context_window is None or c.context_window >= threshold
+    ]
+
+
 def _parse_cell_from_output(
     output: str, allowed_cells: list[Cell]
 ) -> Cell | None:
@@ -365,6 +404,22 @@ class CellRecommender:
                 latency_s=time.time() - t0,
             )
 
+        # Compatibility filter: drop cells that can't fit this prompt's input
+        # + a headroom buffer. The classifier sees only the compatible set,
+        # so it can't pick a cell that would 4xx for context-length reasons.
+        # If the filter empties the set (huge prompt vs every known window
+        # too small), fall back to the full grid and let the backend report
+        # the real error — better than silently refusing the request.
+        est_tokens = _approx_input_tokens(prompt_text)
+        compatible_cells = _filter_cells_by_context(allowed_cells, est_tokens)
+        if not compatible_cells:
+            logger.warning(
+                "cell_recommender: no cells fit ~%d input tokens; using full "
+                "grid as a last resort.",
+                est_tokens,
+            )
+            compatible_cells = allowed_cells
+
         key = _cache_key(prompt_text)
         is_alternative = classifier_cell is not None
         if is_alternative:
@@ -400,7 +455,7 @@ class CellRecommender:
                 )
 
         chosen, raw_output = await self._ask_upstream(
-            prompt_text, allowed_cells, classifier_cell=classifier_cell
+            prompt_text, compatible_cells, classifier_cell=classifier_cell
         )
         if chosen is None:
             self._stats["fallback_count"] += 1
