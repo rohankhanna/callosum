@@ -737,6 +737,52 @@ def create_app(
     return app
 
 
+async def _routable_backends(
+    backends_list: Sequence[Backend], *, now: float | None = None
+) -> list[Backend]:
+    """Return the subset of currently-routable backends.
+
+    Routable = not weekly-exhausted, not in cooldown. Reads cached usage
+    state from each backend (no upstream calls) so this is cheap enough
+    to run on every routing decision.
+
+    The point is to keep the cell grid honest when Codex is exhausted or
+    on cooldown: cells whose only serving backends are unroutable get
+    filtered out of `cells_now` before the classifier sees them, so the
+    recommender can only pick something dispatch can actually reach.
+    Phase 4d-v1; v2 may add quick network-failure marking so offline
+    transitions are sub-second rather than waiting for the classifier-
+    call timeout to fail.
+    """
+    n = now if now is not None else time.time()
+    out: list[Backend] = []
+    for b in backends_list:
+        try:
+            u = await b.usage_snapshot()
+        except Exception:
+            continue  # if we can't even read state, treat as unroutable
+        if u.weekly_exhausted:
+            continue
+        if u.cooldown_until_ts is not None and u.cooldown_until_ts > n:
+            continue
+        out.append(b)
+    return out
+
+
+def _filter_cells_to_routable(
+    cells: list[Cell], routable_backends: Sequence[Backend]
+) -> list[Cell]:
+    """Keep only cells whose model is advertised by at least one
+    currently-routable backend. When every backend serving a cell's
+    model is unroutable (e.g. Codex weekly_exhausted and the cell is
+    Codex-only), the cell is dropped — the classifier can't pick a
+    cell dispatch would fail to serve."""
+    routable_models: set[str] = set()
+    for b in routable_backends:
+        routable_models.update(b.advertised_models)
+    return [c for c in cells if c.model in routable_models]
+
+
 async def _dispatch_route(
     body: dict[str, Any],
     *,
@@ -908,6 +954,17 @@ async def _dispatch_internal(
             # classifier's result intentionally bypasses the cache so it
             # doesn't poison subsequent cheap-classifier routing.
             cells_now = live_cells_fn()
+            # Phase 4d: filter out cells whose only serving backends are
+            # currently unroutable (Codex weekly-exhausted, on cooldown,
+            # etc.) so the classifier can only pick cells dispatch can
+            # actually serve. When ALL backends are unroutable we don't
+            # filter — better to attempt and let the dispatch layer
+            # report the real error than silently refuse.
+            _routable = await _routable_backends(backends_list)
+            if _routable:
+                _filtered = _filter_cells_to_routable(cells_now, _routable)
+                if _filtered:
+                    cells_now = _filtered
             classifier_override: Cell | None = None
             alt_pct = auto_cfg.cell_recommender_alternative_classifier_pct
             if alt_pct > 0 and random.random() < alt_pct:

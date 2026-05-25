@@ -455,6 +455,31 @@ class CellRecommender:
         Defaults to self._configured_cheap_cell; pass classifier_cell to
         override (bias mitigation path).
         """
+        # Phase 4d: pre-check classifier backend's routability. If the
+        # configured cheap_backend is weekly-exhausted or in cooldown, the
+        # upstream call would either 429 or hang on a now-defunct route;
+        # either way the recommender ends up falling back. Skip the call
+        # entirely so the user doesn't pay the timeout latency on the
+        # first request after an outage. Reads cached state — no I/O.
+        # Skipped when an alternative classifier is in play (the caller
+        # specified a different backend cell on purpose).
+        if classifier_cell is None:
+            try:
+                _u = await self._cheap_backend.usage_snapshot()
+                if _u.weekly_exhausted or (
+                    _u.cooldown_until_ts is not None
+                    and _u.cooldown_until_ts > time.time()
+                ):
+                    self._stats["upstream_skipped_unroutable"] = (
+                        self._stats.get("upstream_skipped_unroutable", 0) + 1
+                    )
+                    return (None, None)
+            except Exception:
+                # If we can't even read the snapshot, fall through to the
+                # call — the existing exception handler below catches the
+                # actual upstream error.
+                pass
+
         body = self._build_recommender_body(
             prompt_text, allowed_cells, classifier_cell=classifier_cell
         )
