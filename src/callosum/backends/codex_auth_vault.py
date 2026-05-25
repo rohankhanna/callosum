@@ -17,7 +17,7 @@ from callosum.backend import BackendKind, CallHandle, HealthStatus, UsageSnapsho
 from callosum.backends._http import DEFAULT_COOLDOWN_S, error_from_response
 from callosum.codex_quota import parse_codex_headers
 from callosum.errors import BackendError
-from callosum.sse_tee import ResponsesStreamCollector
+from callosum.sse_tee import ResponsesStreamCollector, assemble_completed_with_text
 from callosum.state import StateStore
 
 DEFAULT_BASE_URL = "https://chatgpt.com/backend-api/codex"
@@ -367,11 +367,13 @@ class CodexAuthVaultBackend:
                         pass  # buffer the whole stream
                     if handle is not None:
                         handle.stream_summary = collector.summary
-                    completed = (
-                        collector.summary.completed_response
-                        if collector.summary is not None
-                        else None
-                    )
+                    # The `response.completed` event ships with `output:[]`
+                    # — visible text only lives in the streamed `.delta`/
+                    # `.done` events. Assemble the visible text and inject
+                    # it into output[] so non-stream callers (e.g. the
+                    # cell recommender, internal tests) get a dict whose
+                    # output[].content[].text is actually populated.
+                    completed = assemble_completed_with_text(collector.summary.raw_blob)
                     if completed is None:
                         raise BackendError(
                             classification="transient",

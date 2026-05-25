@@ -115,3 +115,101 @@ async def test_collector_summary_is_safe_on_empty_stream() -> None:
     assert summary.total_bytes == 0
     assert summary.completed_response is None
     assert summary.raw_blob == b""
+
+
+def test_extract_output_text_concatenates_done_events() -> None:
+    """`response.output_text.done` carries the full assembled text per
+    output_index. extract_output_text_from_blob concatenates them in
+    stream order so non-stream callers see the visible response."""
+    from callosum.sse_tee import extract_output_text_from_blob
+
+    blob = (
+        b'event: response.output_text.delta\n'
+        b'data: {"type":"response.output_text.delta","delta":"Hello, "}\n\n'
+        b'event: response.output_text.delta\n'
+        b'data: {"type":"response.output_text.delta","delta":"world!"}\n\n'
+        b'event: response.output_text.done\n'
+        b'data: {"type":"response.output_text.done","text":"Hello, world!"}\n\n'
+    )
+    assert extract_output_text_from_blob(blob) == "Hello, world!"
+
+
+def test_extract_output_text_falls_back_to_deltas_when_no_done() -> None:
+    """If the stream was truncated and we only have deltas, reconstruct
+    from those instead. Avoids returning empty text on aborted streams
+    when partial visible content is still useful."""
+    from callosum.sse_tee import extract_output_text_from_blob
+
+    blob = (
+        b'event: response.output_text.delta\n'
+        b'data: {"type":"response.output_text.delta","delta":"Partial "}\n\n'
+        b'event: response.output_text.delta\n'
+        b'data: {"type":"response.output_text.delta","delta":"answer"}\n\n'
+    )
+    assert extract_output_text_from_blob(blob) == "Partial answer"
+
+
+def test_assemble_completed_injects_text_when_output_is_empty() -> None:
+    """The whole point of the helper: the Codex response.completed event
+    ships with output:[], but the visible text exists in delta/done
+    events. assemble_completed_with_text reconstructs a dict that
+    actually contains the text in output[].content[].text."""
+    from callosum.sse_tee import assemble_completed_with_text
+
+    blob = (
+        b'event: response.output_text.delta\n'
+        b'data: {"type":"response.output_text.delta","delta":"model-a0e7 high"}\n\n'
+        b'event: response.output_text.done\n'
+        b'data: {"type":"response.output_text.done","text":"model-a0e7 high"}\n\n'
+        b'event: response.completed\n'
+        b'data: {"type":"response.completed","response":{"id":"r1","output":[],"usage":{"total_tokens":4}}}\n\n'
+    )
+    result = assemble_completed_with_text(blob)
+    assert result is not None
+    assert result["id"] == "r1"
+    assert result["usage"]["total_tokens"] == 4
+    # Injected message item with the assembled visible text.
+    assert len(result["output"]) == 1
+    msg = result["output"][0]
+    assert msg["type"] == "message"
+    assert msg["role"] == "assistant"
+    assert msg["content"][0]["text"] == "model-a0e7 high"
+
+
+def test_assemble_completed_preserves_existing_output_items() -> None:
+    """If the completed event already had reasoning items in output[],
+    those must survive the assembly; the text item is appended, not
+    substituted."""
+    from callosum.sse_tee import assemble_completed_with_text
+
+    blob = (
+        b'event: response.output_text.done\n'
+        b'data: {"type":"response.output_text.done","text":"4"}\n\n'
+        b'event: response.completed\n'
+        b'data: {"type":"response.completed","response":{"id":"r1","output":[{"type":"reasoning","summary":[]}],"usage":{}}}\n\n'
+    )
+    result = assemble_completed_with_text(blob)
+    assert result is not None
+    assert len(result["output"]) == 2
+    assert result["output"][0]["type"] == "reasoning"
+    assert result["output"][1]["type"] == "message"
+    assert result["output"][1]["content"][0]["text"] == "4"
+
+
+def test_assemble_completed_skips_injection_when_text_already_present() -> None:
+    """Defensive: if a future Codex version starts populating output[]
+    with the assembled text, don't double-inject. Detect by looking for
+    any message item that already has non-empty text."""
+    from callosum.sse_tee import assemble_completed_with_text
+
+    blob = (
+        b'event: response.output_text.done\n'
+        b'data: {"type":"response.output_text.done","text":"hello"}\n\n'
+        b'event: response.completed\n'
+        b'data: {"type":"response.completed","response":{"id":"r1","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}]}}\n\n'
+    )
+    result = assemble_completed_with_text(blob)
+    assert result is not None
+    # Only the existing message item; we did NOT append a duplicate.
+    assert len(result["output"]) == 1
+    assert result["output"][0]["content"][0]["text"] == "hello"
