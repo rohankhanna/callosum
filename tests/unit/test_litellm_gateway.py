@@ -22,6 +22,7 @@ import httpx
 import pytest
 
 from callosum.backends.litellm_gateway import (
+    DEFAULT_CALL_TIMEOUT_S,
     LOCAL_PRIORITY_OFFSET,
     LiteLLMGatewayBackend,
     _chat_to_responses_response,
@@ -274,6 +275,19 @@ async def test_responses_end_to_end_translates_through_chat_completions() -> Non
 
 
 # ---------- error path ------------------------------------------------------
+
+
+def test_default_call_timeout_is_generous_for_cold_loads() -> None:
+    """Cold-loading a 26B/31B model from disk into VRAM can take 60-120s on
+    typical hardware. The backend's default timeout must accommodate that
+    without slicing the request mid-load; operators with fast hardware can
+    override via CALLOSUM_LITELLM_TIMEOUT_S in __main__.py.
+    """
+    # Lower bound check rather than an exact-equality assertion so we don't
+    # have to update the test if we tune the constant later. Below 60s
+    # would be too tight for cold-loads we've actually measured (model-a0d6
+    # took 72s on this machine), so guard at 60.
+    assert DEFAULT_CALL_TIMEOUT_S >= 60.0
 
 
 async def test_codex_only_fields_stripped_before_send() -> None:

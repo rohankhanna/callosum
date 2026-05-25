@@ -40,6 +40,13 @@ from callosum.errors import BackendError
 DEFAULT_BASE_URL = "http://127.0.0.1:4000"
 DEFAULT_CATALOG_REFRESH_S = 60.0  # local model lineup changes via yaml reloads — keep fresh
 DEFAULT_HEALTH_TIMEOUT_S = 2.0
+# Default HTTP timeout for chat_completions / responses calls. Generous on
+# purpose: a 31B-parameter local model can take 60-120s to cold-load from
+# disk into VRAM, and the first request after a model swap is the one that
+# pays the cost. Operators with fast hardware (or who pre-warm models) can
+# lower this via CALLOSUM_LITELLM_TIMEOUT_S; the catalog poll uses
+# DEFAULT_HEALTH_TIMEOUT_S separately and is unaffected.
+DEFAULT_CALL_TIMEOUT_S = 300.0
 # Priority offset for local cells in the merged cell grid. Remote Codex
 # priorities are small ints (16, 23, etc.); offsetting local by +10_000
 # means local cells sort AFTER Codex cells in the recommender's ranking,
@@ -62,7 +69,7 @@ class LiteLLMGatewayBackend:
         catalog_refresh_s: float = DEFAULT_CATALOG_REFRESH_S,
         client: httpx.AsyncClient | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
-        timeout_s: float = 30.0,
+        timeout_s: float = DEFAULT_CALL_TIMEOUT_S,
     ) -> None:
         self.id = id
         self._base_url = base_url.rstrip("/")

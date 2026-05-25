@@ -78,13 +78,28 @@ def main() -> None:
         "CALLOSUM_LITELLM_GATEWAY_URL", LITELLM_GATEWAY_DEFAULT_BASE_URL
     )
     if os.environ.get("CALLOSUM_LITELLM_GATEWAY_ENABLED") == "1":
-        backends.append(
-            LiteLLMGatewayBackend(
-                id="local LLM gateway",
-                base_url=litellm_url,
-                master_key=os.environ.get("CALLOSUM_LITELLM_MASTER_KEY"),
+        # CALLOSUM_LITELLM_TIMEOUT_S overrides the per-call timeout for the
+        # local backend. Default is generous (300s) to absorb cold-load
+        # latency on large local models; lower it on fast hardware or when
+        # models are kept warm. Malformed values fall back to the default
+        # rather than crashing the proxy at startup.
+        litellm_timeout_raw = os.environ.get("CALLOSUM_LITELLM_TIMEOUT_S")
+        try:
+            litellm_timeout = (
+                float(litellm_timeout_raw)
+                if litellm_timeout_raw is not None
+                else None
             )
-        )
+        except ValueError:
+            litellm_timeout = None
+        backend_kwargs: dict[str, object] = {
+            "id": "local LLM gateway",
+            "base_url": litellm_url,
+            "master_key": os.environ.get("CALLOSUM_LITELLM_MASTER_KEY"),
+        }
+        if litellm_timeout is not None:
+            backend_kwargs["timeout_s"] = litellm_timeout
+        backends.append(LiteLLMGatewayBackend(**backend_kwargs))  # type: ignore[arg-type]
     usage_log = (
         UsageLog(cfg.usage_log.path, capture_bodies=cfg.usage_log.capture_bodies)
         if cfg.usage_log.path is not None
