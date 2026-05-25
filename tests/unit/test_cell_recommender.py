@@ -399,6 +399,72 @@ def test_recommender_sends_truncated_prompt_to_classifier() -> None:
     assert sent_len < len(huge)
 
 
+# ---------- compact cell-list format ---------------------------------------
+
+
+def test_compact_format_groups_efforts_under_one_line_per_model() -> None:
+    """Per-permutation enumeration is wasteful — multi-effort Codex models
+    should collapse onto one line each with the efforts pipe-joined.
+    Classifier parsing is unchanged (it matches the reply, not the list)."""
+    from callosum.cell_recommender import _format_cell_list_compact
+
+    cells = [
+        Cell(model="model-a0e7", reasoning_effort="low", context_window=128_000),
+        Cell(model="model-a0e7", reasoning_effort="medium", context_window=128_000),
+        Cell(model="model-a0e7", reasoning_effort="high", context_window=128_000),
+        Cell(model="model-a0e7", reasoning_effort="xhigh", context_window=128_000),
+    ]
+    out = _format_cell_list_compact(cells)
+    # One line, all four efforts, context shown once.
+    assert out.count("\n") == 0
+    assert "model-a0e7" in out
+    assert "low|medium|high|xhigh" in out
+    assert "128K" in out
+
+
+def test_compact_format_keeps_single_line_for_local_cells() -> None:
+    """Local cells typically have only `default` effort. Format should not
+    pretend there's a pipe choice when there isn't."""
+    from callosum.cell_recommender import _format_cell_list_compact
+
+    cells = [
+        Cell(model="model-a0a9", reasoning_effort="default", context_window=262_144),
+    ]
+    out = _format_cell_list_compact(cells)
+    assert "model-a0a9  default" in out
+    assert "|" not in out
+    assert "262K" in out
+
+
+def test_compact_format_omits_context_when_unknown() -> None:
+    """context_window=None means we don't know — show the model without
+    fabricating a number."""
+    from callosum.cell_recommender import _format_cell_list_compact
+
+    cells = [
+        Cell(model="mystery-model", reasoning_effort="default", context_window=None),
+    ]
+    out = _format_cell_list_compact(cells)
+    assert "mystery-model  default" in out
+    assert "K" not in out  # no fabricated context
+
+
+def test_compact_format_preserves_model_order_from_input() -> None:
+    """Cells flow in priority order (Codex first, locals last). The
+    compact format must preserve that order so the operator's mental
+    model of 'recommended cells' isn't scrambled."""
+    from callosum.cell_recommender import _format_cell_list_compact
+
+    cells = [
+        Cell(model="model-a0e8", reasoning_effort="low", context_window=256_000),
+        Cell(model="model-a0e8", reasoning_effort="high", context_window=256_000),
+        Cell(model="model-a0a9", reasoning_effort="default", context_window=262_144),
+    ]
+    lines = _format_cell_list_compact(cells).splitlines()
+    assert lines[0].startswith("- model-a0e8")
+    assert lines[1].startswith("- model-a0a9")
+
+
 # ---------- compatibility filter (4b.2) ------------------------------------
 
 
@@ -439,10 +505,12 @@ def test_recommender_filters_cells_before_asking_classifier() -> None:
         async def responses(self, body, handle):
             # _build_recommender_body puts the available cell list in
             # `instructions` (Responses-API shape, not chat-completions).
+            # The compact format groups by model — checking by model name
+            # alone is sufficient to detect whether a cell was offered.
             instructions = body.get("instructions") or ""
             visible = [
                 c for c in big_grid
-                if f"{c.model} {c.reasoning_effort}" in instructions
+                if f"- {c.model} " in instructions
             ]
             seen_allowed_cells.append(visible)
             return await super().responses(body, handle)

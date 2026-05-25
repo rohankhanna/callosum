@@ -167,6 +167,54 @@ def _candidates_ordered(primary: Cell, pool: list[Cell]) -> tuple[Cell, ...]:
     return (primary,) + rest
 
 
+# Effort ordering for display in the compact cell list — matches the
+# canonical low→xhigh progression with "default" (the local-cell sentinel)
+# sorted to the end since it carries no relative ranking.
+_EFFORT_DISPLAY_ORDER = ("low", "medium", "high", "xhigh", "default")
+
+
+def _format_cell_list_compact(cells: list[Cell]) -> str:
+    """Group cells by model and emit one line per model with all available
+    efforts and the model's context window. Compresses the per-permutation
+    enumeration (~32 lines for a typical mixed grid) down to one line per
+    distinct model (~12 lines), cutting classifier-prompt tokens roughly
+    in half on every routing decision.
+
+    The cell-list format is purely for the classifier's *view*; the parser
+    still substring-matches `<model> <effort>` in the classifier's reply
+    against allowed_cells, so the response shape is unchanged.
+
+    Format per model:
+        - <model>  <effort>|<effort>|...  (<ctx>K)
+    or for single-effort models (typical for local cells):
+        - <model>  <effort>  (<ctx>K)
+    """
+    by_model: dict[str, list[Cell]] = {}
+    model_order: list[str] = []
+    for c in cells:
+        if c.model not in by_model:
+            model_order.append(c.model)
+        by_model.setdefault(c.model, []).append(c)
+
+    def _effort_rank(effort: str) -> int:
+        try:
+            return _EFFORT_DISPLAY_ORDER.index(effort)
+        except ValueError:
+            return len(_EFFORT_DISPLAY_ORDER)
+
+    lines: list[str] = []
+    for model in model_order:
+        ms = by_model[model]
+        efforts = sorted({c.reasoning_effort for c in ms}, key=_effort_rank)
+        # All cells of the same model share the same context_window; pick
+        # the first non-None.
+        ctx = next((c.context_window for c in ms if c.context_window), None)
+        effort_str = "|".join(efforts)
+        ctx_str = f"  ({ctx // 1000}K)" if ctx else ""
+        lines.append(f"- {model}  {effort_str}{ctx_str}")
+    return "\n".join(lines)
+
+
 def _filter_cells_by_context(
     cells: list[Cell], estimated_input_tokens: int
 ) -> list[Cell]:
@@ -341,9 +389,7 @@ class CellRecommender:
         name as guidance.
         """
         cl = classifier_cell if classifier_cell is not None else self._resolve_cheap_cell(allowed_cells)
-        cell_list = "\n".join(
-            f"- {c.model} {c.reasoning_effort}" for c in allowed_cells
-        )
+        cell_list = _format_cell_list_compact(allowed_cells)
         example_cell = allowed_cells[0] if allowed_cells else self._configured_cheap_cell
         instructions = (
             _RECOMMENDER_INSTRUCTION_PREFIX
