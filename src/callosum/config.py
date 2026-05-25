@@ -173,6 +173,16 @@ class AutoRouterConfig(BaseModel):
     # alternative classifier's result bypasses the cache so it doesn't
     # poison subsequent cheap-classifier-cached routing.
     cell_recommender_alternative_classifier_pct: float = 0.05
+    # Exploration probability toward local cells. With this probability,
+    # the recommender skips the classifier entirely and routes to a random
+    # eligible local cell. The point is data collection: the cheap remote
+    # classifier consistently prefers familiar Codex names (it has prior
+    # knowledge of them; local model names are opaque), so without
+    # explicit exploration we'd never accumulate local-cell outcome data
+    # for Phase 5 local-classifier training. Default 0 (off); 0.05-0.10
+    # is a reasonable starting point — enough flow to collect data
+    # without meaningfully disrupting user-perceived quality.
+    cell_recommender_local_exploration_pct: float = 0.0
 
 
 class BackendConfig(BaseModel):

@@ -399,6 +399,103 @@ def test_recommender_sends_truncated_prompt_to_classifier() -> None:
     assert sent_len < len(huge)
 
 
+# ---------- local-cell exploration (#4) ------------------------------------
+
+
+def test_local_exploration_zero_pct_never_explores() -> None:
+    """Default exploration_pct=0 means the classifier path is always used.
+    Backward-compatible with all existing behavior."""
+    backend = _FakeBackend(canned_text="model-a0e7 high")
+    rec = _make_recommender(backend)
+    body = {"messages": [{"role": "user", "content": "x"}]}
+    out = asyncio.run(
+        rec.recommend(
+            body, allowed_cells=CELLS, fallback=CELLS[0],
+            local_exploration_pct=0.0,
+        )
+    )
+    assert out.source == "upstream"
+
+
+def test_local_exploration_pct_1_always_picks_local() -> None:
+    """With pct=1.0, every call should go to a local cell (effort=default).
+    Classifier is bypassed entirely — no upstream call recorded."""
+    backend = _FakeBackend(canned_text="model-a0e7 high")  # would normally win
+    rec = _make_recommender(backend)
+    local_cell = Cell(
+        model="model-a0a9",
+        reasoning_effort="default",
+        context_window=262_144,
+    )
+    grid = [*CELLS, local_cell]
+    body = {"messages": [{"role": "user", "content": "x"}]}
+    out = asyncio.run(
+        rec.recommend(
+            body, allowed_cells=grid, fallback=CELLS[0],
+            local_exploration_pct=1.0,
+        )
+    )
+    assert out.cell == local_cell
+    assert out.source == "local_exploration"
+    # Classifier was bypassed — no upstream call, no raw_output.
+    assert out.raw_output is None
+    assert out.classifier_cell is None
+    # And no upstream_calls happened in this path.
+    assert rec.stats.get("local_exploration_calls", 0) == 1
+    assert rec.stats.get("upstream_calls", 0) == 0
+
+
+def test_local_exploration_no_local_cells_falls_through_to_classifier() -> None:
+    """If there are no local cells in the allowed set, exploration can't
+    fire — the path falls through to the normal classifier flow."""
+    backend = _FakeBackend(canned_text="model-a0e7 high")
+    rec = _make_recommender(backend)
+    body = {"messages": [{"role": "user", "content": "x"}]}
+    # CELLS has no local cells (all Codex with low/medium/high effort).
+    out = asyncio.run(
+        rec.recommend(
+            body, allowed_cells=CELLS, fallback=CELLS[0],
+            local_exploration_pct=1.0,  # would explore IF locals existed
+        )
+    )
+    assert out.source == "upstream"
+    assert out.cell == CELLS[2]  # the classifier's pick
+
+
+def test_local_exploration_does_not_pollute_cache() -> None:
+    """An exploration pick must not be cached, so subsequent non-exploration
+    calls for the same prompt still go through the classifier (which may
+    produce a different decision). Mirrors the alternative-classifier
+    rotation's cache-bypass semantics."""
+    backend = _FakeBackend(canned_text="model-a0e7 high")
+    rec = _make_recommender(backend)
+    local_cell = Cell(
+        model="model-a0a9", reasoning_effort="default",
+        context_window=262_144,
+    )
+    grid = [*CELLS, local_cell]
+    body = {"messages": [{"role": "user", "content": "the same prompt"}]}
+
+    async def _two_calls() -> tuple:
+        # First call: exploration fires.
+        a = await rec.recommend(
+            body, allowed_cells=grid, fallback=CELLS[0],
+            local_exploration_pct=1.0,
+        )
+        # Second call: no exploration. Should hit the classifier (not the
+        # cache), because exploration didn't write to the cache.
+        b = await rec.recommend(
+            body, allowed_cells=grid, fallback=CELLS[0],
+            local_exploration_pct=0.0,
+        )
+        return a, b
+
+    a, b = asyncio.run(_two_calls())
+    assert a.source == "local_exploration"
+    assert b.source == "upstream"  # NOT cache — exploration didn't poison it
+    assert b.cell == CELLS[2]
+
+
 # ---------- compact cell-list format ---------------------------------------
 
 

@@ -924,6 +924,7 @@ async def _dispatch_internal(
                 allowed_cells=cells_now,
                 fallback=fallback_cell,
                 classifier_cell=classifier_override,
+                local_exploration_pct=auto_cfg.cell_recommender_local_exploration_pct,
             )
             chosen = rec.cell
             # Capture recommender provenance for the request log — training

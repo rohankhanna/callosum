@@ -21,6 +21,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import random
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -496,6 +497,7 @@ class CellRecommender:
         allowed_cells: list[Cell],
         fallback: Cell,
         classifier_cell: Cell | None = None,
+        local_exploration_pct: float = 0.0,
     ) -> Recommendation:
         """Return a Cell recommendation for this request body.
 
@@ -541,6 +543,33 @@ class CellRecommender:
                 est_tokens,
             )
             compatible_cells = allowed_cells
+
+        # Local-cell exploration. Independent of the classifier — with
+        # `local_exploration_pct` probability, skip the classifier entirely
+        # and route to a random eligible local cell. Generates training
+        # data on local-cell outcomes that the cheap remote classifier
+        # would otherwise never produce (it prefers familiar Codex names).
+        # Does not write to the prompt-text cache so the cheap classifier's
+        # cache stays clean for non-exploration paths. Only fires on the
+        # non-alternative-classifier path (the alternative path is itself
+        # a different bias-mitigation rotation and we don't compound them).
+        if classifier_cell is None and local_exploration_pct > 0:
+            local_cells = [c for c in compatible_cells if _infer_runtime_kind(c) == "local"]
+            if local_cells and random.random() < local_exploration_pct:
+                chosen = random.choice(local_cells)
+                self._stats["local_exploration_calls"] = (
+                    self._stats.get("local_exploration_calls", 0) + 1
+                )
+                self._record_recommendation(chosen)
+                return Recommendation(
+                    cell=chosen,
+                    source="local_exploration",
+                    cache_key=None,
+                    latency_s=time.time() - t0,
+                    classifier_cell=None,
+                    raw_output=None,
+                    candidates=_candidates_ordered(chosen, compatible_cells),
+                )
 
         key = _cache_key(prompt_text)
         is_alternative = classifier_cell is not None
