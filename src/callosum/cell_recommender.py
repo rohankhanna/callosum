@@ -106,6 +106,37 @@ def _cache_key(prompt_text: str) -> str:
     return hashlib.sha256(prompt_text.encode("utf-8", errors="replace")).hexdigest()
 
 
+# Maximum prompt text size to send to the classifier. Hermes-shaped requests
+# carry 30-40k-token personas plus full conversation history; sending all of
+# that to a small classifier (a) chews enormous input-side latency on the
+# classifier call, often busting the 5s default timeout, and (b) is wasteful
+# — the routing decision is dominated by the LATEST user turn, which lives
+# at the tail of the text. Keep a head sample so a system-message signal
+# isn't lost, plus a larger tail.
+_CLASSIFIER_HEAD_CHARS = 1024
+_CLASSIFIER_TAIL_CHARS = 3072
+_CLASSIFIER_TRUNCATION_MARKER = "\n…[truncated for classifier]…\n"
+
+
+def _truncate_for_classifier(prompt_text: str) -> str:
+    """Trim a long prompt down to head + tail samples for the classifier.
+
+    Short prompts pass through unchanged. Long prompts get the first
+    _CLASSIFIER_HEAD_CHARS + last _CLASSIFIER_TAIL_CHARS, joined with a
+    marker. Cache key is computed on the FULL prompt elsewhere so two
+    different long prompts whose head/tail happen to align don't collide.
+    """
+    head_n = _CLASSIFIER_HEAD_CHARS
+    tail_n = _CLASSIFIER_TAIL_CHARS
+    if len(prompt_text) <= head_n + tail_n + len(_CLASSIFIER_TRUNCATION_MARKER):
+        return prompt_text
+    return (
+        prompt_text[:head_n]
+        + _CLASSIFIER_TRUNCATION_MARKER
+        + prompt_text[-tail_n:]
+    )
+
+
 # Conservative buffer above the input-token estimate. Leaves room for the
 # completion, the system prompt, and the recommender prompt overhead. Big
 # enough that small-context cells (e.g. 4096-window local models) are
@@ -201,7 +232,7 @@ class CellRecommender:
         cheap_cell: Cell,
         cache_max: int = 4096,
         cache_ttl_seconds: int = 3600,
-        upstream_timeout_s: float = 5.0,
+        upstream_timeout_s: float = 30.0,
     ) -> None:
         self._cheap_backend = cheap_backend
         self._configured_cheap_cell = cheap_cell
@@ -329,7 +360,12 @@ class CellRecommender:
                 {
                     "type": "message",
                     "role": "user",
-                    "content": [{"type": "input_text", "text": prompt_text}],
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": _truncate_for_classifier(prompt_text),
+                        }
+                    ],
                 }
             ],
             "stream": False,

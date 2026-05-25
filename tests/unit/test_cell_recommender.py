@@ -21,10 +21,14 @@ from callosum.app import create_app
 from callosum.backend import CallHandle, HealthStatus, UsageSnapshot
 from callosum.cell_grid import Cell
 from callosum.cell_recommender import (
+    _CLASSIFIER_HEAD_CHARS,
+    _CLASSIFIER_TAIL_CHARS,
+    _CLASSIFIER_TRUNCATION_MARKER,
     CellRecommender,
     _approx_input_tokens,
     _filter_cells_by_context,
     _parse_cell_from_output,
+    _truncate_for_classifier,
 )
 from callosum.errors import BackendError
 
@@ -325,6 +329,74 @@ def test_recommendation_has_no_raw_output_on_cache_hit() -> None:
     assert b.source == "cache"
     assert b.raw_output is None
     assert b.classifier_cell is None
+
+
+# ---------- classifier-side prompt truncation -------------------------------
+
+
+def test_short_prompt_passes_through_classifier_truncation_unchanged() -> None:
+    """Prompts that already fit head+tail+marker are not modified."""
+    text = "explain quicksort in five sentences"
+    assert _truncate_for_classifier(text) == text
+
+
+def test_long_prompt_is_truncated_to_head_plus_tail() -> None:
+    """A 50k-char prompt should shrink to ~head+tail with the marker between.
+
+    The classifier's job is routing-decision-from-prompt-gist, which the
+    last few k of text captures. Sending the whole thing causes 5-30s
+    classifier latency on small models with no decision-quality benefit.
+    """
+    head = "S" * 5000  # head signal
+    middle = "M" * 40_000  # noise we don't need
+    tail = "T" * 5000  # the latest user turn
+    out = _truncate_for_classifier(head + middle + tail)
+    assert len(out) < len(head + middle + tail) // 2
+    assert out.startswith("S")  # head preserved
+    assert out.endswith("T")    # tail preserved
+    assert _CLASSIFIER_TRUNCATION_MARKER in out
+    # Middle ("M"-only) is dropped.
+    assert "MMMMMMMMM" not in out
+
+
+def test_truncation_bounds_match_constants() -> None:
+    """Sanity: the head and tail counts in the output match the module
+    constants, so we'd notice if a refactor swapped them.
+    """
+    head_char, tail_char = "H", "T"
+    head = head_char * 10_000
+    tail = tail_char * 10_000
+    out = _truncate_for_classifier(head + tail)
+    # Output should contain exactly _CLASSIFIER_HEAD_CHARS of head_char
+    # at the front, then the marker, then _CLASSIFIER_TAIL_CHARS of tail_char.
+    assert out.startswith(head_char * _CLASSIFIER_HEAD_CHARS)
+    assert out.endswith(tail_char * _CLASSIFIER_TAIL_CHARS)
+
+
+def test_recommender_sends_truncated_prompt_to_classifier() -> None:
+    """End-to-end: a huge prompt arrives at recommend(); the body the
+    classifier actually receives must be the truncated version, not the
+    full text. Otherwise the classifier still times out on huge inputs."""
+    seen_text: list[str] = []
+
+    @dataclass
+    class _CaptureBackend(_FakeBackend):
+        async def responses(self, body, handle):
+            content = body.get("input", [{}])[0].get("content", [{}])
+            text = content[0].get("text", "") if content else ""
+            seen_text.append(text)
+            return await super().responses(body, handle)
+
+    backend = _CaptureBackend(canned_text="model-a0e7 high")
+    rec = _make_recommender(backend)
+    huge = "x" * 200_000
+    body = {"messages": [{"role": "user", "content": huge}]}
+    asyncio.run(rec.recommend(body, allowed_cells=CELLS, fallback=CELLS[0]))
+    assert seen_text, "classifier should have been called"
+    # What the classifier actually saw is much shorter than the input.
+    sent_len = len(seen_text[0])
+    assert sent_len < 10_000
+    assert sent_len < len(huge)
 
 
 # ---------- compatibility filter (4b.2) ------------------------------------

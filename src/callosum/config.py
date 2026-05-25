@@ -146,7 +146,13 @@ class AutoRouterConfig(BaseModel):
     cell_recommender_cache_ttl_seconds: int = 3600
     # Hard timeout on the classifier call. If exceeded, dispatch falls back
     # to cost_router so the user request isn't blocked by classifier slowness.
-    cell_recommender_upstream_timeout_s: float = 5.0
+    # Bumped from 5s after observing classifier timeouts on Hermes-shaped
+    # 30-40k-token requests. Combined with the head+tail truncation in
+    # cell_recommender._truncate_for_classifier the classifier sees only
+    # a few k of context, so this ceiling rarely matters; it's the safety
+    # net for the long-tail case where the truncated prompt is still
+    # expensive to process.
+    cell_recommender_upstream_timeout_s: float = 30.0
     # Off-peak comparison sampling. For some fraction of `auto`-routed
     # requests, fire the same prompt at every live cell as a classifier
     # in parallel (fire-and-forget after the user's response is dispatched)
