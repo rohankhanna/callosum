@@ -36,8 +36,13 @@ logger = logging.getLogger(__name__)
 _RECOMMENDER_INSTRUCTION_PREFIX = (
     "You are a routing classifier. Read the user prompt below and choose "
     "EXACTLY one model + reasoning-effort cell from the available list to "
-    "handle it. Pick the cheapest cell that can answer the prompt well — "
-    "do not always pick the largest or the smallest. "
+    "handle it.\n\n"
+    "Cost asymmetry: remote cells consume the operator's weekly Codex "
+    "quota (finite, refills weekly); local cells are free (hosted on this "
+    "machine, no token cost). Prefer the smallest cell that can answer "
+    "well — pick a local cell when it can handle the task; escalate to a "
+    "more capable remote cell only when the task genuinely needs it "
+    "(complex reasoning, long context, specialized capabilities).\n\n"
     "Output ONLY the chosen cell as 'model effort' "
 )
 
@@ -173,21 +178,32 @@ def _candidates_ordered(primary: Cell, pool: list[Cell]) -> tuple[Cell, ...]:
 _EFFORT_DISPLAY_ORDER = ("low", "medium", "high", "xhigh", "default")
 
 
+def _infer_runtime_kind(cell: Cell) -> str:
+    """Heuristic: cells whose only effort level is `default` are local;
+    everything else is remote (Codex). Used to label cells in the
+    classifier prompt so the model has factual info about cost
+    asymmetry (remote consumes quota, local is free). Will be replaced
+    by an explicit field on Cell once Phase 4d threads backend
+    metadata through.
+    """
+    return "local" if cell.reasoning_effort == "default" else "remote"
+
+
 def _format_cell_list_compact(cells: list[Cell]) -> str:
     """Group cells by model and emit one line per model with all available
-    efforts and the model's context window. Compresses the per-permutation
-    enumeration (~32 lines for a typical mixed grid) down to one line per
-    distinct model (~12 lines), cutting classifier-prompt tokens roughly
-    in half on every routing decision.
+    efforts, runtime kind, and the model's context window. Compresses
+    the per-permutation enumeration (~32 lines for a typical mixed grid)
+    down to one line per distinct model (~12 lines), cutting classifier-
+    prompt tokens roughly in half on every routing decision.
 
     The cell-list format is purely for the classifier's *view*; the parser
     still substring-matches `<model> <effort>` in the classifier's reply
     against allowed_cells, so the response shape is unchanged.
 
     Format per model:
-        - <model>  <effort>|<effort>|...  (<ctx>K)
+        - <model>  <effort>|<effort>|...  (<runtime>, <ctx>K)
     or for single-effort models (typical for local cells):
-        - <model>  <effort>  (<ctx>K)
+        - <model>  <effort>  (<runtime>, <ctx>K)
     """
     by_model: dict[str, list[Cell]] = {}
     model_order: list[str] = []
@@ -206,12 +222,14 @@ def _format_cell_list_compact(cells: list[Cell]) -> str:
     for model in model_order:
         ms = by_model[model]
         efforts = sorted({c.reasoning_effort for c in ms}, key=_effort_rank)
-        # All cells of the same model share the same context_window; pick
-        # the first non-None.
         ctx = next((c.context_window for c in ms if c.context_window), None)
+        kind = _infer_runtime_kind(ms[0])
         effort_str = "|".join(efforts)
-        ctx_str = f"  ({ctx // 1000}K)" if ctx else ""
-        lines.append(f"- {model}  {effort_str}{ctx_str}")
+        meta_parts = [kind]
+        if ctx:
+            meta_parts.append(f"{ctx // 1000}K")
+        meta_str = ", ".join(meta_parts)
+        lines.append(f"- {model}  {effort_str}  ({meta_str})")
     return "\n".join(lines)
 
 
