@@ -152,12 +152,18 @@ _CONTEXT_HEADROOM_TOKENS = 4096
 
 
 def _approx_input_tokens(prompt_text: str) -> int:
-    """Rough chars/2 estimate. Overshoots vs real tokenization — that's
-    deliberate, since the filter should err toward larger-context cells
-    (better to send a 4k-prompt to a 128k model than to a 4k model that
-    will reject it).
+    """Rough chars/3 estimate.
+
+    Real Codex tokenization is ~4 chars/token for English. chars/3 leaves
+    a ~33% safety margin (overestimates real token count by ~33%) while
+    not the 2× over-pessimism the previous chars/2 inflicted — which
+    routinely declared 128K-token prompts as "268K tokens, no cell
+    fits" and emptied the filter on otherwise-fine requests. We still
+    overshoot deliberately so the filter errs toward larger-context
+    cells when uncertain; we just don't overshoot so badly that real
+    256K-window cells appear non-existent on real 128K-token prompts.
     """
-    return max(256, len(prompt_text) // 2)
+    return max(256, len(prompt_text) // 3)
 
 
 def _candidates_ordered(primary: Cell, pool: list[Cell]) -> tuple[Cell, ...]:
