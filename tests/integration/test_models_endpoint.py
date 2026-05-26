@@ -39,8 +39,9 @@ def test_v1_models_lookup_returns_404_for_unknown() -> None:
 
 
 def test_v1_models_handles_provider_slash_id_format() -> None:
-    """OpenRouter-style ids contain '/' (e.g., 'meta-model-a0g1/model-a0c2:free').
-    The path param uses :path so slashes survive routing.
+    """Some backend kinds expose model ids that contain '/' (e.g.
+    'meta-model-a0g1/model-a0a5'). The path param uses :path so
+    slashes survive routing.
     """
     backend = InMemoryFakeBackend(
         id="or",

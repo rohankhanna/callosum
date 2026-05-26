@@ -649,42 +649,6 @@ five_hourly_pause_pct = 95.0
 
 All `synthetic_*` defaults are 0, which keeps the cold-start fallback off. The weekly controller activates automatically once a backend has served at least one request and produced a quota snapshot — so on a fresh deploy with all-zero config, no synthetics fire until organic traffic establishes a quota baseline, then the weekly controller takes over.
 
-## Auto-fallback to OpenRouter free tier
-
-When all your Codex backends are weekly-exhausted, you don't have to stop working — set an `OPENROUTER_API_KEY` env var and the proxy will auto-register a free-tier OpenRouter backend that handles overflow at a "snail's pace." No TOML edits, no manual model selection.
-
-```bash
-export OPENROUTER_API_KEY=sk-or-v1-...
-uv run python -m codex_proxy
-```
-
-What you get:
-
-- The proxy fetches OpenRouter's `/api/v1/models` catalog at startup (and refreshes hourly), filters to entries where both prompt and completion pricing are 0, and exposes them as a routable backend.
-- The OpenRouter backend reports a deliberately tiny `remaining_fraction` (0.001) so the selector keeps preferring your Codex backends whenever they're viable. It only picks OpenRouter when every Codex backend is in cooldown after a 429.
-- It also "shadow-advertises" every Codex model name from your `[[backends]]` config, so a request asking for `model-a0e7` still routes when Codex is exhausted — the OpenRouter backend internally substitutes the best free model that matches the request's needs (context length, tool support, code-friendliness).
-- For `/v1/responses` requests, the OpenRouter backend translates to `/v1/chat/completions` on the way out and back, since OpenRouter doesn't natively support the Responses API.
-
-**Per-request model selection** scores candidates dynamically from each catalog entry's metadata — no hardcoded family list. New free-tier models get scored on their own merits the moment they appear in OpenRouter's catalog.
-
-Required filters:
-
-1. Tool-call support — required if the request body has `tools` set.
-2. Context length ≥ approximate input token budget.
-
-Score components (all derived from per-entry features, applied to whatever's in the catalog right now):
-
-- **Context length** (log-scale, capped at +40): bigger context = more room for codebase reading.
-- **Parameter count** parsed from the model id, e.g. `model-a0c2` → 70B (log-scale, capped at +40): bigger model with diminishing returns.
-- **Instruct-tuned bonus** (+20): presence of `architecture.instruct_type` indicates chat/instruction-tuning, not a base model.
-- **Tool support** (+20): `tools` or `tool_choice` in `supported_parameters`.
-- **Recency** (up to +30): newer `created` timestamp wins, decaying linearly to 0 over ~360 days.
-- **Code-keyword bonus** (+30): generic substring match for `coder`, `code`, `starcoder`, `codellama` in id or display name — applies to any provider, not a specific list.
-
-**Provider exclusion**: Chinese-origin cloud providers are filtered out of the catalog at parse time — Qwen, DeepSeek, Yi (01.AI), ChatGLM/GLM (Zhipu), InternLM, Doubao (ByteDance), Hunyuan (Tencent), MiniMax, Stepfun, Moonshot, Baichuan. Operator preference for cloud-routed models; if a separate local-models backend ships later, it can apply different rules. See `_BLOCKED_PROVIDER_PREFIXES` in `src/codex_proxy/backends/openrouter_free.py`.
-
-The chosen model id appears in the response and in the usage log's `model` column, so you can see exactly what was used for each call. If you don't like the choice, set a more specific model in your client (the OpenRouter id, e.g. `model-a0g3/model-a0f3-coder-32b-instruct:free`); the proxy will pass it through unchanged.
-
 ## Sticky session header (`X-Codex-Session-Id`)
 
 By default every request is an independent selection. If a client wants to stay on the same account across a sequence of requests, it sends:

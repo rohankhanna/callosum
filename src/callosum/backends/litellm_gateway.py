@@ -293,7 +293,7 @@ def _strip_codex_only_fields(body: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------- /v1/responses ↔ /v1/chat/completions translation -------------
-# Copied from openrouter_free.py rather than extracted to a shared module;
+# Translation helpers live here rather than a shared module — they're the
 # refactor if a third backend needs the same translation.
 
 

@@ -10,7 +10,6 @@ from callosum.sse_tee import ResponsesStreamSummary
 BackendKind = Literal[
     "codex_auth_vault",
     "credential_proxy",
-    "openrouter_free",
     "litellm_gateway",
 ]
 HealthReason = Literal["ok", "rate_limited", "auth_invalid", "network", "unknown"]
@@ -56,8 +55,8 @@ class Backend(Protocol):
     def advertised_models(self) -> frozenset[str]:
         """The set of model names this backend will accept. Implementations
         may set it as a plain attribute (Codex backends, fakes — static after
-        construction) or compute it dynamically (the OpenRouter free backend
-        recomputes from a periodically-refreshed catalog).
+        construction) or compute it dynamically (the LiteLLM gateway backend
+        recomputes from each periodic `/v1/models` poll).
         """
         ...
 

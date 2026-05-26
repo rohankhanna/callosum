@@ -15,7 +15,6 @@ from callosum.backends.litellm_gateway import (
     DEFAULT_BASE_URL as LITELLM_GATEWAY_DEFAULT_BASE_URL,
 )
 from callosum.backends.litellm_gateway import LiteLLMGatewayBackend
-from callosum.backends.openrouter_free import OpenRouterFreeBackend
 from callosum.config import build_backends, load_config
 from callosum.usage_log import UsageLog
 
@@ -50,25 +49,6 @@ def main() -> None:
 
     cfg = load_config(args.config)
     backends = build_backends(cfg)
-    # Auto-register OpenRouter free-tier as a fallback backend if the user
-    # has set OPENROUTER_API_KEY. No TOML edit required — the backend
-    # auto-discovers models from OpenRouter's catalog and picks per request.
-    # Shadow-advertise whatever the other (Codex) backends currently advertise,
-    # re-evaluated on every access so dynamic model discovery propagates.
-    openrouter_key = os.environ.get("OPENROUTER_API_KEY")
-    if openrouter_key:
-        codex_backends = list(backends)  # snapshot of non-OpenRouter backends
-
-        def _shadow_models_now() -> frozenset[str]:
-            return frozenset(m for b in codex_backends for m in b.advertised_models)
-
-        backends.append(
-            OpenRouterFreeBackend(
-                id="openrouter-free",
-                api_key=openrouter_key,
-                shadow_models=_shadow_models_now,
-            )
-        )
     # Auto-register a LiteLLM gateway backend when the operator points us at
     # one. Gateway is provided by `local LLM gateway` and exposes local models
     # (ollama / vllm / model-a0e0 / etc.) behind one OpenAI-compatible URL.

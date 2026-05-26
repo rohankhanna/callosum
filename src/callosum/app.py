@@ -318,8 +318,8 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # Make the loaded-backend roster trivially greppable in the launch log
-        # so operators can see at a glance whether OPENROUTER_API_KEY etc. were
-        # picked up by the process they actually launched.
+        # so operators can see at a glance whether CALLOSUM_LITELLM_GATEWAY_ENABLED
+        # etc. were picked up by the process they actually launched.
         ids = ", ".join(b.id for b in backends_list) if backends_list else "(none)"
         logger.warning("loaded %d backend(s): %s", len(backends_list), ids)
 
@@ -2855,7 +2855,7 @@ def _evaluate_diagnostic(
 
     `codex_auth_vault` backends require Codex-shape contract guarantees —
     quota headers + Responses-API SSE terminal events. Non-Codex backends
-    (e.g. `openrouter_free`) only need to confirm a 2xx came back; they
+    (e.g. `litellm_gateway`) only need to confirm a 2xx came back; they
     don't carry Codex-specific headers and the contract definition differs.
     """
     if kind == "codex_auth_vault":
@@ -2892,8 +2892,8 @@ def _evaluate_codex_diagnostic(backend_id: str, handle: CallHandle, model: str) 
 
 def _evaluate_generic_diagnostic(backend_id: str, handle: CallHandle, model: str) -> dict[str, Any]:
     """For non-Codex backends the contract is much weaker — only verify a 2xx
-    came back. Stream-summary-style checks are Codex-specific (the OpenRouter
-    backend yields synthetic SSE events that don't flow through
+    came back. Stream-summary-style checks are Codex-specific (the LiteLLM
+    gateway backend yields synthetic SSE events that don't flow through
     ResponsesStreamCollector, so requiring stream_summary here would be a
     false negative).
     """
