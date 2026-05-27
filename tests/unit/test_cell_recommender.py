@@ -965,6 +965,40 @@ def test_heuristic_keeps_local_when_prompt_below_ceiling() -> None:
     assert out.cell == LOCAL_CELL  # small prompt, local pick stands
 
 
+def test_heuristic_does_not_skip_local_when_no_remote_available() -> None:
+    """Critical offline-failover invariant: even on a complex prompt, if no
+    remote cell is routable (offline, all codex backends filtered out by
+    `_filter_cells_to_routable`), the heuristic must NOT skip local —
+    otherwise the request dies on a backend that can't be reached. Better
+    to send a complex prompt to model-a0d5 (imperfect answer) than to model-a0f8
+    (no answer at all)."""
+    cheap = _FakeBackend(canned_text="should-not-be-called")
+    router = _FakeBackend(raise_error=True)
+    rec = _make_router_recommender(cheap_backend=cheap, router_backend=router)
+    # Big prompt → would normally trigger skip_local.
+    big_prompt = "x" * 60_000
+    body = {"messages": [{"role": "user", "content": big_prompt}]}
+    # compatible_cells contains ONLY local cells — simulates the offline
+    # scenario where remote codex cells have been filtered out by the
+    # routability filter upstream of recommend().
+    local_only_grid = [LOCAL_CELL]
+    out = asyncio.run(
+        rec.recommend(
+            body,
+            allowed_cells=local_only_grid,
+            fallback=LOCAL_CELL,
+            fallback_preference=[
+                "model-a0d5-3-31b-ollama default",  # local — must NOT be skipped offline
+                "model-a0e7 high",                # remote — but not in grid
+            ],
+            heuristic_local_complexity_token_ceiling=8000,
+        )
+    )
+    # Local picked despite being a complex prompt; offline failover preserved.
+    assert out.source == "heuristic"
+    assert out.cell == LOCAL_CELL
+
+
 def test_heuristic_ceiling_zero_disables_escalation() -> None:
     """ceiling=0 is the disabled sentinel — local cells are never skipped
     regardless of prompt size. Backward compatibility with operators who

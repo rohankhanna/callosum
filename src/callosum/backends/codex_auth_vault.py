@@ -132,6 +132,20 @@ class CodexAuthVaultBackend:
         self._last_quota: Any = (
             None  # CodexQuotaSnapshot | None, loose typed to avoid import cycle noise
         )
+        # Offline/network-failure tracking. When responses() or
+        # responses_stream() raise transport-layer errors (httpx.HTTPError —
+        # ConnectError, ConnectTimeout, NameResolutionError, etc.) we
+        # bump a consecutive-failures counter. Once it hits the threshold,
+        # usage_snapshot() reports a cooldown until the next successful call
+        # resets it. That lets `_filter_cells_to_routable` correctly exclude
+        # this backend from the routable set when the operator is offline,
+        # so the recommender's heuristic-tier fallback can pick a local cell
+        # instead of repeatedly trying a Codex cell whose request will hit
+        # NXDOMAIN. Mirrors the LiteLLM gateway's _healthy flag.
+        self._consecutive_transport_failures: int = 0
+        self._transport_cooldown_until_ts: float = 0.0
+        self._transport_failure_threshold: int = 3
+        self._transport_cooldown_seconds: float = 30.0
 
     @property
     def advertised_models(self) -> frozenset[str]:
@@ -238,6 +252,28 @@ class CodexAuthVaultBackend:
             self._state_store.save_usage(self.id, self._usage)
         return self._usage
 
+    def _on_transport_failure(self) -> None:
+        """Record an httpx-level transport failure. After threshold consecutive
+        failures, set a short cooldown so usage_snapshot reports this backend
+        unroutable. Reset by the next successful round-trip in
+        `_on_transport_success`. Critical for offline failover: without this,
+        an offline operator's Codex backend keeps looking routable to
+        `_filter_cells_to_routable`, and the recommender keeps picking it
+        even though every request will hit NXDOMAIN.
+        """
+        self._consecutive_transport_failures += 1
+        if self._consecutive_transport_failures >= self._transport_failure_threshold:
+            self._transport_cooldown_until_ts = (
+                time.time() + self._transport_cooldown_seconds
+            )
+
+    def _on_transport_success(self) -> None:
+        """Successful HTTP round-trip — clear the offline indicators so this
+        backend becomes routable again. Even one successful call is enough
+        evidence that the network path is back."""
+        self._consecutive_transport_failures = 0
+        self._transport_cooldown_until_ts = 0.0
+
     async def usage_snapshot(self) -> UsageSnapshot:
         # Derive `weekly_exhausted` PURELY from the most recent upstream
         # quota snapshot — no sticky propagation. If upstream's most recent
@@ -259,11 +295,27 @@ class CodexAuthVaultBackend:
             weekly_exhausted = self._last_quota.weekly_used_percent >= 99
         else:
             weekly_exhausted = self._usage.weekly_exhausted
-        if weekly_exhausted == self._usage.weekly_exhausted:
+        # Transport-layer offline override: if our recent calls have been
+        # failing at the httpx level (DNS, connect refused, etc.), surface
+        # that as a cooldown so the routability filter excludes us.
+        # Overrides whatever cooldown_until_ts the in-memory snapshot
+        # already carries; the larger of the two wins so genuine
+        # upstream-imposed cooldowns aren't shortened by transient
+        # network blips.
+        now = time.time()
+        snap_cooldown = self._usage.cooldown_until_ts
+        effective_cooldown = snap_cooldown
+        if self._transport_cooldown_until_ts > now:
+            if effective_cooldown is None or self._transport_cooldown_until_ts > effective_cooldown:
+                effective_cooldown = self._transport_cooldown_until_ts
+        if (
+            weekly_exhausted == self._usage.weekly_exhausted
+            and effective_cooldown == self._usage.cooldown_until_ts
+        ):
             return self._usage
         return UsageSnapshot(
             remaining_fraction=self._usage.remaining_fraction,
-            cooldown_until_ts=self._usage.cooldown_until_ts,
+            cooldown_until_ts=effective_cooldown,
             weekly_exhausted=weekly_exhausted,
             probed_at_ts=self._usage.probed_at_ts,
         )
@@ -379,8 +431,11 @@ class CodexAuthVaultBackend:
                             classification="transient",
                             message="upstream stream ended without response.completed event",
                         )
+                    # Successful round-trip: reset the offline tracker.
+                    self._on_transport_success()
                     return completed
             except httpx.HTTPError as exc:
+                self._on_transport_failure()
                 raise BackendError(classification="transient", message=str(exc)) from exc
         # Unreachable: loop either returns or raises on attempt 2.
         raise BackendError(classification="auth_invalid", message="auth retry exhausted")
@@ -422,8 +477,11 @@ class CodexAuthVaultBackend:
                         yield chunk
                     if handle is not None:
                         handle.stream_summary = collector.summary
+                    # Successful round-trip: reset the offline tracker.
+                    self._on_transport_success()
                     return
             except httpx.HTTPError as exc:
+                self._on_transport_failure()
                 raise BackendError(classification="transient", message=str(exc)) from exc
 
     async def aclose(self) -> None:

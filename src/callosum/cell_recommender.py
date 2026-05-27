@@ -831,14 +831,24 @@ class CellRecommender:
 
             # Router failed or circuit open → heuristic tier. When the
             # prompt is complex (above operator-configured token ceiling)
-            # skip local entries in the preference list — a local model
-            # probably can't handle this well, and silently dumping it
-            # on model-a0d5 just because model-a0d5 is first in preference would
-            # waste the user's time. Walks to the first remote entry
-            # instead, which is the offline-failover-correct behavior.
+            # AND at least one remote cell is currently routable, skip
+            # local entries in the preference list — a local model
+            # probably can't handle a 30K-token reasoning task well.
+            #
+            # CRITICAL: only skip when remote is actually available. If
+            # we're offline (all remote backends filtered out of
+            # compatible_cells by `_filter_cells_to_routable`), skipping
+            # locals leaves the heuristic with nothing — and the user's
+            # request dies on a backend that can't be reached. Better
+            # to send a complex prompt to a local model that can answer
+            # imperfectly than to a remote model that can't answer at all.
+            _has_routable_remote = any(
+                _infer_runtime_kind(c) == "remote" for c in compatible_cells
+            )
             _skip_local = (
                 heuristic_local_complexity_token_ceiling > 0
                 and est_tokens > heuristic_local_complexity_token_ceiling
+                and _has_routable_remote
             )
             heuristic_cell = self._pick_heuristic_fallback(
                 fallback_preference or [],

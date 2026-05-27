@@ -981,3 +981,82 @@ def test_client_version_falls_back_when_file_malformed(
     (home / ".codex" / "version.json").write_text("{not valid json")
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     assert _resolve_codex_client_version() == _DEFAULT_CLIENT_VERSION
+
+
+# ---------- offline / transport-failure tracking ---------------------------
+
+
+async def test_transport_failures_set_cooldown_after_threshold(tmp_path: Path) -> None:
+    """Three consecutive transport-level errors (ConnectError, DNS failure,
+    etc.) flip the backend into cooldown so `_filter_cells_to_routable`
+    excludes it. Critical for offline-failover: without this, the
+    recommender keeps choosing remote cells the request can never reach."""
+    auth_path = tmp_path / "auth.json"
+    _write_auth_json(auth_path)
+
+    call_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        call_count["n"] += 1
+        raise httpx.ConnectError("offline")
+
+    vault = _make_vault(auth_path)
+    backend = CodexAuthVaultBackend(
+        id="vault-a",
+        vault=vault,
+        advertised_models=frozenset({"model-a0d0"}),
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        # First 2 failures: no cooldown yet.
+        for _ in range(2):
+            with pytest.raises(BackendError):
+                await backend.responses({"model": "model-a0d0", "input": "hi"})
+        snap = await backend.usage_snapshot()
+        assert snap.cooldown_until_ts is None
+        # 3rd failure crosses the threshold → cooldown set.
+        with pytest.raises(BackendError):
+            await backend.responses({"model": "model-a0d0", "input": "hi"})
+        snap = await backend.usage_snapshot()
+        assert snap.cooldown_until_ts is not None
+        assert snap.cooldown_until_ts > time.time()
+    finally:
+        await backend.aclose()
+
+
+async def test_transport_success_clears_offline_cooldown(tmp_path: Path) -> None:
+    """One successful round-trip wipes the consecutive-failures counter and
+    clears the transport cooldown. Otherwise the backend would stay
+    excluded long after the network comes back."""
+    auth_path = tmp_path / "auth.json"
+    _write_auth_json(auth_path)
+
+    failure_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if failure_count["n"] < 3:
+            failure_count["n"] += 1
+            raise httpx.ConnectError("offline")
+        # 4th call: succeed. Return a minimal Responses-API SSE stream.
+        return _sse_response({"id": "r1", "output": []})
+
+    vault = _make_vault(auth_path)
+    backend = CodexAuthVaultBackend(
+        id="vault-a",
+        vault=vault,
+        advertised_models=frozenset({"model-a0d0"}),
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        # Trip the offline cooldown.
+        for _ in range(3):
+            with pytest.raises(BackendError):
+                await backend.responses({"model": "model-a0d0", "input": "hi"})
+        snap = await backend.usage_snapshot()
+        assert snap.cooldown_until_ts is not None
+        # One successful call → counter resets, cooldown cleared.
+        await backend.responses({"model": "model-a0d0", "input": "hi"})
+        snap = await backend.usage_snapshot()
+        assert snap.cooldown_until_ts is None
+    finally:
+        await backend.aclose()
