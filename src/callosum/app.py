@@ -297,12 +297,20 @@ def create_app(
             reasoning_effort=auto_cfg.cell_recommender_cheap_effort,
             context_window=None,
         )
+        # Local-router resolution happens in the lifespan startup hook
+        # below — after refresh_advertised_models populates backends that
+        # build their catalog lazily (LiteLLM gateway). Constructing with
+        # router_backend=None here keeps the recommender on its legacy
+        # path until the lifespan wires the router in.
         cell_recommender = CellRecommender(
             cheap_backend=backends_list[0],
             cheap_cell=cheap_cell,
             cache_max=auto_cfg.cell_recommender_cache_max,
             cache_ttl_seconds=auto_cfg.cell_recommender_cache_ttl_seconds,
             upstream_timeout_s=auto_cfg.cell_recommender_upstream_timeout_s,
+            router_timeout_s=auto_cfg.cell_recommender_router_timeout_s,
+            router_circuit_threshold=auto_cfg.cell_recommender_router_circuit_threshold,
+            router_circuit_cooldown_s=auto_cfg.cell_recommender_router_circuit_cooldown_s,
         )
 
     smoke_tester = _PeriodicSmokeTester(
@@ -349,6 +357,42 @@ def create_app(
                         state_store.set_model_release_timestamp(time.time())
                 except Exception:
                     logger.exception("startup model-list refresh failed for %r", backend.id)
+        # Local-router resolution. Now that lazy-catalog backends (e.g. the
+        # LiteLLM gateway) have refreshed, find the backend advertising the
+        # configured router model and wire it into the recommender. When
+        # router_model is unset OR no backend serves it, the recommender
+        # stays on its legacy path.
+        if cell_recommender is not None:
+            configured_router_model = auto_cfg.cell_recommender_router_model
+            if configured_router_model:
+                resolved_router_backend: Backend | None = None
+                for _b in backends_list:
+                    if configured_router_model in _b.advertised_models:
+                        resolved_router_backend = _b
+                        break
+                if resolved_router_backend is not None:
+                    resolved_router_cell = Cell(
+                        model=configured_router_model,
+                        reasoning_effort=auto_cfg.cell_recommender_router_effort,
+                        context_window=None,
+                    )
+                    cell_recommender.set_router(
+                        backend=resolved_router_backend,
+                        cell=resolved_router_cell,
+                    )
+                    logger.warning(
+                        "cell_recommender: local router enabled — model=%r effort=%r backend=%r",
+                        resolved_router_cell.model,
+                        resolved_router_cell.reasoning_effort,
+                        resolved_router_backend.id,
+                    )
+                else:
+                    logger.warning(
+                        "cell_recommender: router_model=%r is configured but no "
+                        "backend advertises it; router stays off, legacy classifier "
+                        "path active",
+                        configured_router_model,
+                    )
         if startup_smoke_test and backends_list:
             await _run_startup_smoke_test(backends_list)
         smoke_tester.start()
@@ -452,6 +496,7 @@ def create_app(
         # see at a glance if the cheap classifier is biased (e.g. always
         # picking itself, or always picking the largest) and whether
         # off-peak comparison sampling has fired.
+        router_model_cfg = auto_cfg.cell_recommender_router_model
         recommender_block: dict[str, Any] = {
             "enabled": cell_recommender is not None,
             "cheap_cell": (
@@ -459,6 +504,12 @@ def create_app(
                 f"{auto_cfg.cell_recommender_cheap_effort}"
             ),
             "alternative_classifier_pct": auto_cfg.cell_recommender_alternative_classifier_pct,
+            "router_cell": (
+                f"{router_model_cfg} {auto_cfg.cell_recommender_router_effort}"
+                if router_model_cfg
+                else None
+            ),
+            "fallback_preference": list(auto_cfg.cell_recommender_fallback_preference),
             "stats": {},
             "recommendation_counts": {},
             "classifier_call_counts": {},
@@ -471,6 +522,17 @@ def create_app(
                 "cache_hit_rate": round(stats.get("cache_hits", 0) / calls, 3),
                 "fallback_rate": round(stats.get("fallback_count", 0) / calls, 3),
                 "alternative_rate": round(stats.get("alternative_calls", 0) / calls, 3),
+                "router_rate": round(stats.get("router_calls", 0) / calls, 3),
+                "router_failure_rate": (
+                    round(
+                        stats.get("router_failures", 0)
+                        / max(stats.get("router_calls", 0), 1),
+                        3,
+                    )
+                    if stats.get("router_calls", 0)
+                    else 0.0
+                ),
+                "heuristic_rate": round(stats.get("heuristic_hits", 0) / calls, 3),
             }
             recommender_block["recommendation_counts"] = (
                 cell_recommender.recommendation_counts
@@ -932,15 +994,22 @@ async def _dispatch_internal(
     if session_id is not None and usage_log is not None:
         session_prompt_tokens = usage_log.last_session_prompt_tokens(session_id)
 
-    # Virtual model rewrite. Every model=auto / model=auto-learning /
-    # model=auto-learning-synthetic request now goes through the cell
-    # recommender — the cheap upstream classifier picks which (model,
-    # effort) cell should handle the prompt. The two "learning" virtual
-    # names are kept as aliases for backward compatibility with clients
-    # that still set them, but they no longer drive data collection
-    # (model-based routing was abandoned). The body is mutated in place
-    # so the downstream selector and backend see the resolved pair.
-    if requested_model in ("auto", "auto-learning", "auto-learning-synthetic"):
+    # Virtual model rewrite. By default every request — regardless of
+    # what model name the client sent — now goes through the cell
+    # recommender so the router's decision is authoritative for ALL
+    # traffic, not just clients that opted into `auto`/`auto-learning`.
+    # This is the only way for explicit-model requests (Codex CLI sending
+    # `model-a0e8`, Hermes sending `model-a0c3`, etc.) to benefit from
+    # offline failover and local-cell preference: otherwise they bypass
+    # the router entirely and die when their named model's backend is
+    # unreachable.
+    #
+    # Operators who want the legacy "explicit model = pass-through"
+    # behavior can set `cell_recommender_route_all_models = false` in
+    # config.toml; then the recommender only runs on `auto*` requests.
+    _route_all = auto_cfg.cell_recommender_route_all_models
+    _is_virtual = requested_model in ("auto", "auto-learning", "auto-learning-synthetic")
+    if _is_virtual or _route_all:
         fallback_cell = Cell(
             model=auto_cfg.cell_recommender_cheap_model,
             reasoning_effort=auto_cfg.cell_recommender_cheap_effort,
@@ -966,24 +1035,54 @@ async def _dispatch_internal(
                 if _filtered:
                     cells_now = _filtered
             classifier_override: Cell | None = None
-            alt_pct = auto_cfg.cell_recommender_alternative_classifier_pct
-            if alt_pct > 0 and random.random() < alt_pct:
-                cheap = (auto_cfg.cell_recommender_cheap_model,
-                         auto_cfg.cell_recommender_cheap_effort)
-                alternatives = [
-                    c for c in cells_now
-                    if (c.model, c.reasoning_effort) != cheap
-                ]
-                if alternatives:
-                    classifier_override = random.choice(alternatives)
+            # Alternative-classifier rotation only applies to the legacy
+            # remote-classifier path. When the local router is configured
+            # the entire bias-mitigation rationale is gone (the router IS
+            # local), and forcing a remote classifier here would silently
+            # reintroduce the bias the router was opted into to escape.
+            if auto_cfg.cell_recommender_router_model is None:
+                alt_pct = auto_cfg.cell_recommender_alternative_classifier_pct
+                if alt_pct > 0 and random.random() < alt_pct:
+                    cheap = (auto_cfg.cell_recommender_cheap_model,
+                             auto_cfg.cell_recommender_cheap_effort)
+                    alternatives = [
+                        c for c in cells_now
+                        if (c.model, c.reasoning_effort) != cheap
+                    ]
+                    if alternatives:
+                        classifier_override = random.choice(alternatives)
             rec = await cell_recommender.recommend(
                 body,
                 allowed_cells=cells_now,
                 fallback=fallback_cell,
                 classifier_cell=classifier_override,
                 local_exploration_pct=auto_cfg.cell_recommender_local_exploration_pct,
+                fallback_preference=auto_cfg.cell_recommender_fallback_preference,
+                heuristic_local_complexity_token_ceiling=(
+                    auto_cfg.cell_recommender_heuristic_local_complexity_token_ceiling
+                ),
             )
             chosen = rec.cell
+            # VRAM safety: if the router picked a DIFFERENT local cell than
+            # itself, evict the router from GPU memory BEFORE dispatch
+            # loads the chosen cell. Otherwise both large local models
+            # co-reside until ollama's TTL expires, which on a
+            # constrained-VRAM box risks OOM. Synchronous await: the
+            # dispatch must wait so the load order is router-out then
+            # chosen-in, never both at once. Best-effort — any error
+            # is swallowed inside unload_model() and dispatch continues.
+            _rb = cell_recommender.router_backend
+            _rc = cell_recommender.router_cell
+            if (
+                _rb is not None
+                and _rc is not None
+                and chosen.model != _rc.model
+                and chosen.reasoning_effort == "default"  # local-cell sentinel
+                and chosen.model in _rb.advertised_models
+            ):
+                _unload = getattr(_rb, "unload_model", None)
+                if _unload is not None:
+                    await _unload(_rc.model)
             # Capture recommender provenance for the request log — training
             # consumers downstream filter on recommender_source IN
             # ('upstream', 'alternative') to get unbiased classifier picks.

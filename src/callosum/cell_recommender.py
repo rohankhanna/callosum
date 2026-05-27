@@ -306,6 +306,11 @@ class CellRecommender:
         cache_max: int = 4096,
         cache_ttl_seconds: int = 3600,
         upstream_timeout_s: float = 30.0,
+        router_backend: Backend | None = None,
+        router_cell: Cell | None = None,
+        router_timeout_s: float = 1.5,
+        router_circuit_threshold: int = 3,
+        router_circuit_cooldown_s: float = 60.0,
     ) -> None:
         self._cheap_backend = cheap_backend
         self._configured_cheap_cell = cheap_cell
@@ -313,6 +318,18 @@ class CellRecommender:
         self._cache_max = cache_max
         self._cache_ttl_seconds = cache_ttl_seconds
         self._upstream_timeout_s = upstream_timeout_s
+        # Router path. router_backend is set iff the operator configured a
+        # router_model AND a backend advertises it. When None, the
+        # recommender falls through to the legacy remote-classifier path
+        # entirely. router_cell tells us which model + effort to ask for
+        # against router_backend.
+        self._router_backend = router_backend
+        self._router_cell = router_cell
+        self._router_timeout_s = router_timeout_s
+        self._router_circuit_threshold = router_circuit_threshold
+        self._router_circuit_cooldown_s = router_circuit_cooldown_s
+        self._router_consecutive_failures = 0
+        self._router_circuit_open_until = 0.0
         self._stats: dict[str, int] = {
             "calls": 0,
             "cache_hits": 0,
@@ -320,6 +337,10 @@ class CellRecommender:
             "upstream_failures": 0,
             "fallback_count": 0,
             "alternative_calls": 0,
+            "router_calls": 0,
+            "router_failures": 0,
+            "router_circuit_opens": 0,
+            "heuristic_hits": 0,
         }
         self._recommendation_counts: dict[str, int] = {}
         # Per-classifier-cell call counts: how many times each cell was used
@@ -327,6 +348,30 @@ class CellRecommender:
         # see if bias mitigation actually rotated through alternatives at the
         # configured rate.
         self._classifier_call_counts: dict[str, int] = {}
+
+    def set_router(self, *, backend: Backend | None, cell: Cell | None) -> None:
+        """Wire (or un-wire) the local router AFTER construction.
+
+        Useful because the LiteLLM gateway backend's catalog isn't
+        populated until the lifespan startup refresh runs, so the
+        router-backend lookup can't happen at create_app time. The
+        lifespan calls this after refresh_advertised_models completes.
+        Either both args set or both None — never mix.
+        """
+        self._router_backend = backend
+        self._router_cell = cell
+        # Reset circuit state on (re)wire so a stale open circuit from a
+        # previous binding doesn't immediately suppress the new router.
+        self._router_consecutive_failures = 0
+        self._router_circuit_open_until = 0.0
+
+    @property
+    def router_backend(self) -> Backend | None:
+        return self._router_backend
+
+    @property
+    def router_cell(self) -> Cell | None:
+        return self._router_cell
 
     @property
     def stats(self) -> dict[str, int]:
@@ -443,6 +488,138 @@ class CellRecommender:
             "store": False,
         }
 
+    def _circuit_is_open(self) -> bool:
+        """True while the router circuit is in cooldown.
+
+        Set by _ask_router when consecutive failures cross the threshold.
+        While open, recommend() skips the router call entirely and goes
+        straight to the heuristic tier so the user doesn't pay router-
+        timeout latency on every request when the gateway is down.
+        """
+        return time.time() < self._router_circuit_open_until
+
+    def _pick_heuristic_fallback(
+        self,
+        preference: list[str],
+        compatible_cells: list[Cell],
+        *,
+        skip_local: bool = False,
+    ) -> Cell | None:
+        """Walk preference order; return first 'model effort' present in
+        compatible_cells. preference is operator-configured (typically
+        local-first so offline fallback stays offline-clean). Returns None
+        when nothing matches — caller falls through to the last-resort
+        cell.
+
+        Matching is case-insensitive on both model and effort. Whitespace
+        in entries is trimmed.
+
+        `skip_local`: when True, skip every preference entry whose
+        resolved cell is a local cell (effort == 'default' sentinel).
+        Used by the size-aware escalation path: when the router times out
+        on a complex prompt, we don't want the heuristic to default-pick
+        model-a0d5 just because it's first in the preference list — model-a0d5
+        probably can't handle a 30K-token reasoning task. Walking past
+        local entries finds the next remote preference.
+        """
+        if not preference or not compatible_cells:
+            return None
+        cells_by_key = {
+            f"{c.model.lower()} {c.reasoning_effort.lower()}": c
+            for c in compatible_cells
+        }
+        for pref in preference:
+            key = " ".join(pref.strip().lower().split())
+            cell = cells_by_key.get(key)
+            if cell is None:
+                continue
+            if skip_local and _infer_runtime_kind(cell) == "local":
+                continue
+            return cell
+        return None
+
+    async def _ask_router(
+        self,
+        prompt_text: str,
+        allowed_cells: list[Cell],
+    ) -> tuple[Cell | None, str | None]:
+        """One non-streaming call to the configured local router.
+
+        Bounded by router_timeout_s (much tighter than upstream_timeout_s —
+        the router is local and should respond fast or fail fast). Updates
+        circuit-breaker state on failure so a downed gateway doesn't cost
+        timeout latency on every subsequent request.
+        """
+        if self._router_backend is None or self._router_cell is None:
+            return (None, None)
+
+        self._stats["router_calls"] += 1
+        body = self._build_recommender_body(
+            prompt_text, allowed_cells, classifier_cell=self._router_cell
+        )
+        # Hard-pin the request to the router cell so _build_recommender_body's
+        # resolution path can't substitute something else.
+        body["model"] = self._router_cell.model
+        body["reasoning"] = {"effort": self._router_cell.reasoning_effort}
+        # Thinking models (model-a0e5, model-a0g2, model-a0c6, etc.) burn dozens
+        # of tokens on internal chain-of-thought before producing visible
+        # output. Without an explicit budget, the default cap (which on
+        # LiteLLM+ollama tends to be low) gets exhausted by thinking
+        # tokens and the visible answer ends up empty. 1024 is generous
+        # for a routing decision (~5 tokens of actual answer) but covers
+        # the worst-case thinking burst. Non-thinking models ignore the
+        # extra headroom — they just stop at their natural answer.
+        body["max_tokens"] = 1024
+
+        try:
+            result = await asyncio.wait_for(
+                self._router_backend.responses(body, CallHandle()),
+                timeout=self._router_timeout_s,
+            )
+        except (BackendError, asyncio.TimeoutError, Exception) as exc:
+            self._stats["router_failures"] += 1
+            self._router_consecutive_failures += 1
+            if (
+                self._router_consecutive_failures
+                >= self._router_circuit_threshold
+                and self._router_circuit_open_until <= time.time()
+            ):
+                self._router_circuit_open_until = (
+                    time.time() + self._router_circuit_cooldown_s
+                )
+                self._stats["router_circuit_opens"] += 1
+                logger.warning(
+                    "cell_recommender: router circuit opened (%d consecutive "
+                    "failures); skipping router for %.0fs",
+                    self._router_consecutive_failures,
+                    self._router_circuit_cooldown_s,
+                )
+            else:
+                logger.warning(
+                    "cell_recommender: router call failed (%s); falling through to heuristic tier",
+                    type(exc).__name__,
+                )
+            return (None, None)
+
+        # Success — reset circuit state so transient blips don't accumulate.
+        self._router_consecutive_failures = 0
+        raw_text: str | None = None
+        try:
+            output = result.get("output") or []
+            for item in output:
+                for c in item.get("content") or []:
+                    text = c.get("text")
+                    if isinstance(text, str) and text.strip():
+                        raw_text = text
+                        break
+                if raw_text is not None:
+                    break
+        except (AttributeError, KeyError, IndexError, TypeError):
+            pass
+        if raw_text is None:
+            return (None, None)
+        return (_parse_cell_from_output(raw_text, allowed_cells), raw_text)
+
     async def _ask_upstream(
         self,
         prompt_text: str,
@@ -529,6 +706,8 @@ class CellRecommender:
         fallback: Cell,
         classifier_cell: Cell | None = None,
         local_exploration_pct: float = 0.0,
+        fallback_preference: list[str] | None = None,
+        heuristic_local_complexity_token_ceiling: int = 0,
     ) -> Recommendation:
         """Return a Cell recommendation for this request body.
 
@@ -582,9 +761,14 @@ class CellRecommender:
         # would otherwise never produce (it prefers familiar Codex names).
         # Does not write to the prompt-text cache so the cheap classifier's
         # cache stays clean for non-exploration paths. Only fires on the
-        # non-alternative-classifier path (the alternative path is itself
-        # a different bias-mitigation rotation and we don't compound them).
-        if classifier_cell is None and local_exploration_pct > 0:
+        # non-alternative-classifier path AND when the local router isn't
+        # configured (the router itself produces local picks freely;
+        # extra random exploration would muddy that signal).
+        if (
+            classifier_cell is None
+            and local_exploration_pct > 0
+            and self._router_backend is None
+        ):
             local_cells = [c for c in compatible_cells if _infer_runtime_kind(c) == "local"]
             if local_cells and random.random() < local_exploration_pct:
                 chosen = random.choice(local_cells)
@@ -603,6 +787,93 @@ class CellRecommender:
                 )
 
         key = _cache_key(prompt_text)
+
+        # --- Local-router branch ---
+        # When a router_backend is configured AND no alternative classifier
+        # was explicitly requested, route THIS decision through the local
+        # router instead of the remote cheap classifier. The whole point
+        # is to escape remote-model selection bias — silently falling back
+        # to the cheap remote classifier here would defeat that, so on
+        # router failure we go to the heuristic tier and then the legacy
+        # `fallback` cell, never to _ask_upstream.
+        if self._router_backend is not None and classifier_cell is None:
+            cached = self._cache_get(key)
+            if cached is not None:
+                self._stats["cache_hits"] += 1
+                self._record_recommendation(cached)
+                return Recommendation(
+                    cell=cached,
+                    source="cache",
+                    cache_key=key,
+                    latency_s=time.time() - t0,
+                    candidates=_candidates_ordered(cached, compatible_cells),
+                )
+
+            router_chosen: Cell | None = None
+            router_raw: str | None = None
+            if not self._circuit_is_open():
+                router_chosen, router_raw = await self._ask_router(
+                    prompt_text, compatible_cells
+                )
+
+            if router_chosen is not None:
+                self._cache_put(key, router_chosen)
+                self._record_recommendation(router_chosen)
+                return Recommendation(
+                    cell=router_chosen,
+                    source="router",
+                    cache_key=key,
+                    latency_s=time.time() - t0,
+                    classifier_cell=self._router_cell,
+                    raw_output=router_raw,
+                    candidates=_candidates_ordered(router_chosen, compatible_cells),
+                )
+
+            # Router failed or circuit open → heuristic tier. When the
+            # prompt is complex (above operator-configured token ceiling)
+            # skip local entries in the preference list — a local model
+            # probably can't handle this well, and silently dumping it
+            # on model-a0d5 just because model-a0d5 is first in preference would
+            # waste the user's time. Walks to the first remote entry
+            # instead, which is the offline-failover-correct behavior.
+            _skip_local = (
+                heuristic_local_complexity_token_ceiling > 0
+                and est_tokens > heuristic_local_complexity_token_ceiling
+            )
+            heuristic_cell = self._pick_heuristic_fallback(
+                fallback_preference or [],
+                compatible_cells,
+                skip_local=_skip_local,
+            )
+            if heuristic_cell is not None:
+                self._stats["heuristic_hits"] += 1
+                self._record_recommendation(heuristic_cell)
+                return Recommendation(
+                    cell=heuristic_cell,
+                    source="heuristic",
+                    cache_key=key,
+                    latency_s=time.time() - t0,
+                    classifier_cell=self._router_cell,
+                    raw_output=router_raw,
+                    candidates=_candidates_ordered(heuristic_cell, compatible_cells),
+                )
+
+            # No heuristic match → last-resort cell. Don't cache: when the
+            # router recovers we want the next request to retry it instead
+            # of being permanently pinned to the fallback.
+            self._stats["fallback_count"] += 1
+            self._record_recommendation(fallback)
+            return Recommendation(
+                cell=fallback,
+                source="fallback",
+                cache_key=key,
+                latency_s=time.time() - t0,
+                classifier_cell=self._router_cell,
+                raw_output=router_raw,
+                candidates=_candidates_ordered(fallback, compatible_cells),
+            )
+
+        # --- Legacy remote-classifier path (router not configured) ---
         is_alternative = classifier_cell is not None
         if is_alternative:
             cls = classifier_cell

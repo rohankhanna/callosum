@@ -683,3 +683,328 @@ def test_alternative_classifier_does_not_pollute_cache() -> None:
     assert alt_result.source == "alternative"
     assert cheap_result.source == "upstream"  # NOT cache
     assert rec.stats["upstream_calls"] == 2
+
+
+# ---------- local-router path ----------------------------------------------
+
+
+LOCAL_CELL = Cell(
+    model="model-a0d5-3-31b-ollama",
+    reasoning_effort="default",
+    context_window=262_144,
+)
+ROUTER_GRID = [*CELLS, LOCAL_CELL]
+
+
+def _make_router_recommender(
+    *,
+    cheap_backend: _FakeBackend,
+    router_backend: _FakeBackend,
+    router_cell: Cell = LOCAL_CELL,
+    router_timeout_s: float = 2.0,
+    router_circuit_threshold: int = 3,
+    router_circuit_cooldown_s: float = 60.0,
+) -> CellRecommender:
+    return CellRecommender(
+        cheap_backend=cheap_backend,
+        cheap_cell=CELLS[0],
+        upstream_timeout_s=2.0,
+        router_backend=router_backend,
+        router_cell=router_cell,
+        router_timeout_s=router_timeout_s,
+        router_circuit_threshold=router_circuit_threshold,
+        router_circuit_cooldown_s=router_circuit_cooldown_s,
+    )
+
+
+def test_router_success_picks_returned_cell_and_caches() -> None:
+    """Router's text response decides the cell. Source is 'router' (not
+    'upstream') so the request log can distinguish local-router decisions
+    from legacy remote-classifier ones. Second identical prompt hits cache.
+    """
+    cheap = _FakeBackend(canned_text="should-not-be-called")
+    router = _FakeBackend(canned_text="model-a0e7 high")
+    rec = _make_router_recommender(cheap_backend=cheap, router_backend=router)
+    body = {"messages": [{"role": "user", "content": "explain quicksort"}]}
+
+    async def _two() -> tuple:
+        a = await rec.recommend(body, allowed_cells=ROUTER_GRID, fallback=CELLS[0])
+        b = await rec.recommend(body, allowed_cells=ROUTER_GRID, fallback=CELLS[0])
+        return a, b
+
+    a, b = asyncio.run(_two())
+    assert a.source == "router"
+    assert a.cell == CELLS[2]
+    assert a.classifier_cell == LOCAL_CELL
+    assert a.raw_output == "model-a0e7 high"
+    assert b.source == "cache"
+    assert b.cell == CELLS[2]
+    assert rec.stats["router_calls"] == 1
+    assert rec.stats["cache_hits"] == 1
+
+
+def test_router_failure_walks_heuristic_preference() -> None:
+    """When the router raises, walk fallback_preference and pick the first
+    routable match. Never calls _ask_upstream — the whole point of opting
+    into a local router is to escape the remote classifier's selection bias.
+    """
+    cheap = _FakeBackend(canned_text="should-not-be-called")
+    router = _FakeBackend(raise_error=True)
+    rec = _make_router_recommender(cheap_backend=cheap, router_backend=router)
+    body = {"messages": [{"role": "user", "content": "x"}]}
+    out = asyncio.run(
+        rec.recommend(
+            body,
+            allowed_cells=ROUTER_GRID,
+            fallback=CELLS[0],
+            fallback_preference=["model-a0d5-3-31b-ollama default", "model-a0e7 high"],
+        )
+    )
+    assert out.source == "heuristic"
+    assert out.cell == LOCAL_CELL  # first preference matched
+    assert rec.stats["heuristic_hits"] == 1
+    assert rec.stats["upstream_calls"] == 0  # legacy path never ran
+
+
+def test_router_failure_with_no_heuristic_match_falls_to_last_resort() -> None:
+    """If no preference entry matches the compatible cell set, the existing
+    `fallback` cell is returned as the last resort. Still NOT the legacy
+    remote classifier."""
+    cheap = _FakeBackend(canned_text="should-not-be-called")
+    router = _FakeBackend(raise_error=True)
+    rec = _make_router_recommender(cheap_backend=cheap, router_backend=router)
+    body = {"messages": [{"role": "user", "content": "x"}]}
+    out = asyncio.run(
+        rec.recommend(
+            body,
+            allowed_cells=ROUTER_GRID,
+            fallback=CELLS[1],  # explicit last-resort cell
+            fallback_preference=["nonexistent-model effort"],
+        )
+    )
+    assert out.source == "fallback"
+    assert out.cell == CELLS[1]
+    assert rec.stats["upstream_calls"] == 0
+
+
+def test_router_circuit_opens_after_threshold_consecutive_failures() -> None:
+    """3 (default) consecutive router failures → circuit opens. While open,
+    the router is NOT called, the next request goes straight to heuristic /
+    last-resort. router_calls stops incrementing during the cooldown."""
+    cheap = _FakeBackend(canned_text="should-not-be-called")
+    router = _FakeBackend(raise_error=True)
+    rec = _make_router_recommender(
+        cheap_backend=cheap,
+        router_backend=router,
+        router_circuit_threshold=3,
+        router_circuit_cooldown_s=60.0,
+    )
+
+    async def _four_calls() -> None:
+        for i in range(4):
+            await rec.recommend(
+                {"messages": [{"role": "user", "content": f"req {i}"}]},
+                allowed_cells=ROUTER_GRID,
+                fallback=CELLS[0],
+                fallback_preference=["model-a0d5-3-31b-ollama default"],
+            )
+
+    asyncio.run(_four_calls())
+    # 3 calls attempted the router (and failed). Call #4 saw the circuit
+    # open and skipped the router entirely.
+    assert rec.stats["router_calls"] == 3
+    assert rec.stats["router_failures"] == 3
+    assert rec.stats["router_circuit_opens"] == 1
+    assert rec._circuit_is_open() is True
+
+
+def test_router_circuit_resets_on_success() -> None:
+    """Mixed failure/success sequence: consecutive failures count resets
+    to 0 on each success, so the circuit only opens on a real run of
+    failures, not on cumulative-over-lifetime failures."""
+    cheap = _FakeBackend(canned_text="x")
+    # Toggle the router between raise and answer across calls.
+    @dataclass
+    class _ToggleBackend(_FakeBackend):
+        calls: int = 0
+        def _next_outcome(self) -> bool:
+            self.calls += 1
+            return self.calls % 2 == 0  # even calls succeed, odd ones raise
+        async def responses(self, body, handle):
+            if not self._next_outcome():
+                raise BackendError(classification="transient", message="boom")
+            return {"output": [{"content": [{"text": "model-a0e7 high"}]}]}
+
+    router = _ToggleBackend()
+    rec = _make_router_recommender(
+        cheap_backend=cheap,
+        router_backend=router,
+        router_circuit_threshold=3,
+    )
+
+    async def _seq() -> None:
+        for i in range(6):
+            await rec.recommend(
+                {"messages": [{"role": "user", "content": f"r{i}"}]},
+                allowed_cells=ROUTER_GRID,
+                fallback=CELLS[0],
+                fallback_preference=["model-a0d5-3-31b-ollama default"],
+            )
+
+    asyncio.run(_seq())
+    # 6 router calls, 3 failures interleaved with 3 successes. Counter never
+    # reached the threshold of 3 consecutive, so circuit stays closed.
+    assert rec.stats["router_calls"] == 6
+    assert rec.stats["router_failures"] == 3
+    assert rec.stats["router_circuit_opens"] == 0
+    assert rec._circuit_is_open() is False
+
+
+def test_router_classifier_override_falls_through_to_legacy_path() -> None:
+    """If an explicit classifier_cell is passed AND router is configured,
+    honor the override and run the legacy path (alternative-classifier
+    rotation). This keeps the orthogonality: opt-in router doesn't ban
+    explicit overrides from callers who really want them."""
+    cheap = _FakeBackend(canned_text="model-a0c3 medium")
+    router = _FakeBackend(canned_text="should-not-be-called")
+    rec = _make_router_recommender(cheap_backend=cheap, router_backend=router)
+    body = {"messages": [{"role": "user", "content": "test"}]}
+    out = asyncio.run(
+        rec.recommend(
+            body,
+            allowed_cells=ROUTER_GRID,
+            fallback=CELLS[0],
+            classifier_cell=CELLS[2],  # explicit override
+        )
+    )
+    assert out.source == "alternative"
+    assert rec.stats["router_calls"] == 0  # router NEVER consulted
+    assert rec.stats["upstream_calls"] == 1
+
+
+def test_router_unconfigured_preserves_legacy_behavior() -> None:
+    """Router knobs default to None — recommender behaves exactly as before
+    this change. Regression guard."""
+    backend = _FakeBackend(canned_text="model-a0e7 high")
+    rec = _make_recommender(backend)  # no router_backend kwarg
+    body = {"messages": [{"role": "user", "content": "x"}]}
+    out = asyncio.run(rec.recommend(body, allowed_cells=CELLS, fallback=CELLS[0]))
+    assert out.source == "upstream"
+    assert rec.stats["router_calls"] == 0
+
+
+def test_router_disables_local_exploration_path() -> None:
+    """When router is configured the local-exploration random walk is
+    suppressed — the router itself can pick local cells freely and we
+    don't want compounded randomness muddying the signal."""
+    cheap = _FakeBackend(canned_text="should-not-be-called")
+    router = _FakeBackend(canned_text="model-a0d5-3-31b-ollama default")
+    rec = _make_router_recommender(cheap_backend=cheap, router_backend=router)
+    body = {"messages": [{"role": "user", "content": "x"}]}
+    out = asyncio.run(
+        rec.recommend(
+            body,
+            allowed_cells=ROUTER_GRID,
+            fallback=CELLS[0],
+            local_exploration_pct=1.0,  # would normally always explore
+        )
+    )
+    # local_exploration was suppressed; the router made a real decision.
+    assert out.source == "router"
+    assert out.cell == LOCAL_CELL
+    assert rec.stats.get("local_exploration_calls", 0) == 0
+
+
+def test_heuristic_skips_local_when_prompt_above_ceiling() -> None:
+    """When the router fails AND the prompt is above the configured token
+    ceiling, the heuristic walks past local cells in fallback_preference
+    and picks the first remote one. Stops a 30K-token reasoning task from
+    being dumped on a local model just because local is listed first."""
+    cheap = _FakeBackend(canned_text="should-not-be-called")
+    router = _FakeBackend(raise_error=True)
+    rec = _make_router_recommender(cheap_backend=cheap, router_backend=router)
+    # Prompt about 60K chars → est_tokens ~ 20K, well above the 8K ceiling.
+    big_prompt = "x" * 60_000
+    body = {"messages": [{"role": "user", "content": big_prompt}]}
+    out = asyncio.run(
+        rec.recommend(
+            body,
+            allowed_cells=ROUTER_GRID,
+            fallback=CELLS[0],
+            fallback_preference=[
+                "model-a0d5-3-31b-ollama default",  # local — should be skipped
+                "model-a0e7 high",                # remote — should be picked
+            ],
+            heuristic_local_complexity_token_ceiling=8000,
+        )
+    )
+    assert out.source == "heuristic"
+    assert out.cell == CELLS[2]  # model-a0e7 high
+
+
+def test_heuristic_keeps_local_when_prompt_below_ceiling() -> None:
+    """Below the ceiling, the heuristic walks the preference list as-is —
+    local-first stays local-first for small/cheap prompts."""
+    cheap = _FakeBackend(canned_text="should-not-be-called")
+    router = _FakeBackend(raise_error=True)
+    rec = _make_router_recommender(cheap_backend=cheap, router_backend=router)
+    body = {"messages": [{"role": "user", "content": "tiny prompt"}]}
+    out = asyncio.run(
+        rec.recommend(
+            body,
+            allowed_cells=ROUTER_GRID,
+            fallback=CELLS[0],
+            fallback_preference=[
+                "model-a0d5-3-31b-ollama default",
+                "model-a0e7 high",
+            ],
+            heuristic_local_complexity_token_ceiling=8000,
+        )
+    )
+    assert out.source == "heuristic"
+    assert out.cell == LOCAL_CELL  # small prompt, local pick stands
+
+
+def test_heuristic_ceiling_zero_disables_escalation() -> None:
+    """ceiling=0 is the disabled sentinel — local cells are never skipped
+    regardless of prompt size. Backward compatibility with operators who
+    haven't opted into the size-aware escalation."""
+    cheap = _FakeBackend(canned_text="should-not-be-called")
+    router = _FakeBackend(raise_error=True)
+    rec = _make_router_recommender(cheap_backend=cheap, router_backend=router)
+    body = {"messages": [{"role": "user", "content": "x" * 60_000}]}
+    out = asyncio.run(
+        rec.recommend(
+            body,
+            allowed_cells=ROUTER_GRID,
+            fallback=CELLS[0],
+            fallback_preference=[
+                "model-a0d5-3-31b-ollama default",
+                "model-a0e7 high",
+            ],
+            heuristic_local_complexity_token_ceiling=0,
+        )
+    )
+    # Big prompt but ceiling disabled → local still picked.
+    assert out.source == "heuristic"
+    assert out.cell == LOCAL_CELL
+
+
+def test_heuristic_preference_is_case_insensitive() -> None:
+    """Operators writing config shouldn't have to match the exact case of
+    the cell's model/effort. 'MODEL-A0D5-3-31B-Ollama DEFAULT' matches just as
+    well as the lowercase form."""
+    cheap = _FakeBackend(canned_text="should-not-be-called")
+    router = _FakeBackend(raise_error=True)
+    rec = _make_router_recommender(cheap_backend=cheap, router_backend=router)
+    body = {"messages": [{"role": "user", "content": "x"}]}
+    out = asyncio.run(
+        rec.recommend(
+            body,
+            allowed_cells=ROUTER_GRID,
+            fallback=CELLS[0],
+            fallback_preference=["MODEL-A0D5-3-31B-OLLAMA DEFAULT"],
+        )
+    )
+    assert out.source == "heuristic"
+    assert out.cell == LOCAL_CELL

@@ -184,6 +184,55 @@ class AutoRouterConfig(BaseModel):
     # without meaningfully disrupting user-perceived quality.
     cell_recommender_local_exploration_pct: float = 0.0
 
+    # Local-router knobs. When `cell_recommender_router_model` is set, the
+    # routing decision is made by a dedicated (typically local) model
+    # instead of the remote cheap classifier. The point is to remove
+    # remote-model selection bias from routing — a remote classifier
+    # tends to prefer remote cells because the model names look familiar.
+    # Behavior is opt-in: when router_model is None, the legacy remote-
+    # classifier path is unchanged.
+    #
+    # Resolution: at startup, callosum finds the first backend that
+    # advertises router_model and uses it as the router_backend. If no
+    # backend serves the model (e.g. local gateway is disabled), the
+    # router stays off and the legacy path runs.
+    cell_recommender_router_model: str | None = None
+    cell_recommender_router_effort: str = "default"
+    # Hard timeout on the router call. Tight so the user doesn't feel
+    # the latency of a stuck router — fallbacks fire fast.
+    cell_recommender_router_timeout_s: float = 1.5
+    # Circuit breaker: after this many consecutive router failures, skip
+    # the router entirely for `circuit_cooldown_s` seconds and go straight
+    # to the heuristic tier. Prevents paying timeout cost on every
+    # request when the local gateway is down.
+    cell_recommender_router_circuit_threshold: int = 3
+    cell_recommender_router_circuit_cooldown_s: float = 60.0
+    # Ordered heuristic-fallback preference. Each entry is "model effort";
+    # the first entry that matches a currently-routable cell wins. Used
+    # when the router fails OR the circuit is open. Falls through to the
+    # legacy fallback cell if no preference matches. Local-first by
+    # convention so offline routing stays offline-clean.
+    cell_recommender_fallback_preference: list[str] = Field(default_factory=list)
+    # When true, the recommender runs on EVERY request regardless of the
+    # requested model name. Lets the router override explicit-model
+    # requests (e.g. Codex CLI sending `model-a0e8`) so that offline
+    # failover and local-cell preference apply uniformly. When false,
+    # only `auto`/`auto-learning`/`auto-learning-synthetic` requests
+    # hit the recommender; everything else is pass-through to the
+    # named backend. Default false — keeps legacy behavior unless the
+    # operator explicitly opts in.
+    cell_recommender_route_all_models: bool = False
+    # Heuristic-tier escalation threshold. When the local router times out
+    # AND the estimated input is above this many tokens, the heuristic
+    # walks past local cells in `fallback_preference` and only considers
+    # remote cells. Stops a complex / long prompt from being dumped on a
+    # local model that probably can't handle it just because local is
+    # listed first. 0 disables the escalation (legacy: heuristic always
+    # walks the preference order as-is). 8000 is a reasonable default —
+    # below it model-a0d5-class models hold their own; above it the cost of a
+    # wrong answer + retry usually outweighs the cost of a remote call.
+    cell_recommender_heuristic_local_complexity_token_ceiling: int = 8000
+
 
 class BackendConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
