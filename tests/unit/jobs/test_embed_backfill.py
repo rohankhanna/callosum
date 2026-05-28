@@ -47,20 +47,30 @@ def db(tmp_path: Path) -> Path:
 @pytest.fixture
 def stub_provider(monkeypatch):
     """Replace BGELargeEmbeddingProvider with a deterministic fake — each
-    text gets a 4-dim vector based on its length, so we can assert."""
+    text gets a 4-dim vector based on its length, so we can assert.
+
+    Exposes both async `embed` and batched `encode_batch_sync` so the
+    fixture works whether the job calls the per-row or batched path.
+    """
     class _FakeProvider:
         @property
         def dim(self) -> int:
             return 4
 
-        async def embed(self, text: str) -> bytes | None:
-            if not text:
-                return None
+        def _vec(self, text: str) -> bytes:
             v = np.array([len(text), 1.0, 2.0, 3.0], dtype=np.float32)
             n = np.linalg.norm(v)
             if n > 0:
                 v = v / n
             return v.tobytes()
+
+        async def embed(self, text: str) -> bytes | None:
+            if not text:
+                return None
+            return self._vec(text)
+
+        def encode_batch_sync(self, texts: list[str], *, batch_size: int = 64) -> list[bytes]:
+            return [self._vec(t) for t in texts]
 
     monkeypatch.setattr(
         "callosum.routing.embedding.bge.BGELargeEmbeddingProvider",

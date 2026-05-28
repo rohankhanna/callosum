@@ -111,9 +111,6 @@ def run(
     # import (torch + huggingface) and so unit tests can stub it.
     from callosum.routing.embedding.bge import BGELargeEmbeddingProvider
     provider = BGELargeEmbeddingProvider()
-    # Provider.embed is async (asyncio.to_thread under the hood); for
-    # a CLI script we run a small event loop just to call it.
-    import asyncio
 
     conn = sqlite3.connect(str(db_path), timeout=30.0)
     conn.execute("PRAGMA journal_mode = WAL")
@@ -134,18 +131,32 @@ def run(
             if not rows:
                 print("embed_backfill: no more rows to embed", file=sys.stderr)
                 break
-            items: list[tuple[int, bytes]] = []
-            for rid, text in rows:
-                try:
-                    emb = asyncio.run(provider.embed(text))
-                except Exception as exc:
-                    print(
-                        f"embed_backfill: row {rid} failed ({type(exc).__name__}); skipping",
-                        file=sys.stderr,
-                    )
-                    continue
-                if emb is not None:
-                    items.append((rid, emb))
+            texts = [text for _, text in rows]
+            ids = [rid for rid, _ in rows]
+            try:
+                # Single batched GPU dispatch for the whole batch. Previous
+                # versions called provider.embed() per row, producing one
+                # GPU dispatch per text — wasted parallelism and ~30-50x
+                # slower than the natural batch encode.
+                embeddings = provider.encode_batch_sync(texts, batch_size=batch_size)
+            except Exception as exc:
+                print(
+                    f"embed_backfill: batch starting at row {ids[0]} failed "
+                    f"({type(exc).__name__}: {exc}); falling back to per-row",
+                    file=sys.stderr,
+                )
+                # Defensive fallback: if the whole batch fails (OOM,
+                # bad input mid-batch), retry one row at a time so a
+                # single malformed row can't block the whole job.
+                embeddings = []
+                for text in texts:
+                    try:
+                        embeddings.append(provider.encode_batch_sync([text], batch_size=1)[0])
+                    except Exception:
+                        embeddings.append(b"")
+            items = [
+                (rid, emb) for rid, emb in zip(ids, embeddings) if emb
+            ]
             _write_embeddings(conn, items)
             cursor = rows[-1][0]
             _save_checkpoint(checkpoint_path, cursor)
