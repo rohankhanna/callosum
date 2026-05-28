@@ -12,7 +12,8 @@ provider and KNN predictor; the factory grows by two branches.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+
+from pydantic import BaseModel, ConfigDict
 
 from callosum.cell_grid import Cell
 from callosum.routing.capability import CapabilityFilter
@@ -23,15 +24,15 @@ from callosum.routing.router import Router
 from callosum.routing.selector.cost_weighted import CostWeightedSelector
 
 
-@dataclass(frozen=True)
-class RoutingConfig:
+class RoutingConfig(BaseModel):
     """Operator-facing routing config. Each field names ONE implementation.
 
     Defaults are cold-start safe — Router built with all defaults runs
     end-to-end with no ML deps and picks the cheapest compatible cell.
     """
 
-    enabled: bool = False
+    model_config = ConfigDict(extra="forbid")
+
     embedding_provider: str = "noop"
     quality_predictor: str = "uniform"
     cell_selector: str = "cost-weighted"

@@ -91,6 +91,11 @@ class RoutingDecision:
     # populated only for cells that passed the capability filter. Useful for
     # logging "what did the predictor think" alongside the eventual outcome.
     predictions: dict[str, float] = field(default_factory=dict)
+    # Ordered candidate list for dispatch-level cell-retry. Index 0 is
+    # always `cell` (the primary pick); remaining entries are the rest
+    # of the compatible set ordered the same way the selector ordered
+    # them. The dispatch layer walks this on 5xx / backend errors.
+    candidates: tuple[Cell, ...] = ()
     # Provenance: which predictor produced the decision. Lets the request
     # log distinguish "uniform-prior cold-start" from "k-NN with N labels"
     # etc., so downstream consumers know how to weight a given decision.

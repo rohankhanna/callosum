@@ -22,7 +22,12 @@ def test_chat_completions_routes_to_fake_backend() -> None:
     assert body["id"] == "fake-fake"
 
 
-def test_chat_completions_503_when_no_viable_backend() -> None:
+def test_chat_completions_rewrites_to_router_pick_when_requested_model_unavailable() -> None:
+    """With route-all-models routing, requesting a model no backend serves
+    no longer 503s — the router picks from cells that ARE served. The
+    only failure mode tied to "no viable backend" is when the capability
+    filter empties the candidate set entirely (NoCompatibleCellError →
+    400), which is exercised by routing/router tests."""
     fake = InMemoryFakeBackend(
         id="fake",
         advertised_models=frozenset({"other-model"}),
@@ -30,9 +35,11 @@ def test_chat_completions_503_when_no_viable_backend() -> None:
     with TestClient(create_app(backends=[fake])) as client:
         response = client.post(
             "/v1/chat/completions",
-            json={"model": "model-a0d0", "messages": []},
+            json={"model": "model-a0d0", "messages": [{"role": "user", "content": "hi"}]},
         )
-    assert response.status_code == 503
+    assert response.status_code == 200
+    # Router rewrote to a real served cell — fake serves only "other-model".
+    assert response.json()["model"] == "other-model"
 
 
 def test_chat_completions_rejects_missing_model() -> None:

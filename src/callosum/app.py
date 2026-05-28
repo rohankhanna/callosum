@@ -27,7 +27,9 @@ from callosum.auth import (
 from callosum.auth_db import ApiKey, Session
 from callosum.backend import Backend, CallHandle
 from callosum.cell_grid import VIRTUAL_MODELS, Cell, build_cells, live_completion_models
-from callosum.cell_recommender import CellRecommender
+from callosum.routing.factory import build_router
+from callosum.routing.protocols import CellCapabilities
+from callosum.routing.router import NoCompatibleCellError, Router
 from callosum.config import AutoRouterConfig
 from callosum.errors import RETRYABLE, BackendError, ErrorClass
 from callosum.fallback import FallbackExecutor, should_attempt_fallback
@@ -283,35 +285,33 @@ def create_app(
 
     auto_cfg = auto_router_config if auto_router_config is not None else AutoRouterConfig()
 
-    # Cell recommender: ask the cheapest cell to pick the cell that should
-    # handle this prompt. Output IS the routing decision; the model-based
-    # routing infra (cost router, explorer, synthetic ticker, complexity
-    # heuristic) was removed entirely in favor of this. Only instantiated
-    # when at least one backend exists — without a backend, the recommender
-    # has nothing to call and dispatch falls back to the configured cheap
-    # cell name.
-    cell_recommender: CellRecommender | None = None
+    # Learning router. Wires the new pluggable pipeline (features →
+    # capability filter → quality predict → cost-weighted select). Each
+    # backend exposes cell_capabilities(model) so the filter can drop
+    # cells that physically can't serve a request. Cold-start defaults
+    # run with no ML deps — uniform predictor returns 0.5 for everyone,
+    # cost selector picks cheapest compatible → local-first by default.
+    router: Router | None = None
     if backends_list:
-        cheap_cell = Cell(
-            model=auto_cfg.cell_recommender_cheap_model,
-            reasoning_effort=auto_cfg.cell_recommender_cheap_effort,
-            context_window=None,
-        )
-        # Local-router resolution happens in the lifespan startup hook
-        # below — after refresh_advertised_models populates backends that
-        # build their catalog lazily (LiteLLM gateway). Constructing with
-        # router_backend=None here keeps the recommender on its legacy
-        # path until the lifespan wires the router in.
-        cell_recommender = CellRecommender(
-            cheap_backend=backends_list[0],
-            cheap_cell=cheap_cell,
-            cache_max=auto_cfg.cell_recommender_cache_max,
-            cache_ttl_seconds=auto_cfg.cell_recommender_cache_ttl_seconds,
-            upstream_timeout_s=auto_cfg.cell_recommender_upstream_timeout_s,
-            router_timeout_s=auto_cfg.cell_recommender_router_timeout_s,
-            router_circuit_threshold=auto_cfg.cell_recommender_router_circuit_threshold,
-            router_circuit_cooldown_s=auto_cfg.cell_recommender_router_circuit_cooldown_s,
-        )
+        def _capabilities_of(cell: Cell) -> CellCapabilities:
+            """Look up a cell's capabilities via the backend that
+            advertises its model. Falls back to safe defaults when no
+            backend recognizes the model (would mean a stale cell grid
+            — surface the safest non-blocking defaults so dispatch can
+            still try)."""
+            for b in backends_list:
+                if cell.model in b.advertised_models:
+                    fn = getattr(b, "cell_capabilities", None)
+                    if fn is not None:
+                        return fn(cell.model)
+                    break
+            return CellCapabilities(
+                context_window=128_000,
+                modalities=frozenset({"text"}),
+                supports_tools=False,
+                cost_rank=10,
+            )
+        router = build_router(auto_cfg.routing, capabilities_of=_capabilities_of)
 
     smoke_tester = _PeriodicSmokeTester(
         backends=backends_list,
@@ -357,42 +357,6 @@ def create_app(
                         state_store.set_model_release_timestamp(time.time())
                 except Exception:
                     logger.exception("startup model-list refresh failed for %r", backend.id)
-        # Local-router resolution. Now that lazy-catalog backends (e.g. the
-        # LiteLLM gateway) have refreshed, find the backend advertising the
-        # configured router model and wire it into the recommender. When
-        # router_model is unset OR no backend serves it, the recommender
-        # stays on its legacy path.
-        if cell_recommender is not None:
-            configured_router_model = auto_cfg.cell_recommender_router_model
-            if configured_router_model:
-                resolved_router_backend: Backend | None = None
-                for _b in backends_list:
-                    if configured_router_model in _b.advertised_models:
-                        resolved_router_backend = _b
-                        break
-                if resolved_router_backend is not None:
-                    resolved_router_cell = Cell(
-                        model=configured_router_model,
-                        reasoning_effort=auto_cfg.cell_recommender_router_effort,
-                        context_window=None,
-                    )
-                    cell_recommender.set_router(
-                        backend=resolved_router_backend,
-                        cell=resolved_router_cell,
-                    )
-                    logger.warning(
-                        "cell_recommender: local router enabled — model=%r effort=%r backend=%r",
-                        resolved_router_cell.model,
-                        resolved_router_cell.reasoning_effort,
-                        resolved_router_backend.id,
-                    )
-                else:
-                    logger.warning(
-                        "cell_recommender: router_model=%r is configured but no "
-                        "backend advertises it; router stays off, legacy classifier "
-                        "path active",
-                        configured_router_model,
-                    )
         if startup_smoke_test and backends_list:
             await _run_startup_smoke_test(backends_list)
         smoke_tester.start()
@@ -491,60 +455,20 @@ def create_app(
                     "quota": _quota_to_dict(q),
                 }
             )
-        # Recommender state: cache hit rate, upstream-call counts, and
-        # which cells the recommender has been picking. Lets the operator
-        # see at a glance if the cheap classifier is biased (e.g. always
-        # picking itself, or always picking the largest) and whether
-        # off-peak comparison sampling has fired.
-        router_model_cfg = auto_cfg.cell_recommender_router_model
-        recommender_block: dict[str, Any] = {
-            "enabled": cell_recommender is not None,
-            "cheap_cell": (
-                f"{auto_cfg.cell_recommender_cheap_model} "
-                f"{auto_cfg.cell_recommender_cheap_effort}"
-            ),
-            "alternative_classifier_pct": auto_cfg.cell_recommender_alternative_classifier_pct,
-            "router_cell": (
-                f"{router_model_cfg} {auto_cfg.cell_recommender_router_effort}"
-                if router_model_cfg
-                else None
-            ),
-            "fallback_preference": list(auto_cfg.cell_recommender_fallback_preference),
-            "stats": {},
-            "recommendation_counts": {},
-            "classifier_call_counts": {},
+        # Router state: which implementations are wired in. Per-request
+        # stats (counts, latencies) come from the request log, not here —
+        # /status is for "what's currently configured" introspection.
+        router_block: dict[str, Any] = {
+            "enabled": router is not None,
+            "embedding_provider": auto_cfg.routing.embedding_provider,
+            "quality_predictor": auto_cfg.routing.quality_predictor,
+            "cell_selector": auto_cfg.routing.cell_selector,
         }
-        if cell_recommender is not None:
-            stats = cell_recommender.stats
-            calls = max(stats.get("calls", 0), 1)
-            recommender_block["stats"] = {
-                **stats,
-                "cache_hit_rate": round(stats.get("cache_hits", 0) / calls, 3),
-                "fallback_rate": round(stats.get("fallback_count", 0) / calls, 3),
-                "alternative_rate": round(stats.get("alternative_calls", 0) / calls, 3),
-                "router_rate": round(stats.get("router_calls", 0) / calls, 3),
-                "router_failure_rate": (
-                    round(
-                        stats.get("router_failures", 0)
-                        / max(stats.get("router_calls", 0), 1),
-                        3,
-                    )
-                    if stats.get("router_calls", 0)
-                    else 0.0
-                ),
-                "heuristic_rate": round(stats.get("heuristic_hits", 0) / calls, 3),
-            }
-            recommender_block["recommendation_counts"] = (
-                cell_recommender.recommendation_counts
-            )
-            recommender_block["classifier_call_counts"] = (
-                cell_recommender.classifier_call_counts
-            )
         return {
             "backends": entries,
             "pinned": pin_state.get(),
             "sessions": session_registry.snapshot(),
-            "recommender": recommender_block,
+            "router": router_block,
         }
 
     if auth_service is not None:
@@ -744,7 +668,7 @@ def create_app(
             router_context_safety_margin=auto_cfg.router_context_safety_margin,
             state_store=state_store,
             auto_cfg=auto_cfg,
-            cell_recommender=cell_recommender,
+            router=router,
             live_cells_fn=_live_cells,
         )
         # Add X-Proxy-Request-ID header if a request was logged
@@ -779,7 +703,7 @@ def create_app(
             router_context_safety_margin=auto_cfg.router_context_safety_margin,
             state_store=state_store,
             auto_cfg=auto_cfg,
-            cell_recommender=cell_recommender,
+            router=router,
             live_cells_fn=_live_cells,
         )
         # Add X-Proxy-Request-ID header if a request was logged
@@ -859,7 +783,7 @@ async def _dispatch_route(
     router_context_safety_margin: int = 8192,
     state_store: Any | None = None,
     auto_cfg: AutoRouterConfig | None = None,
-    cell_recommender: CellRecommender | None = None,
+    router: Router | None = None,
     live_cells_fn: Callable[[], list[Cell]] | None = None,
 ) -> Any:
     """HTTP entry-point. Pulls session_id + api_key off the Request, then
@@ -885,67 +809,9 @@ async def _dispatch_route(
         router_context_safety_margin=router_context_safety_margin,
         state_store=state_store,
         auto_cfg=auto_cfg,
-        cell_recommender=cell_recommender,
+        router=router,
         live_cells_fn=live_cells_fn,
     )
-
-
-def _maybe_fire_comparison_sampling(
-    body: dict[str, Any],
-    *,
-    cell_recommender: CellRecommender | None,
-    backends_list: Sequence[Backend],
-    live_cells_fn: Callable[[], list[Cell]],
-    compare_pct: float,
-    compare_max_weekly_pct: float,
-) -> None:
-    """Maybe spawn a fire-and-forget comparison-sampling task.
-
-    Off-peak gating: only fires when this request was randomly selected
-    (pct) AND the first backend's weekly_used% is below the configured
-    ceiling (don't burn quota during peak). Pure observation — fires the
-    same prompt at every live cell as a classifier and logs each one's
-    recommendation, but never affects the routing decision for the
-    actual user request currently in flight.
-
-    Logs are structured: easy to grep + parse for later analysis of
-    "did the cheap classifier disagree with bigger ones?".
-    """
-    if cell_recommender is None:
-        return
-    if compare_pct <= 0:
-        return
-    if random.random() >= compare_pct:
-        return
-    if not backends_list:
-        return
-
-    async def _run() -> None:
-        # Off-peak gate; check inside the task so we don't block dispatch.
-        try:
-            quota = await backends_list[0].quota_snapshot()
-        except Exception:
-            quota = None
-        if quota is not None:
-            wkly = getattr(quota, "weekly_used_percent", None)
-            if isinstance(wkly, (int, float)) and wkly > compare_max_weekly_pct:
-                return  # peak hours — skip comparison spam
-        try:
-            cells = live_cells_fn()
-            results = await cell_recommender.fire_comparisons(
-                body, allowed_cells=cells, comparison_tiers=cells
-            )
-            for r in results:
-                logger.info(
-                    "cell_recommender comparison: tier=%s/%s recommended=%s/%s latency=%.2fs error=%s",
-                    r["tier_model"], r["tier_effort"],
-                    r["recommended_model"], r["recommended_effort"],
-                    r["latency_s"], r["error"],
-                )
-        except Exception:
-            logger.exception("cell_recommender comparison sampling failed")
-
-    asyncio.create_task(_run(), name="cell-recommender-comparison")
 
 
 async def _dispatch_internal(
@@ -965,7 +831,7 @@ async def _dispatch_internal(
     router_context_safety_margin: int = 8192,
     state_store: Any | None = None,
     auto_cfg: AutoRouterConfig | None = None,
-    cell_recommender: CellRecommender | None = None,
+    router: Router | None = None,
     live_cells_fn: Callable[[], list[Cell]] | None = None,
 ) -> Any:
     if auto_cfg is None:
@@ -982,8 +848,9 @@ async def _dispatch_internal(
     requested_model = _require_model(body)
     requested_reasoning = _extract_reasoning_effort(body)
     routing_mode = "pass-through"
-    # Recommender provenance for the request log. Stays None on pass-through
-    # requests; populated below when the recommender fires.
+    # Router provenance for the request log. Populated when the Router
+    # makes a decision; stays None for the no-router path (cold-start
+    # state when no backends are loaded).
     recommender_classifier_cell: str | None = None
     recommender_raw_output: str | None = None
     recommender_source: str | None = None
@@ -994,142 +861,49 @@ async def _dispatch_internal(
     if session_id is not None and usage_log is not None:
         session_prompt_tokens = usage_log.last_session_prompt_tokens(session_id)
 
-    # Virtual model rewrite. By default every request — regardless of
-    # what model name the client sent — now goes through the cell
-    # recommender so the router's decision is authoritative for ALL
-    # traffic, not just clients that opted into `auto`/`auto-learning`.
-    # This is the only way for explicit-model requests (Codex CLI sending
-    # `model-a0e8`, Hermes sending `model-a0c3`, etc.) to benefit from
-    # offline failover and local-cell preference: otherwise they bypass
-    # the router entirely and die when their named model's backend is
-    # unreachable.
-    #
-    # Operators who want the legacy "explicit model = pass-through"
-    # behavior can set `cell_recommender_route_all_models = false` in
-    # config.toml; then the recommender only runs on `auto*` requests.
-    _route_all = auto_cfg.cell_recommender_route_all_models
-    _is_virtual = requested_model in ("auto", "auto-learning", "auto-learning-synthetic")
-    if _is_virtual or _route_all:
-        fallback_cell = Cell(
-            model=auto_cfg.cell_recommender_cheap_model,
-            reasoning_effort=auto_cfg.cell_recommender_cheap_effort,
-            context_window=None,
-        )
-        if cell_recommender is not None:
-            # Bias mitigation: with a small probability, route THIS request
-            # through a non-cheap classifier rather than the default cheap
-            # one. Prevents the cheap classifier's biases from being the
-            # sole authority on every routing decision. The alternative
-            # classifier's result intentionally bypasses the cache so it
-            # doesn't poison subsequent cheap-classifier routing.
-            cells_now = live_cells_fn()
-            # Phase 4d: filter out cells whose only serving backends are
-            # currently unroutable (Codex weekly-exhausted, on cooldown,
-            # etc.) so the classifier can only pick cells dispatch can
-            # actually serve. When ALL backends are unroutable we don't
-            # filter — better to attempt and let the dispatch layer
-            # report the real error than silently refuse.
-            _routable = await _routable_backends(backends_list)
-            if _routable:
-                _filtered = _filter_cells_to_routable(cells_now, _routable)
-                if _filtered:
-                    cells_now = _filtered
-            classifier_override: Cell | None = None
-            # Alternative-classifier rotation only applies to the legacy
-            # remote-classifier path. When the local router is configured
-            # the entire bias-mitigation rationale is gone (the router IS
-            # local), and forcing a remote classifier here would silently
-            # reintroduce the bias the router was opted into to escape.
-            if auto_cfg.cell_recommender_router_model is None:
-                alt_pct = auto_cfg.cell_recommender_alternative_classifier_pct
-                if alt_pct > 0 and random.random() < alt_pct:
-                    cheap = (auto_cfg.cell_recommender_cheap_model,
-                             auto_cfg.cell_recommender_cheap_effort)
-                    alternatives = [
-                        c for c in cells_now
-                        if (c.model, c.reasoning_effort) != cheap
-                    ]
-                    if alternatives:
-                        classifier_override = random.choice(alternatives)
-            rec = await cell_recommender.recommend(
-                body,
-                allowed_cells=cells_now,
-                fallback=fallback_cell,
-                classifier_cell=classifier_override,
-                local_exploration_pct=auto_cfg.cell_recommender_local_exploration_pct,
-                fallback_preference=auto_cfg.cell_recommender_fallback_preference,
-                heuristic_local_complexity_token_ceiling=(
-                    auto_cfg.cell_recommender_heuristic_local_complexity_token_ceiling
-                ),
-            )
-            chosen = rec.cell
-            # VRAM safety: if the router picked a DIFFERENT local cell than
-            # itself, evict the router from GPU memory BEFORE dispatch
-            # loads the chosen cell. Otherwise both large local models
-            # co-reside until ollama's TTL expires, which on a
-            # constrained-VRAM box risks OOM. Synchronous await: the
-            # dispatch must wait so the load order is router-out then
-            # chosen-in, never both at once. Best-effort — any error
-            # is swallowed inside unload_model() and dispatch continues.
-            _rb = cell_recommender.router_backend
-            _rc = cell_recommender.router_cell
-            if (
-                _rb is not None
-                and _rc is not None
-                and chosen.model != _rc.model
-                and chosen.reasoning_effort == "default"  # local-cell sentinel
-                and chosen.model in _rb.advertised_models
-            ):
-                _unload = getattr(_rb, "unload_model", None)
-                if _unload is not None:
-                    await _unload(_rc.model)
-            # Capture recommender provenance for the request log — training
-            # consumers downstream filter on recommender_source IN
-            # ('upstream', 'alternative') to get unbiased classifier picks.
-            recommender_classifier_cell = (
-                f"{rec.classifier_cell.model} {rec.classifier_cell.reasoning_effort}"
-                if rec.classifier_cell is not None
-                else None
-            )
-            # Truncate raw output to bound request-log row size; the parser
-            # only ever expects a short "model effort" reply, so 500 chars
-            # is plenty even for chatty classifier outputs.
-            recommender_raw_output = (
-                rec.raw_output[:500]
-                if isinstance(rec.raw_output, str) and rec.raw_output
-                else None
-            )
-            recommender_source = rec.source
-            # Top-N (default 3) candidate cells the dispatch layer will walk
-            # if the primary cell's backend pool errors. Recommender returns
-            # them ordered: classifier's pick first, rest of the compatible
-            # set in grid-priority order.
-            cell_candidates: tuple[Cell, ...] = rec.candidates[:MAX_CELL_ATTEMPTS]
-        else:
-            chosen = fallback_cell
-            # No recommender wired up — leave all three columns NULL so
-            # the training pipeline can distinguish "no classifier ran" from
-            # "classifier ran and fell back".
-            recommender_classifier_cell = None
-            recommender_raw_output = None
-            recommender_source = None
-            cell_candidates = ()
+    # Route ALL requests through the learning router. Codex CLI sending
+    # `model-a0e8`, Hermes sending `model-a0c3`, and explicit `auto`
+    # requests all hit the same pipeline — the router's decision is
+    # authoritative, and the original requested model only appears in
+    # the request log's `routing_mode` column for provenance.
+    if router is not None:
+        cells_now = live_cells_fn()
+        # Drop cells whose only serving backends are currently unroutable
+        # (Codex weekly-exhausted, on cooldown, gateway down). The Router's
+        # capability filter further drops cells whose physical capabilities
+        # can't serve THIS request.
+        _routable = await _routable_backends(backends_list)
+        if _routable:
+            _filtered = _filter_cells_to_routable(cells_now, _routable)
+            if _filtered:
+                cells_now = _filtered
+        try:
+            decision = await router.route(body, cells_now)
+        except NoCompatibleCellError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"no cell can serve this request: {exc}",
+            ) from exc
+        chosen = decision.cell
         body["model"] = chosen.model
         body.setdefault("reasoning", {})["effort"] = chosen.reasoning_effort
-        # Preserve the requested virtual-model name in the log so synthetic vs
-        # organic routing (and any future virtual model) can be distinguished
-        # downstream. All three names route through the same recommender today,
-        # but tracking which alias the client sent has observability value —
-        # e.g. for measuring synthetic-tier velocity against organic traffic.
-        routing_mode = requested_model
-        _maybe_fire_comparison_sampling(
-            body,
-            cell_recommender=cell_recommender,
-            backends_list=backends_list,
-            live_cells_fn=live_cells_fn,
-            compare_pct=auto_cfg.cell_recommender_compare_pct,
-            compare_max_weekly_pct=auto_cfg.cell_recommender_compare_max_weekly_pct,
+        # Provenance for the request log — predictor_id distinguishes
+        # cold-start (uniform) from learned (knn / gbm / ...) decisions
+        # so downstream analysis can weight them differently. The
+        # predictions map is the predictor's per-cell P(satisfy) over
+        # the post-filter candidate set, serialized as compact JSON.
+        recommender_classifier_cell = decision.predictor_id or None
+        recommender_raw_output = (
+            json.dumps(decision.predictions, separators=(",", ":"))[:500]
+            if decision.predictions
+            else None
         )
+        recommender_source = "router"
+        # Candidate cells the dispatch layer walks if the primary's
+        # backend pool 5xxs. Capped at MAX_CELL_ATTEMPTS so retry
+        # latency stays bounded.
+        cell_candidates = decision.candidates[:MAX_CELL_ATTEMPTS]
+        routing_mode = requested_model
     model = _require_model(body)
     pinned = pin_state.get()
     active = _active_pool(backends_list, pinned)

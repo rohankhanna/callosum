@@ -101,9 +101,12 @@ def test_synthetic_and_organic_are_logged_as_distinct_routing_modes(tmp_path: Pa
     assert organic[0][1:] == synthetic[0][1:]
 
 
-def test_pass_through_request_records_routing_mode(tmp_path: Path) -> None:
-    # Sanity: a normal model name should record routing_mode='pass-through'
-    # and leave requested_* equal to served_*.
+def test_explicit_model_request_routes_through_router(tmp_path: Path) -> None:
+    """All requests route through the learning router now — explicit-model
+    requests included. routing_mode records the originally-requested name
+    (for provenance); model/reasoning_effort record what the router
+    actually chose. With a single fake backend serving model-a0e7, the
+    capability filter leaves model-a0e7 cells, cost selector picks one."""
     log = UsageLog(tmp_path / "u.sqlite")
     backend = _backend()
     with TestClient(create_app(backends=[backend], usage_log=log)) as client:
@@ -118,4 +121,11 @@ def test_pass_through_request_records_routing_mode(tmp_path: Path) -> None:
         "SELECT requested_model, requested_reasoning_effort, routing_mode,"
         " model, reasoning_effort FROM requests"
     ).fetchone()
-    assert row == ("model-a0e7", "high", "pass-through", "model-a0e7", "high")
+    requested_model, requested_reasoning, routing_mode, model, reasoning = row
+    assert requested_model == "model-a0e7"
+    assert requested_reasoning == "high"
+    assert routing_mode == "model-a0e7"
+    # Router picked a real cell from the grid. The exact (model, effort)
+    # depends on cost ordering — we just assert it IS a grid cell.
+    assert model in DEFAULT_MODELS
+    assert reasoning in REASONING_LEVELS

@@ -4,7 +4,9 @@ from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 from callosum.backend import BackendKind, CallHandle, HealthStatus, UsageSnapshot
+from callosum.cell_grid import ModelMetadata
 from callosum.errors import BackendError
+from callosum.routing.protocols import CellCapabilities
 
 
 class InMemoryFakeBackend:
@@ -129,6 +131,34 @@ class InMemoryFakeBackend:
             )
         for chunk in chunks:
             yield chunk
+
+    @property
+    def model_metadata(self) -> dict[str, ModelMetadata]:
+        """Synthesize permissive ModelMetadata so the fake's models join the
+        live cell grid in tests. Without this, _live_cells filters fakes out
+        and the Router can't pick fake-served models, breaking
+        route-all-models tests."""
+        return {
+            slug: ModelMetadata(
+                slug=slug,
+                supported_in_api=True,
+                visibility="list",
+                priority=100,
+                supported_reasoning_levels=("low", "medium", "high", "xhigh"),
+            )
+            for slug in self.advertised_models
+        }
+
+    def cell_capabilities(self, model: str) -> CellCapabilities:
+        """Generous defaults for tests: large context, all modalities, tools
+        supported, mid-cost-rank. Lets the capability filter pass every
+        request through to the fake without spurious drops."""
+        return CellCapabilities(
+            context_window=400_000,
+            modalities=frozenset({"text", "image", "audio", "video"}),
+            supports_tools=True,
+            cost_rank=5,
+        )
 
     async def aclose(self) -> None:
         return None

@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from callosum.auth_vault import AuthVault
 from callosum.backend import Backend
+from callosum.routing.factory import RoutingConfig
 from callosum.backends.codex_auth_vault import (
     DEFAULT_BASE_URL as CODEX_AUTH_VAULT_DEFAULT_BASE_URL,
 )
@@ -134,104 +135,13 @@ class AutoRouterConfig(BaseModel):
     # out of band, original 429 was transient). 0 to disable.
     cooldown_probe_interval_seconds: int = 3600
 
-    # Cell recommender — uses an upstream classifier call to the cheapest
-    # cell to pick the model + reasoning effort for each `auto`-routed
-    # request. Replaces a locally-trained classifier (data was too sparse).
-    cell_recommender_cheap_model: str = "model-a0c3"
-    cell_recommender_cheap_effort: str = "low"
-    # Max prompts to keep in the in-memory recommendation cache. Cache key
-    # is sha256 of the user's prompt text — repeated prompts (e.g. the
-    # Hermes persona, observed 17k copies) pay the upstream call once.
-    cell_recommender_cache_max: int = 4096
-    cell_recommender_cache_ttl_seconds: int = 3600
-    # Hard timeout on the classifier call. If exceeded, dispatch falls back
-    # to cost_router so the user request isn't blocked by classifier slowness.
-    # Bumped from 5s after observing classifier timeouts on Hermes-shaped
-    # 30-40k-token requests. Combined with the head+tail truncation in
-    # cell_recommender._truncate_for_classifier the classifier sees only
-    # a few k of context, so this ceiling rarely matters; it's the safety
-    # net for the long-tail case where the truncated prompt is still
-    # expensive to process.
-    cell_recommender_upstream_timeout_s: float = 30.0
-    # Off-peak comparison sampling. For some fraction of `auto`-routed
-    # requests, fire the same prompt at every live cell as a classifier
-    # in parallel (fire-and-forget after the user's response is dispatched)
-    # so we can measure how often the cheap classifier disagrees with
-    # bigger ones. Gated on weekly_used% being low to avoid burning
-    # quota when usage is tight. Mirrors the synthetic-spam-at-end-of-week
-    # pattern but smarter: only samples a fraction, only during off-peak,
-    # never blocks the user request.
-    cell_recommender_compare_pct: float = 0.05
-    cell_recommender_compare_max_weekly_pct: float = 30.0
-    # Bias mitigation: with this probability, the routing decision for a
-    # given request is made by a randomly chosen NON-cheap cell rather
-    # than the configured cheap classifier. Prevents the cheap classifier
-    # from being the sole authority and silently dragging routing in a
-    # consistent direction (e.g. always recommending itself, always
-    # recommending the largest). Independent of comparison sampling —
-    # comparison observes, this varies the live decision. The chosen
-    # alternative classifier's result bypasses the cache so it doesn't
-    # poison subsequent cheap-classifier-cached routing.
-    cell_recommender_alternative_classifier_pct: float = 0.05
-    # Exploration probability toward local cells. With this probability,
-    # the recommender skips the classifier entirely and routes to a random
-    # eligible local cell. The point is data collection: the cheap remote
-    # classifier consistently prefers familiar Codex names (it has prior
-    # knowledge of them; local model names are opaque), so without
-    # explicit exploration we'd never accumulate local-cell outcome data
-    # for Phase 5 local-classifier training. Default 0 (off); 0.05-0.10
-    # is a reasonable starting point — enough flow to collect data
-    # without meaningfully disrupting user-perceived quality.
-    cell_recommender_local_exploration_pct: float = 0.0
-
-    # Local-router knobs. When `cell_recommender_router_model` is set, the
-    # routing decision is made by a dedicated (typically local) model
-    # instead of the remote cheap classifier. The point is to remove
-    # remote-model selection bias from routing — a remote classifier
-    # tends to prefer remote cells because the model names look familiar.
-    # Behavior is opt-in: when router_model is None, the legacy remote-
-    # classifier path is unchanged.
-    #
-    # Resolution: at startup, callosum finds the first backend that
-    # advertises router_model and uses it as the router_backend. If no
-    # backend serves the model (e.g. local gateway is disabled), the
-    # router stays off and the legacy path runs.
-    cell_recommender_router_model: str | None = None
-    cell_recommender_router_effort: str = "default"
-    # Hard timeout on the router call. Tight so the user doesn't feel
-    # the latency of a stuck router — fallbacks fire fast.
-    cell_recommender_router_timeout_s: float = 1.5
-    # Circuit breaker: after this many consecutive router failures, skip
-    # the router entirely for `circuit_cooldown_s` seconds and go straight
-    # to the heuristic tier. Prevents paying timeout cost on every
-    # request when the local gateway is down.
-    cell_recommender_router_circuit_threshold: int = 3
-    cell_recommender_router_circuit_cooldown_s: float = 60.0
-    # Ordered heuristic-fallback preference. Each entry is "model effort";
-    # the first entry that matches a currently-routable cell wins. Used
-    # when the router fails OR the circuit is open. Falls through to the
-    # legacy fallback cell if no preference matches. Local-first by
-    # convention so offline routing stays offline-clean.
-    cell_recommender_fallback_preference: list[str] = Field(default_factory=list)
-    # When true, the recommender runs on EVERY request regardless of the
-    # requested model name. Lets the router override explicit-model
-    # requests (e.g. Codex CLI sending `model-a0e8`) so that offline
-    # failover and local-cell preference apply uniformly. When false,
-    # only `auto`/`auto-learning`/`auto-learning-synthetic` requests
-    # hit the recommender; everything else is pass-through to the
-    # named backend. Default false — keeps legacy behavior unless the
-    # operator explicitly opts in.
-    cell_recommender_route_all_models: bool = False
-    # Heuristic-tier escalation threshold. When the local router times out
-    # AND the estimated input is above this many tokens, the heuristic
-    # walks past local cells in `fallback_preference` and only considers
-    # remote cells. Stops a complex / long prompt from being dumped on a
-    # local model that probably can't handle it just because local is
-    # listed first. 0 disables the escalation (legacy: heuristic always
-    # walks the preference order as-is). 8000 is a reasonable default —
-    # below it model-a0d5-class models hold their own; above it the cost of a
-    # wrong answer + retry usually outweighs the cost of a remote call.
-    cell_recommender_heuristic_local_complexity_token_ceiling: int = 8000
+    # Learning router. Pluggable pipeline:
+    #   features → capability filter → quality predict → cost-weighted select
+    # Each stage is a Protocol with swappable implementations. Cold-start
+    # defaults (noop embedding + uniform predictor + cost-weighted selector)
+    # produce local-first cost-ordered routing without any ML deps. Phases
+    # 4+ swap in BGE embeddings, a k-NN predictor, and the labeler.
+    routing: RoutingConfig = Field(default_factory=lambda: RoutingConfig())
 
 
 class BackendConfig(BaseModel):

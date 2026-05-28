@@ -75,6 +75,15 @@ class Router:
         predictions = self._predictor.predict(features, compatible)
         capabilities_map = {c: self._filter._capabilities_of(c) for c in compatible}
         chosen = self._selector.select(predictions, capabilities_map)
+        # Candidate ordering for cell-retry: primary first, then the rest
+        # of the compatible set ranked by predicted quality (desc), with
+        # cost as the tiebreaker. Reuses the same scores the selector
+        # consumed, so dispatch's retry walks the next-best cells in
+        # the same priority order the selector would have picked them.
+        def _rank_key(c: Cell) -> tuple[float, int]:
+            return (-predictions[c], capabilities_map[c].cost_rank)
+
+        rest = sorted((c for c in compatible if c != chosen), key=_rank_key)
         return RoutingDecision(
             cell=chosen,
             features=features,
@@ -82,5 +91,6 @@ class Router:
                 f"{c.model} {c.reasoning_effort}": p
                 for c, p in predictions.items()
             },
+            candidates=(chosen, *rest),
             predictor_id=self._predictor.id,
         )

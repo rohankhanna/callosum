@@ -142,109 +142,11 @@ def test_filter_returns_empty_when_no_routable_backends() -> None:
     assert _filter_cells_to_routable(cells, []) == []
 
 
-# ---------- recommender skips classifier when its backend is unroutable -----
-
-
-def test_recommender_skips_upstream_call_when_cheap_backend_exhausted() -> None:
-    """Phase 4d-v2: when the classifier's backend is weekly_exhausted,
-    the recommender shouldn't even attempt the upstream call — it would
-    just timeout or 429, costing latency on the first post-outage
-    request. Falls back immediately."""
-    from dataclasses import dataclass
-
-    from callosum.backend import CallHandle, HealthStatus, UsageSnapshot
-    from callosum.cell_recommender import CellRecommender
-    from typing import Any
-
-    @dataclass
-    class _ExhaustedBackend:
-        id: str = "primary"
-        kind: str = "codex_auth_vault"
-        advertised_models = frozenset({"model-a0c3"})
-        call_count: int = 0
-
-        async def health(self) -> HealthStatus:
-            return HealthStatus(available=False, reason="rate_limited")
-
-        async def usage_snapshot(self) -> UsageSnapshot:
-            return UsageSnapshot(
-                remaining_fraction=0.0,
-                cooldown_until_ts=None,
-                weekly_exhausted=True,
-                probed_at_ts=0.0,
-            )
-
-        async def quota_snapshot(self) -> None:
-            return None
-
-        async def responses(
-            self, body: dict[str, Any], handle: CallHandle
-        ) -> dict[str, Any]:
-            self.call_count += 1
-            raise RuntimeError("would 429 if actually called")
-
-        async def aclose(self) -> None:
-            pass
-
-    backend = _ExhaustedBackend()
-    cheap = Cell(model="model-a0c3", reasoning_effort="low", context_window=None)
-    rec = CellRecommender(cheap_backend=backend, cheap_cell=cheap, upstream_timeout_s=2.0)
-    cells = [
-        cheap,
-        Cell(model="model-a0a9", reasoning_effort="default",
-             context_window=262_144),
-    ]
-    body = {"messages": [{"role": "user", "content": "what is 2+2?"}]}
-    out = asyncio.run(rec.recommend(body, allowed_cells=cells, fallback=cheap))
-    assert out.source == "fallback"
-    # Crucially: no upstream call was made.
-    assert backend.call_count == 0
-    assert rec.stats.get("upstream_skipped_unroutable", 0) == 1
-    assert rec.stats.get("upstream_calls", 0) == 0
-
-
-def test_recommender_skips_upstream_when_cheap_backend_on_cooldown() -> None:
-    """Same skip behavior for cooldown_until_ts in the future."""
-    from dataclasses import dataclass
-
-    from callosum.backend import CallHandle, HealthStatus, UsageSnapshot
-    from callosum.cell_recommender import CellRecommender
-    from typing import Any
-
-    @dataclass
-    class _CoolingBackend:
-        id: str = "primary"
-        kind: str = "codex_auth_vault"
-        advertised_models = frozenset({"model-a0c3"})
-        call_count: int = 0
-
-        async def health(self) -> HealthStatus:
-            return HealthStatus(available=False, reason="rate_limited")
-
-        async def usage_snapshot(self) -> UsageSnapshot:
-            return UsageSnapshot(
-                remaining_fraction=0.5,
-                cooldown_until_ts=time.time() + 600,  # 10 min from now
-                weekly_exhausted=False,
-                probed_at_ts=0.0,
-            )
-
-        async def quota_snapshot(self) -> None:
-            return None
-
-        async def responses(self, body, handle):
-            self.call_count += 1
-            raise RuntimeError("would hang")
-
-        async def aclose(self) -> None:
-            pass
-
-    backend = _CoolingBackend()
-    cheap = Cell(model="model-a0c3", reasoning_effort="low", context_window=None)
-    rec = CellRecommender(cheap_backend=backend, cheap_cell=cheap, upstream_timeout_s=2.0)
-    out = asyncio.run(rec.recommend(
-        {"messages": [{"role": "user", "content": "x"}]},
-        allowed_cells=[cheap], fallback=cheap,
-    ))
-    assert out.source == "fallback"
-    assert backend.call_count == 0
+# NOTE: The legacy "recommender skips upstream when its cheap_backend is
+# unroutable" tests were removed when the LLM-based router was deleted.
+# Equivalent coverage in the new world: when a backend marks itself
+# unroutable via usage_snapshot, _filter_cells_to_routable drops its
+# cells from the candidate set (verified by tests above), so the Router's
+# capability filter never sees them. No "skip the classifier call" code
+# path exists in the new architecture because there IS no per-request
+# classifier call to skip.
