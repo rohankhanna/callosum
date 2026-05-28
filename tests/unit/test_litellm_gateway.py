@@ -433,3 +433,46 @@ async def test_unload_model_swallows_errors() -> None:
     # Must NOT raise.
     await backend.unload_model("model-a0b0")
     await backend.aclose()
+
+
+# ---------- cell_capabilities --------------------------------------------
+
+
+async def test_litellm_cell_capabilities_local_defaults() -> None:
+    """Local backend exposes conservative defaults — text-only, no tools,
+    cost_rank=0. Vision/tool-capable local models need explicit operator
+    tagging (later phase); the safe default never mis-routes a vision or
+    tool-use request to a model that can't serve it."""
+    backend = LiteLLMGatewayBackend(
+        id="local",
+        transport=httpx.MockTransport(
+            lambda r: httpx.Response(200, json=_models_payload("model-a0b0"))
+        ),
+    )
+    try:
+        caps = backend.cell_capabilities("model-a0b0")
+        assert caps.context_window == 128_000
+        assert caps.modalities == frozenset({"text"})
+        assert caps.supports_tools is False
+        assert caps.cost_rank == 0
+    finally:
+        await backend.aclose()
+
+
+async def test_litellm_cell_capabilities_returns_same_defaults_for_any_model() -> None:
+    """Phase 2 sources nothing per-model — every local cell gets the
+    same conservative defaults. Phase 4+ will pull from operator config
+    or model-specific catalog data."""
+    backend = LiteLLMGatewayBackend(
+        id="local",
+        transport=httpx.MockTransport(
+            lambda r: httpx.Response(200, json=_models_payload("any-model"))
+        ),
+    )
+    try:
+        a = backend.cell_capabilities("model-a")
+        b = backend.cell_capabilities("model-b")
+        # Both default-tier locals: identical capability profile.
+        assert a == b
+    finally:
+        await backend.aclose()

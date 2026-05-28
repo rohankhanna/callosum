@@ -258,6 +258,34 @@ class LiteLLMGatewayBackend:
             yield f"data: {json.dumps(ev)}\n\n".encode()
         yield b"data: [DONE]\n\n"
 
+    def cell_capabilities(self, model: str):  # type: ignore[no-untyped-def]
+        """Return CellCapabilities for `model` — what the learning router
+        needs to decide if this cell can serve a request.
+
+        Local-served models have less standardized capability metadata
+        than Codex models. Defaults:
+          * context_window: 128K — typical for current local model
+            classes (model-a0e5, model-a0g1-3, model-a0g3-2.5, etc.). Operators with
+            larger-context models can override per-cell later.
+          * modalities: text-only. Vision-capable local models
+            (llava, model-a0d5-3-vision, etc.) need explicit operator
+            tagging in a later phase.
+          * supports_tools: False. Most local serving stacks (ollama,
+            vllm) don't reliably honor tool-use yet; conservative
+            default avoids routing tool-use requests here.
+          * cost_rank: 0. Local is the cheapest tier by definition.
+
+        Lazy-imports CellCapabilities to avoid a circular dependency
+        on first module load (routing.protocols imports cell_grid).
+        """
+        from callosum.routing.protocols import CellCapabilities
+        return CellCapabilities(
+            context_window=128_000,
+            modalities=frozenset({"text"}),
+            supports_tools=False,
+            cost_rank=0,
+        )
+
     async def unload_model(self, litellm_model_name: str) -> None:
         """Force ollama to evict `litellm_model_name` from GPU memory.
 

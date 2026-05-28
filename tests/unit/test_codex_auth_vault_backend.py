@@ -1060,3 +1060,59 @@ async def test_transport_success_clears_offline_cooldown(tmp_path: Path) -> None
         assert snap.cooldown_until_ts is None
     finally:
         await backend.aclose()
+
+
+# ---------- cell_capabilities --------------------------------------------
+
+
+async def test_cell_capabilities_uses_model_metadata_when_present(tmp_path: Path) -> None:
+    """When the upstream catalog included context_window + input_modalities,
+    cell_capabilities surfaces them so the routing capability filter
+    sees the real values, not Codex defaults."""
+    from callosum.cell_grid import ModelMetadata
+
+    auth_path = tmp_path / "auth.json"
+    _write_auth_json(auth_path)
+    vault = _make_vault(auth_path)
+    backend = CodexAuthVaultBackend(
+        id="vault-a",
+        vault=vault,
+        advertised_models=frozenset({"model-a0e8"}),
+        transport=httpx.MockTransport(lambda r: httpx.Response(200)),
+    )
+    try:
+        # Inject explicit metadata as if the catalog had populated it.
+        backend._model_metadata["model-a0e8"] = ModelMetadata(
+            slug="model-a0e8",
+            context_window=400_000,
+            input_modalities=("text", "image"),
+        )
+        caps = backend.cell_capabilities("model-a0e8")
+        assert caps.context_window == 400_000
+        assert caps.modalities == frozenset({"text", "image"})
+        assert caps.supports_tools is True
+        assert caps.cost_rank == 10
+    finally:
+        await backend.aclose()
+
+
+async def test_cell_capabilities_falls_back_to_codex_defaults(tmp_path: Path) -> None:
+    """Cold start (no catalog poll yet) → no per-model metadata. Return
+    conservative defaults so the request can still be routed."""
+    auth_path = tmp_path / "auth.json"
+    _write_auth_json(auth_path)
+    vault = _make_vault(auth_path)
+    backend = CodexAuthVaultBackend(
+        id="vault-a",
+        vault=vault,
+        advertised_models=frozenset({"model-a0e8"}),
+        transport=httpx.MockTransport(lambda r: httpx.Response(200)),
+    )
+    try:
+        caps = backend.cell_capabilities("model-a0e8")
+        assert caps.context_window == 256_000
+        assert caps.modalities == frozenset({"text"})
+        assert caps.supports_tools is True
+        assert caps.cost_rank == 10
+    finally:
+        await backend.aclose()

@@ -174,6 +174,41 @@ class CodexAuthVaultBackend:
         """
         return self._model_metadata
 
+    def cell_capabilities(self, model: str):  # type: ignore[no-untyped-def]
+        """Return CellCapabilities for `model` — what the learning router
+        needs to decide whether this cell can serve a given request.
+
+        Sources from the most recent ModelMetadata when populated; falls
+        back to sensible Codex defaults when fields are absent (cold start
+        before first catalog poll, or upstream omits the field). The
+        Codex Responses API supports tools across all serving models, so
+        `supports_tools=True` is the conservative default. Cost rank is
+        hardcoded high for remote backends (auto-inferred from kind in
+        Phase 1; explicit per-cell ranks can be layered later).
+
+        Returns the type lazily-imported to avoid a circular dependency
+        at module load (routing.protocols imports cell_grid; backends
+        import routing.protocols only on first call to this method).
+        """
+        from callosum.routing.protocols import CellCapabilities
+        md = self._model_metadata.get(model)
+        # Codex's typical max context. Updated only if a model metadata
+        # record explicitly says otherwise.
+        ctx = (md.context_window if md and md.context_window else 256_000)
+        # Modalities: ModelMetadata.input_modalities is a tuple of strings
+        # already normalized to {"text", "image", "audio", ...} by
+        # _extract_model_catalog. Default to text-only when absent.
+        modalities = (
+            frozenset(md.input_modalities) if md and md.input_modalities
+            else frozenset({"text"})
+        )
+        return CellCapabilities(
+            context_window=ctx,
+            modalities=modalities,
+            supports_tools=True,  # Codex Responses API supports tools.
+            cost_rank=10,         # Remote — high cost relative to local (rank 0).
+        )
+
     async def refresh_advertised_models(self, *, now: float | None = None) -> None:
         """Fetch the upstream model catalog for this account and update the
         cached set. Best-effort: silently keeps the current set on any error
