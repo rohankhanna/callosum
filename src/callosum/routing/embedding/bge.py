@@ -91,6 +91,19 @@ class BGELargeEmbeddingProvider:
         )[0].astype(np.float32)
         return vec.tobytes()
 
+    # BGE-large's max_seq_length is 512 tokens ≈ ~2000 English chars.
+    # We pre-truncate input strings to a safety multiple of that ceiling
+    # because sentence-transformers tokenizes the WHOLE input string
+    # before truncating to max_seq_length — so feeding it 1MB of text
+    # means tokenizing 1MB even though only the first ~2KB will ever
+    # be looked at by the model. Tokenization is CPU-serial and scales
+    # roughly linearly with input length; a single 1MB row can hang
+    # the job for minutes / OOM the process. 8000 chars is comfortably
+    # above the 512-token truncation boundary AND lets the model
+    # see slightly different prefixes if the operator's tokenizer
+    # produces fewer tokens per char than typical English.
+    _MAX_INPUT_CHARS_FOR_ENCODE = 8000
+
     def encode_batch_sync(self, texts: list[str], *, batch_size: int = 64) -> list[bytes]:
         """Batch-encode many texts in a single GPU forward pass.
 
@@ -98,20 +111,28 @@ class BGELargeEmbeddingProvider:
         rows and don't need the async per-request interface. The previous
         loop in embed_backfill called .embed() per row, causing one GPU
         dispatch per item; with batching we get ~one dispatch per
-        batch_size items, which on GPU is 30-50x faster on BGE-large.
+        batch_size items, which on GPU is significantly faster on
+        BGE-large.
 
-        Returns a list of float32 bytes the same length as `texts`,
-        skipping `None` entries (empty inputs map to b"").
+        Returns a list of float32 bytes the same length as `texts`.
+        Inputs are pre-truncated to _MAX_INPUT_CHARS_FOR_ENCODE so
+        absurdly-long prompts (e.g. accumulated Codex conversation
+        contexts at 1MB+) don't stall the tokenizer.
         """
         self._ensure_loaded()
         import numpy as np
         assert self._model is not None
-        # SentenceTransformer.encode handles internal batching; we pass
-        # batch_size to control GPU memory + utilization. 64 fits
-        # comfortably on a 24GB+ card for BGE-large; larger values
-        # diminish returns due to attention quadratic in seq length.
+        # Pre-truncate before handing to encode — see comment on
+        # _MAX_INPUT_CHARS_FOR_ENCODE for why. Slicing a Python str is
+        # O(1) so this adds ~zero overhead, but avoids feeding the
+        # tokenizer multi-MB inputs that produce identical embeddings
+        # to a ~2KB prefix after BGE's internal truncation.
+        truncated = [
+            t[: self._MAX_INPUT_CHARS_FOR_ENCODE] if t else t
+            for t in texts
+        ]
         vecs = self._model.encode(
-            texts,
+            truncated,
             batch_size=batch_size,
             normalize_embeddings=True,
             show_progress_bar=False,
