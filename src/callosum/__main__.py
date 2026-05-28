@@ -16,6 +16,7 @@ from callosum.backends.litellm_gateway import (
 )
 from callosum.backends.litellm_gateway import LiteLLMGatewayBackend
 from callosum.config import build_backends, load_config
+from callosum.operator_state import OperatorState
 from callosum.usage_log import UsageLog
 
 
@@ -48,6 +49,10 @@ def main() -> None:
         parser.error(f"config not found: {args.config}")
 
     cfg = load_config(args.config)
+    # Operator-state DB: persistent runtime knobs the CLI manages
+    # (inference-param overrides today; denylist + mode + priority in
+    # later steps). Lives alongside auth.sqlite under state.dir.
+    operator_state = OperatorState(cfg.state.dir / "operator_state.sqlite")
     backends = build_backends(cfg)
     # Auto-register a LiteLLM gateway backend when the operator points us at
     # one. Gateway is provided by `local LLM gateway` and exposes local models
@@ -76,6 +81,7 @@ def main() -> None:
             "id": "local LLM gateway",
             "base_url": litellm_url,
             "master_key": os.environ.get("CALLOSUM_LITELLM_MASTER_KEY"),
+            "operator_state": operator_state,
         }
         if litellm_timeout is not None:
             backend_kwargs["timeout_s"] = litellm_timeout

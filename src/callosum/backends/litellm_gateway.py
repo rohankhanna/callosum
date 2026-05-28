@@ -39,6 +39,11 @@ from callosum.backend import BackendKind, CallHandle, HealthStatus, UsageSnapsho
 from callosum.backends._http import error_from_response
 from callosum.cell_grid import ModelMetadata
 from callosum.errors import BackendError
+from callosum.operator_state import (
+    BACKEND_DEFAULT_INFERENCE_PARAMS,
+    OperatorState,
+    merge_inference_params,
+)
 from callosum.routing.protocols import CellCapabilities
 
 DEFAULT_BASE_URL = "http://127.0.0.1:4000"
@@ -75,6 +80,7 @@ class LiteLLMGatewayBackend:
         transport: httpx.AsyncBaseTransport | None = None,
         timeout_s: float = DEFAULT_CALL_TIMEOUT_S,
         ollama_url: str = "http://127.0.0.1:11434",
+        operator_state: OperatorState | None = None,
     ) -> None:
         self.id = id
         self._base_url = base_url.rstrip("/")
@@ -102,6 +108,10 @@ class LiteLLMGatewayBackend:
         # fallback to conservative defaults in cell_capabilities itself.
         self._ollama_url = ollama_url.rstrip("/")
         self._capabilities_cache: dict[str, CellCapabilities] = {}
+        # Operator-state handle for per-cell inference parameter
+        # overrides. None in tests / cold-start; treated as "no
+        # overrides" by the merge helper.
+        self._operator_state = operator_state
 
     @property
     def advertised_models(self) -> frozenset[str]:
@@ -185,7 +195,9 @@ class LiteLLMGatewayBackend:
         self, body: dict[str, Any], handle: CallHandle | None = None
     ) -> dict[str, Any]:
         await self._refresh_catalog_if_stale()
-        out_body = _strip_codex_only_fields({**body, "stream": False})
+        out_body = self._apply_inference_params(
+            _strip_codex_only_fields({**body, "stream": False})
+        )
         try:
             response = await self._client.post(
                 f"{self._base_url}/v1/chat/completions",
@@ -213,7 +225,9 @@ class LiteLLMGatewayBackend:
         self, body: dict[str, Any], handle: CallHandle | None = None
     ) -> AsyncIterator[bytes]:
         await self._refresh_catalog_if_stale()
-        out_body = _strip_codex_only_fields({**body, "stream": True})
+        out_body = self._apply_inference_params(
+            _strip_codex_only_fields({**body, "stream": True})
+        )
         try:
             stream_ctx = self._client.stream(
                 "POST",
@@ -464,6 +478,36 @@ class LiteLLMGatewayBackend:
         await self._refresh_catalog_if_stale(now=now)
 
     # ---------- internals --------------------------------------------------
+
+    def _apply_inference_params(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Merge backend defaults + operator overrides into `body`.
+
+        Lookup order per `merge_inference_params`:
+          1. Client request body (kept untouched unless operator forces).
+          2. Operator override for this model (`OperatorState`).
+          3. Backend default for this kind (`think: false` for ollama-
+             served local cells — keeps thinking-mode models from
+             monopolizing inference budget on agentic prompts).
+
+        When `_operator_state` is None (tests / cold start) only the
+        backend defaults apply.
+        """
+        model = body.get("model")
+        if not isinstance(model, str) or not model:
+            return body
+        backend_defaults = BACKEND_DEFAULT_INFERENCE_PARAMS.get(self.kind, {})
+        operator_overrides: dict[str, Any] = {}
+        operator_force = False
+        if self._operator_state is not None:
+            operator_overrides, operator_force = (
+                self._operator_state.get_inference_overrides(model)
+            )
+        return merge_inference_params(
+            backend_defaults=backend_defaults,
+            operator_overrides=operator_overrides,
+            operator_force=operator_force,
+            client_body=body,
+        )
 
     def _build_headers(self) -> dict[str, str]:
         h = {"Content-Type": "application/json"}
