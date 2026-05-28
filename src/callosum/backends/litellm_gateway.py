@@ -428,18 +428,25 @@ class LiteLLMGatewayBackend:
             # Context length lives under <architecture>.context_length;
             # we don't know the architecture name a priori. Walk the
             # model_info dict and find any key ending in `.context_length`.
+            # Parameter count is exposed at `general.parameter_count`
+            # uniformly across architectures — used by the selector as
+            # a "more capable" tiebreaker when cost is tied.
             context_window = 128_000  # fallback
+            parameter_count: int | None = None
             model_info = info.get("model_info") or {}
             if isinstance(model_info, dict):
                 for k, v in model_info.items():
                     if isinstance(k, str) and k.endswith("context_length") and isinstance(v, int) and v > 0:
                         context_window = v
-                        break
+                pc = model_info.get("general.parameter_count")
+                if isinstance(pc, int) and pc > 0:
+                    parameter_count = pc
             self._capabilities_cache[litellm_name] = CellCapabilities(
                 context_window=context_window,
                 modalities=frozenset(modalities),
                 supports_tools=supports_tools,
                 cost_rank=0,
+                parameter_count=parameter_count,
             )
 
     async def refresh_advertised_models(self, *, now: float | None = None) -> None:
