@@ -304,6 +304,48 @@ def test_chat_to_responses_response_translates_dict_arguments_to_json_string() -
     assert json.loads(fc["arguments"]) == {"k": "v"}
 
 
+def test_chat_to_responses_response_preserves_thinking_as_reasoning_item() -> None:
+    """When a thinking model emits `message.thinking`, the translator
+    must surface it in the Responses-API output as a reasoning item.
+    Earlier versions dropped it on the floor — operators who want to
+    SEE what the model was thinking (or use it for debugging /
+    training-data extraction) were left blind."""
+    chat = {
+        "id": "chatcmpl-think",
+        "model": "model-a0b0",
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": "OK",
+                "thinking": "The user asked for OK. Reply with OK.",
+            }
+        }],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 12, "total_tokens": 17},
+    }
+    resp = _chat_to_responses_response(chat)
+    reasoning_items = [o for o in resp["output"] if o["type"] == "reasoning"]
+    assert len(reasoning_items) == 1
+    assert reasoning_items[0]["summary"][0]["text"] == (
+        "The user asked for OK. Reply with OK."
+    )
+    # Message text item should also be present, AFTER the reasoning item.
+    msg_items = [o for o in resp["output"] if o["type"] == "message"]
+    assert len(msg_items) == 1
+    assert msg_items[0]["content"][0]["text"] == "OK"
+
+
+def test_chat_to_responses_response_no_reasoning_item_when_thinking_absent() -> None:
+    """No `thinking` field → no reasoning item. Output is just the
+    message — same as before the thinking-preservation change."""
+    chat = {
+        "id": "x",
+        "choices": [{"message": {"role": "assistant", "content": "OK"}}],
+    }
+    resp = _chat_to_responses_response(chat)
+    reasoning = [o for o in resp["output"] if o["type"] == "reasoning"]
+    assert reasoning == []
+
+
 def test_chat_to_responses_response_emits_zero_usage_when_absent() -> None:
     """When ollama omits usage (some local serving paths do), still emit
     input_tokens/output_tokens=0 so the Codex CLI stream parser doesn't

@@ -646,6 +646,7 @@ def _chat_to_responses_response(chat: dict[str, Any]) -> dict[str, Any]:
     """
     choices = chat.get("choices")
     text = ""
+    thinking = ""
     tool_calls: list[dict[str, Any]] = []
     if isinstance(choices, list) and choices:
         first = choices[0] if isinstance(choices[0], dict) else {}
@@ -654,17 +655,32 @@ def _chat_to_responses_response(chat: dict[str, Any]) -> dict[str, Any]:
             raw_content = message.get("content")
             if isinstance(raw_content, str):
                 text = raw_content
+            # Some local models (model-a0e5, model-a0g3-3, model-a0c6) emit a
+            # separate `thinking` field with internal chain-of-thought.
+            # Preserve it as a reasoning output item — Codex CLI / clients
+            # that don't display it just ignore the item, but we never
+            # silently drop content the model spent compute generating.
+            raw_thinking = message.get("thinking")
+            if isinstance(raw_thinking, str) and raw_thinking:
+                thinking = raw_thinking
             raw_tool_calls = message.get("tool_calls")
             if isinstance(raw_tool_calls, list):
                 for tc in raw_tool_calls:
                     if isinstance(tc, dict):
                         tool_calls.append(tc)
-    # Build the Responses-API output list. function_call items come
-    # first (Codex CLI executes them, then submits results back); a
-    # message item with the assistant's text follows. When neither is
-    # present, emit an empty message — Codex CLI accepts that as
-    # "response complete with no output" rather than failing to parse.
+    # Build the Responses-API output list. Reasoning (chain-of-thought
+    # from thinking-mode models) comes first if present — matches
+    # OpenAI's o1/o3 reasoning-summary convention. function_call items
+    # come next so Codex CLI executes them in order. A message item
+    # with the assistant's visible text follows. When none of these
+    # are present, emit an empty message so output[] is never empty.
     output: list[dict[str, Any]] = []
+    if thinking:
+        output.append({
+            "type": "reasoning",
+            "id": f"rs_{chat.get('id', 'reasoning')}",
+            "summary": [{"type": "summary_text", "text": thinking}],
+        })
     for tc in tool_calls:
         fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
         if not isinstance(fn, dict):
