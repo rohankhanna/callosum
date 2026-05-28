@@ -15,7 +15,9 @@ from callosum.backends.litellm_gateway import (
     DEFAULT_BASE_URL as LITELLM_GATEWAY_DEFAULT_BASE_URL,
 )
 from callosum.backends.litellm_gateway import LiteLLMGatewayBackend
+from callosum.backends.local_direct import LocalModelRegistryBackend
 from callosum.config import build_backends, load_config
+from callosum.local import LocalModelRegistrySource
 from callosum.operator_state import OperatorState
 from callosum.usage_log import UsageLog
 
@@ -59,6 +61,21 @@ def main() -> None:
     # (ollama / vllm / model-a0e0 / etc.) behind one OpenAI-compatible URL.
     # Optional and additive: when CALLOSUM_LITELLM_GATEWAY_URL is unset (or
     # the gateway is unreachable), Codex backends remain authoritative.
+    # Prefer local LLM gateway as the source of truth when its CLI is on
+    # PATH. Falls back to LiteLLMGatewayBackend (litellm.yaml-driven)
+    # when the operator doesn't have local LLM gateway installed.
+    if (
+        os.environ.get("CALLOSUM_LOCAL_DISABLED") != "1"
+        and LocalModelRegistrySource.is_available()
+    ):
+        source = LocalModelRegistrySource()
+        backends.append(
+            LocalModelRegistryBackend(
+                id="local LLM gateway",
+                source=source,
+                operator_state=operator_state,
+            )
+        )
     litellm_url = os.environ.get(
         "CALLOSUM_LITELLM_GATEWAY_URL", LITELLM_GATEWAY_DEFAULT_BASE_URL
     )
