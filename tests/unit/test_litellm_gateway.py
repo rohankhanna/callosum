@@ -234,7 +234,90 @@ def test_chat_to_responses_response_wraps_assistant_text() -> None:
     assert resp["object"] == "response"
     assert resp["model"] == "model-a0d3"
     assert resp["output"][0]["content"][0]["text"] == "4"
+    # Usage is translated from chat shape (prompt/completion) to
+    # Responses-API shape (input/output). Codex CLI's stream parser
+    # hard-fails on missing input_tokens.
+    assert resp["usage"]["input_tokens"] == 5
+    assert resp["usage"]["output_tokens"] == 1
     assert resp["usage"]["total_tokens"] == 6
+    assert resp["status"] == "completed"
+
+
+def test_chat_to_responses_response_translates_tool_calls() -> None:
+    """When the model returns tool_calls (model-a0d5/model-a0g1/etc. doing function
+    calling), the translator must emit Responses-API function_call output
+    items. Earlier versions dropped tool_calls on the floor → Codex CLI
+    received empty output and showed nothing."""
+    chat = {
+        "id": "chatcmpl-abc",
+        "model": "model-a0a9",
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_xyz",
+                        "type": "function",
+                        "function": {
+                            "name": "shell",
+                            "arguments": '{"cmd":"git log"}',
+                        },
+                    }
+                ],
+            }
+        }],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 17, "total_tokens": 117},
+    }
+    resp = _chat_to_responses_response(chat)
+    # Output should contain a function_call item with the right shape.
+    fc = [o for o in resp["output"] if o["type"] == "function_call"]
+    assert len(fc) == 1
+    assert fc[0]["name"] == "shell"
+    assert fc[0]["arguments"] == '{"cmd":"git log"}'
+    assert fc[0]["call_id"] == "call_xyz"
+    assert fc[0]["status"] == "completed"
+
+
+def test_chat_to_responses_response_translates_dict_arguments_to_json_string() -> None:
+    """Some serving stacks (ollama at certain versions) return tool_call
+    arguments as a JSON object rather than a string. The Responses-API
+    spec requires a string."""
+    chat = {
+        "id": "x",
+        "model": "m",
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "f", "arguments": {"k": "v"}},
+                }],
+            }
+        }],
+    }
+    resp = _chat_to_responses_response(chat)
+    fc = [o for o in resp["output"] if o["type"] == "function_call"][0]
+    assert isinstance(fc["arguments"], str)
+    assert json.loads(fc["arguments"]) == {"k": "v"}
+
+
+def test_chat_to_responses_response_emits_zero_usage_when_absent() -> None:
+    """When ollama omits usage (some local serving paths do), still emit
+    input_tokens/output_tokens=0 so the Codex CLI stream parser doesn't
+    fail with 'missing field input_tokens'."""
+    chat = {
+        "id": "cmpl-x",
+        "model": "model-a0d3",
+        "choices": [{"message": {"role": "assistant", "content": "hi"}}],
+        # No usage field at all.
+    }
+    resp = _chat_to_responses_response(chat)
+    assert resp["usage"]["input_tokens"] == 0
+    assert resp["usage"]["output_tokens"] == 0
+    assert resp["usage"]["total_tokens"] == 0
 
 
 async def test_responses_end_to_end_translates_through_chat_completions() -> None:
@@ -348,19 +431,19 @@ async def test_chat_completions_raises_backenderror_on_4xx() -> None:
 # ---------- cell_capabilities --------------------------------------------
 
 
-async def test_litellm_cell_capabilities_local_defaults() -> None:
-    """Local backend exposes conservative defaults — text-only, no tools,
-    cost_rank=0. Vision/tool-capable local models need explicit operator
-    tagging (later phase); the safe default never mis-routes a vision or
-    tool-use request to a model that can't serve it."""
+async def test_litellm_cell_capabilities_falls_back_when_cache_empty() -> None:
+    """Before discovery runs (or for non-ollama upstreams),
+    cell_capabilities returns conservative defaults — text-only,
+    no tools — so requests can still dispatch but tool/vision-needing
+    ones drop the cell from the capability filter."""
     backend = LiteLLMGatewayBackend(
         id="local",
         transport=httpx.MockTransport(
-            lambda r: httpx.Response(200, json=_models_payload("model-a0b0"))
+            lambda r: httpx.Response(200, json=_models_payload("never-discovered"))
         ),
     )
     try:
-        caps = backend.cell_capabilities("model-a0b0")
+        caps = backend.cell_capabilities("never-discovered")
         assert caps.context_window == 128_000
         assert caps.modalities == frozenset({"text"})
         assert caps.supports_tools is False
@@ -369,20 +452,91 @@ async def test_litellm_cell_capabilities_local_defaults() -> None:
         await backend.aclose()
 
 
-async def test_litellm_cell_capabilities_returns_same_defaults_for_any_model() -> None:
-    """Phase 2 sources nothing per-model — every local cell gets the
-    same conservative defaults. Phase 4+ will pull from operator config
-    or model-specific catalog data."""
+async def test_litellm_cell_capabilities_discovered_from_ollama() -> None:
+    """When ollama's /api/show reports `tools`, `vision`, and a
+    large context_length, cell_capabilities surfaces the real values
+    — no hardcoded conservative ceiling drops the cell from the filter."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url.endswith("/v1/models"):
+            return httpx.Response(200, json=_models_payload("model-a0b0"))
+        if url.endswith("/model/info"):
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "model_name": "model-a0b0",
+                            "litellm_params": {"model": "ollama/model-a0d7"},
+                        }
+                    ]
+                },
+            )
+        if url.endswith("/api/show"):
+            return httpx.Response(
+                200,
+                json={
+                    "capabilities": ["completion", "tools", "vision", "thinking"],
+                    "model_info": {"model-a0f4.context_length": 262_144},
+                },
+            )
+        return httpx.Response(404)
+
     backend = LiteLLMGatewayBackend(
-        id="local",
-        transport=httpx.MockTransport(
-            lambda r: httpx.Response(200, json=_models_payload("any-model"))
-        ),
+        id="local", transport=httpx.MockTransport(handler)
     )
     try:
-        a = backend.cell_capabilities("model-a")
-        b = backend.cell_capabilities("model-b")
-        # Both default-tier locals: identical capability profile.
-        assert a == b
+        await backend.health()  # triggers catalog refresh + capability discovery
+        caps = backend.cell_capabilities("model-a0b0")
+        assert caps.context_window == 262_144
+        assert "image" in caps.modalities
+        assert "text" in caps.modalities
+        assert caps.supports_tools is True
+        assert caps.cost_rank == 0
+    finally:
+        await backend.aclose()
+
+
+async def test_litellm_cell_capabilities_handles_text_only_local_model() -> None:
+    """ollama's /api/show capabilities=[completion] only → no vision,
+    no tools. cell_capabilities reflects that — request-routing will
+    correctly drop this cell for tool-use or image prompts."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url.endswith("/v1/models"):
+            return httpx.Response(200, json=_models_payload("text-only-local"))
+        if url.endswith("/model/info"):
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "model_name": "text-only-local",
+                            "litellm_params": {"model": "ollama/text-only:7b"},
+                        }
+                    ]
+                },
+            )
+        if url.endswith("/api/show"):
+            return httpx.Response(
+                200,
+                json={
+                    "capabilities": ["completion"],
+                    "model_info": {"model-a0g1.context_length": 8_192},
+                },
+            )
+        return httpx.Response(404)
+
+    backend = LiteLLMGatewayBackend(
+        id="local", transport=httpx.MockTransport(handler)
+    )
+    try:
+        await backend.health()
+        caps = backend.cell_capabilities("text-only-local")
+        assert caps.context_window == 8_192
+        assert caps.modalities == frozenset({"text"})
+        assert caps.supports_tools is False
     finally:
         await backend.aclose()

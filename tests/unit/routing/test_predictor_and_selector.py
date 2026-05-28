@@ -113,3 +113,44 @@ def test_selector_raises_on_empty_predictions() -> None:
     import pytest
     with pytest.raises(ValueError):
         CostWeightedSelector().select({}, {})
+
+
+def test_selector_tiebreaks_by_parameter_count_descending() -> None:
+    """When two cells have the same cost_rank, the more-parameterized one
+    wins. Phase 4 / agentic-task usefulness depends on this: with
+    cost_rank=0 for every local cell, picking model-a0d5-31b over model-a0d5-26b
+    requires SOME signal of "more capable" — parameter_count is real."""
+    small_local = Cell(model="local-small", reasoning_effort="default")
+    large_local = Cell(model="local-large", reasoning_effort="default")
+    predictions = {small_local: 0.5, large_local: 0.5}
+    caps = {
+        small_local: CellCapabilities(
+            context_window=128_000, modalities=frozenset({"text"}),
+            supports_tools=True, cost_rank=0, parameter_count=25_800_000_000,
+        ),
+        large_local: CellCapabilities(
+            context_window=128_000, modalities=frozenset({"text"}),
+            supports_tools=True, cost_rank=0, parameter_count=31_300_000_000,
+        ),
+    }
+    assert CostWeightedSelector().select(predictions, caps) == large_local
+
+
+def test_selector_cost_still_dominates_parameter_count() -> None:
+    """parameter_count only tiebreaks within a cost tier. A cheap local
+    with fewer parameters still beats an expensive remote with more
+    parameters — cost wins first."""
+    cheap_small = Cell(model="local", reasoning_effort="default")
+    expensive_huge = Cell(model="remote", reasoning_effort="medium")
+    predictions = {cheap_small: 0.5, expensive_huge: 0.5}
+    caps = {
+        cheap_small: CellCapabilities(
+            context_window=128_000, modalities=frozenset({"text"}),
+            supports_tools=True, cost_rank=0, parameter_count=7_000_000_000,
+        ),
+        expensive_huge: CellCapabilities(
+            context_window=256_000, modalities=frozenset({"text"}),
+            supports_tools=True, cost_rank=10, parameter_count=500_000_000_000,
+        ),
+    }
+    assert CostWeightedSelector().select(predictions, caps) == cheap_small

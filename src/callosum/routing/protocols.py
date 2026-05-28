@@ -51,12 +51,19 @@ class CellCapabilities:
     `cost_rank` is an integer ordering (0 = cheapest); operator-supplied
     in later phases, auto-inferred in Phase 1 (local backends rank 0,
     remote rank 10).
+    `parameter_count` is the model's total parameter count when known —
+    used by the selector as a tiebreaker after cost when no learned
+    predictor distinguishes cells. Strictly informational: cost still
+    wins; bigger only wins when costs tie. Sourced from ollama's
+    `general.parameter_count` for local cells; None for cells whose
+    backend doesn't surface this.
     """
 
     context_window: int
     modalities: frozenset[str]
     supports_tools: bool
     cost_rank: int
+    parameter_count: int | None = None
 
 
 # ---------- learning-side facts (used by the predictor) --------------------
