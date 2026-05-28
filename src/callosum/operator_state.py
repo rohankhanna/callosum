@@ -28,15 +28,23 @@ from typing import Any
 
 # Per-backend baseline parameters applied when nothing is operator-set.
 # Keyed by the backend's `kind` so the same merge logic works for
-# ollama-served local cells, future vLLM cells, etc. Ollama defaults
-# `think: false` because the thinking-mode behavior of model-a0d5-class
-# models silently consumes inference budget without producing visible
-# output — bad for agentic workloads where every token matters. An
-# operator who wants thinking on for a specific model can override
-# via the CLI.
-BACKEND_DEFAULT_INFERENCE_PARAMS: dict[str, dict[str, Any]] = {
-    "litellm_gateway": {"think": False},
-}
+# ollama-served local cells, future vLLM cells, etc.
+#
+# Intentionally empty by default. Earlier iterations defaulted
+# `think: false` for ollama-served cells to defend against thinking-mode
+# models monopolizing inference budget — but that hid valuable
+# reasoning content the operator could otherwise see and act on.
+#
+# The actual fix for the "stall" symptom is the stream-through
+# translator: thinking content now streams live as
+# `response.reasoning_summary_text.delta` events, so the operator can
+# WATCH the model think and Ctrl-C if it's looping. Cancellation
+# propagates through httpx to ollama and stops the runner.
+#
+# Operators who STILL want to disable thinking for a specific cell can
+# set it explicitly via the (future) CLI:
+#     callosum params set <model> think=false
+BACKEND_DEFAULT_INFERENCE_PARAMS: dict[str, dict[str, Any]] = {}
 
 
 _SCHEMA = [
