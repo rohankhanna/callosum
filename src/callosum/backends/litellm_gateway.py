@@ -39,6 +39,7 @@ from callosum.backend import BackendKind, CallHandle, HealthStatus, UsageSnapsho
 from callosum.backends._http import error_from_response
 from callosum.cell_grid import ModelMetadata
 from callosum.errors import BackendError
+from callosum.routing.protocols import CellCapabilities
 
 DEFAULT_BASE_URL = "http://127.0.0.1:4000"
 DEFAULT_CATALOG_REFRESH_S = 60.0  # local model lineup changes via yaml reloads — keep fresh
@@ -73,6 +74,7 @@ class LiteLLMGatewayBackend:
         client: httpx.AsyncClient | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         timeout_s: float = DEFAULT_CALL_TIMEOUT_S,
+        ollama_url: str = "http://127.0.0.1:11434",
     ) -> None:
         self.id = id
         self._base_url = base_url.rstrip("/")
@@ -92,6 +94,14 @@ class LiteLLMGatewayBackend:
         # route here before discovery completes.
         self._healthy: bool = False
         self._last_health_reason: str = "unknown"
+        # Real per-model capabilities, populated lazily from ollama's
+        # /api/show endpoint after the LiteLLM /model/info call resolves
+        # the litellm→ollama name. cell_capabilities() reads from this
+        # cache synchronously; refresh happens on each catalog refresh.
+        # When discovery hasn't run yet (or the model isn't ollama-backed),
+        # fallback to conservative defaults in cell_capabilities itself.
+        self._ollama_url = ollama_url.rstrip("/")
+        self._capabilities_cache: dict[str, CellCapabilities] = {}
 
     @property
     def advertised_models(self) -> frozenset[str]:
@@ -237,42 +247,200 @@ class LiteLLMGatewayBackend:
     async def responses_stream(
         self, body: dict[str, Any], handle: CallHandle | None = None
     ) -> AsyncIterator[bytes]:
-        # Buffered translation: call non-stream, synthesize Responses-API SSE
-        # (response.created then response.completed with the full payload).
+        """Buffered Responses-API SSE: call non-stream upstream, then
+        replay as the full sequence of events Codex CLI's parser expects.
+
+        Codex CLI's stream parser doesn't just read response.completed —
+        it tracks per-item output via response.output_item.added/done
+        plus item-specific events (response.output_text.delta/.done for
+        messages, response.function_call_arguments.delta/.done for
+        function calls). Emitting ONLY response.created + completed
+        leaves the parser with an empty in-memory output list and the
+        user sees nothing on screen, with no error because the stream
+        IS well-formed at the wire level.
+
+        We synthesize each intermediate event from the buffered full
+        payload so a single ollama chat-completions call still produces
+        a Codex-CLI-compatible stream.
+        """
         full = await self.responses({**body, "stream": False}, handle)
-        created_event = {"type": "response.created", "id": full.get("id", "resp-litellm")}
-        completed_event = {"type": "response.completed", "response": full}
-        for ev in (created_event, completed_event):
-            yield f"data: {json.dumps(ev)}\n\n".encode()
+        resp_id = full.get("id", "resp-litellm")
+        seq = 0
+
+        def _emit(event_type: str, payload: dict[str, Any]) -> bytes:
+            nonlocal seq
+            seq += 1
+            ev = {"type": event_type, "sequence_number": seq, **payload}
+            return f"event: {event_type}\ndata: {json.dumps(ev)}\n\n".encode()
+
+        yield _emit("response.created", {"response": {**full, "status": "in_progress", "output": []}})
+        yield _emit("response.in_progress", {"response": {**full, "status": "in_progress", "output": []}})
+
+        for idx, item in enumerate(full.get("output", [])):
+            if not isinstance(item, dict):
+                continue
+            yield _emit("response.output_item.added", {"output_index": idx, "item": item})
+            item_type = item.get("type")
+            item_id = item.get("id", f"item_{idx}")
+            if item_type == "message":
+                # Replay text as one delta + one done event.
+                content_list = item.get("content") or []
+                text = ""
+                if isinstance(content_list, list) and content_list:
+                    first = content_list[0]
+                    if isinstance(first, dict) and isinstance(first.get("text"), str):
+                        text = first["text"]
+                yield _emit("response.output_text.delta", {
+                    "item_id": item_id,
+                    "output_index": idx,
+                    "content_index": 0,
+                    "delta": text,
+                })
+                yield _emit("response.output_text.done", {
+                    "item_id": item_id,
+                    "output_index": idx,
+                    "content_index": 0,
+                    "text": text,
+                })
+            elif item_type == "function_call":
+                args = item.get("arguments", "")
+                if not isinstance(args, str):
+                    args = json.dumps(args)
+                yield _emit("response.function_call_arguments.delta", {
+                    "item_id": item_id,
+                    "output_index": idx,
+                    "delta": args,
+                })
+                yield _emit("response.function_call_arguments.done", {
+                    "item_id": item_id,
+                    "output_index": idx,
+                    "arguments": args,
+                })
+            yield _emit("response.output_item.done", {"output_index": idx, "item": item})
+
+        yield _emit("response.completed", {"response": full})
         yield b"data: [DONE]\n\n"
 
-    def cell_capabilities(self, model: str):  # type: ignore[no-untyped-def]
-        """Return CellCapabilities for `model` — what the learning router
-        needs to decide if this cell can serve a request.
+    def cell_capabilities(self, model: str) -> CellCapabilities:
+        """Return real capabilities for `model`, discovered from ollama.
 
-        Local-served models have less standardized capability metadata
-        than Codex models. Defaults:
-          * context_window: 128K — typical for current local model
-            classes (model-a0e5, model-a0g1-3, model-a0g3-2.5, etc.). Operators with
-            larger-context models can override per-cell later.
-          * modalities: text-only. Vision-capable local models
-            (llava, model-a0d5-3-vision, etc.) need explicit operator
-            tagging in a later phase.
-          * supports_tools: False. Most local serving stacks (ollama,
-            vllm) don't reliably honor tool-use yet; conservative
-            default avoids routing tool-use requests here.
-          * cost_rank: 0. Local is the cheapest tier by definition.
+        Looks up the cache populated by `_refresh_capabilities` (called
+        during catalog refresh). When the cache hasn't run yet OR the
+        upstream model is non-ollama, falls back to conservative
+        text-only/no-tools defaults so the request can still dispatch
+        — usually wrong on offline-but-capable local models, but better
+        than refusing.
 
-        Lazy-imports CellCapabilities to avoid a circular dependency
-        on first module load (routing.protocols imports cell_grid).
+        Cost rank is always 0 (local cells are cheapest by definition).
         """
-        from callosum.routing.protocols import CellCapabilities
+        cached = self._capabilities_cache.get(model)
+        if cached is not None:
+            return cached
         return CellCapabilities(
             context_window=128_000,
             modalities=frozenset({"text"}),
             supports_tools=False,
             cost_rank=0,
         )
+
+    async def _refresh_capabilities(self) -> None:
+        """Populate `_capabilities_cache` from ollama's /api/show endpoint.
+
+        Best-effort. Steps:
+          1. Fetch LiteLLM's /model/info — gives us the litellm-name →
+             upstream-model mapping (e.g. "model-a0b0" →
+             "ollama/model-a0d7").
+          2. For each ollama-backed entry, call ollama's /api/show with
+             the upstream name. Parse `capabilities` array (tools,
+             vision, audio, etc.) and `context_length`.
+          3. Translate to CellCapabilities and store in the cache.
+
+        Any failure (ollama unreachable, /model/info missing, malformed
+        response) leaves the cache unchanged and the synchronous
+        `cell_capabilities` falls back to conservative defaults. Called
+        from `_refresh_catalog_if_stale` after a successful /v1/models
+        fetch so capabilities stay in sync with the advertised set.
+
+        Broad exception swallow: this method runs on the hot path of
+        the first request after each catalog TTL boundary; any defect
+        in /model/info or /api/show parsing must NEVER bubble up and
+        fail user-visible routing.
+        """
+        # Step 1: litellm → ollama mapping.
+        try:
+            response = await self._client.get(
+                f"{self._base_url}/model/info",
+                headers=self._build_headers(),
+                timeout=DEFAULT_HEALTH_TIMEOUT_S,
+            )
+        except Exception:
+            return
+        if response.status_code != 200:
+            return
+        try:
+            payload = response.json()
+        except Exception:
+            return
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, list):
+            return
+        ollama_mapping: dict[str, str] = {}
+        for entry in data:
+            if not isinstance(entry, dict):
+                continue
+            litellm_name = entry.get("model_name")
+            params = entry.get("litellm_params") or {}
+            model_id = params.get("model", "") if isinstance(params, dict) else ""
+            if not isinstance(model_id, str) or not isinstance(litellm_name, str):
+                continue
+            if model_id.startswith("ollama/"):
+                ollama_mapping[litellm_name] = model_id[len("ollama/"):]
+        # Step 2: per-model /api/show on ollama directly.
+        for litellm_name, ollama_name in ollama_mapping.items():
+            try:
+                show = await self._client.post(
+                    f"{self._ollama_url}/api/show",
+                    json={"name": ollama_name},
+                    timeout=DEFAULT_HEALTH_TIMEOUT_S,
+                )
+            except Exception:
+                continue
+            if show.status_code != 200:
+                continue
+            try:
+                info = show.json()
+            except Exception:
+                continue
+            # Step 3: parse + translate. ollama's response shape:
+            #   {
+            #     "capabilities": ["completion","tools","vision","thinking"],
+            #     "model_info": {"general.architecture": "...",
+            #                    "<arch>.context_length": <int>, ...}
+            #   }
+            caps_list = info.get("capabilities") or []
+            caps_set = {str(c).lower() for c in caps_list if isinstance(c, str)}
+            modalities: set[str] = {"text"}
+            if "vision" in caps_set:
+                modalities.add("image")
+            if "audio" in caps_set:
+                modalities.add("audio")
+            supports_tools = "tools" in caps_set
+            # Context length lives under <architecture>.context_length;
+            # we don't know the architecture name a priori. Walk the
+            # model_info dict and find any key ending in `.context_length`.
+            context_window = 128_000  # fallback
+            model_info = info.get("model_info") or {}
+            if isinstance(model_info, dict):
+                for k, v in model_info.items():
+                    if isinstance(k, str) and k.endswith("context_length") and isinstance(v, int) and v > 0:
+                        context_window = v
+                        break
+            self._capabilities_cache[litellm_name] = CellCapabilities(
+                context_window=context_window,
+                modalities=frozenset(modalities),
+                supports_tools=supports_tools,
+                cost_rank=0,
+            )
 
     async def refresh_advertised_models(self, *, now: float | None = None) -> None:
         """Public refresh entry point — mirrors codex_auth_vault's contract so
@@ -337,6 +505,11 @@ class LiteLLMGatewayBackend:
         self._catalog_fetched_at = ts
         self._healthy = True
         self._last_health_reason = "ok"
+        # Best-effort: refresh per-model capabilities from ollama so the
+        # router's filter sees real tool/vision/context_window values.
+        # Failures here don't fail catalog refresh — cell_capabilities
+        # falls back to safe defaults when the cache is empty.
+        await self._refresh_capabilities()
 
 
 # ---------- body hygiene ------------------------------------------------
@@ -411,25 +584,90 @@ def _responses_to_chat_request(body: dict[str, Any]) -> dict[str, Any]:
 
 
 def _chat_to_responses_response(chat: dict[str, Any]) -> dict[str, Any]:
-    """Inverse of _responses_to_chat_request, on the response side."""
+    """Inverse of _responses_to_chat_request, on the response side.
+
+    Translates BOTH content text AND tool_calls. Earlier versions only
+    extracted message.content and dropped tool_calls on the floor —
+    which manifested as Codex CLI receiving a response.completed event
+    with empty output and silently displaying nothing. Tool-use prompts
+    (Codex sends a tools array on every request, then the model picks
+    a tool) require the function_call items in output[].
+    """
     choices = chat.get("choices")
-    if not isinstance(choices, list) or not choices:
-        text = ""
-    else:
+    text = ""
+    tool_calls: list[dict[str, Any]] = []
+    if isinstance(choices, list) and choices:
         first = choices[0] if isinstance(choices[0], dict) else {}
         message = first.get("message") if isinstance(first.get("message"), dict) else {}
-        raw = message.get("content") if isinstance(message, dict) else None
-        text = raw if isinstance(raw, str) else ""
+        if isinstance(message, dict):
+            raw_content = message.get("content")
+            if isinstance(raw_content, str):
+                text = raw_content
+            raw_tool_calls = message.get("tool_calls")
+            if isinstance(raw_tool_calls, list):
+                for tc in raw_tool_calls:
+                    if isinstance(tc, dict):
+                        tool_calls.append(tc)
+    # Build the Responses-API output list. function_call items come
+    # first (Codex CLI executes them, then submits results back); a
+    # message item with the assistant's text follows. When neither is
+    # present, emit an empty message — Codex CLI accepts that as
+    # "response complete with no output" rather than failing to parse.
+    output: list[dict[str, Any]] = []
+    for tc in tool_calls:
+        fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+        if not isinstance(fn, dict):
+            fn = {}
+        # Arguments arrive as a JSON string from ollama-tool-calling
+        # convention; some serving stacks return them as dicts instead.
+        # The Responses-API spec wants a string.
+        args = fn.get("arguments", "{}")
+        if isinstance(args, (dict, list)):
+            args = json.dumps(args)
+        elif not isinstance(args, str):
+            args = "{}"
+        call_id = tc.get("id") or fn.get("name", "") or "fc-unknown"
+        output.append({
+            "type": "function_call",
+            "id": f"fc_{call_id}",
+            "call_id": call_id,
+            "name": fn.get("name", ""),
+            "arguments": args,
+            "status": "completed",
+        })
+    if text or not tool_calls:
+        # Emit the message even when empty if there were no tool calls,
+        # so output[] is never an empty list (Codex parsers vary on
+        # how strictly they require at least one item).
+        output.append({
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": text}],
+        })
+    # Translate usage from chat-completions shape (prompt_tokens /
+    # completion_tokens) to Responses-API shape (input_tokens /
+    # output_tokens). Codex CLI's stream parser hard-fails with
+    # "missing field 'input_tokens'" when the response.completed event
+    # lacks it, so we ALWAYS emit at least zeros — even when ollama
+    # omits usage from its chat-completions reply.
+    chat_usage = chat.get("usage") if isinstance(chat.get("usage"), dict) else {}
+    usage = {
+        "input_tokens": int(chat_usage.get("prompt_tokens", 0) or 0),
+        "output_tokens": int(chat_usage.get("completion_tokens", 0) or 0),
+        "total_tokens": int(chat_usage.get("total_tokens", 0) or 0),
+    }
+    # Preserve any cache / reasoning-token sub-fields the upstream
+    # included — they're optional in the Responses API but if present
+    # they help downstream cost accounting.
+    if isinstance(chat_usage.get("prompt_tokens_details"), dict):
+        usage["input_tokens_details"] = chat_usage["prompt_tokens_details"]
+    if isinstance(chat_usage.get("completion_tokens_details"), dict):
+        usage["output_tokens_details"] = chat_usage["completion_tokens_details"]
     return {
         "id": chat.get("id", "resp-litellm"),
         "object": "response",
         "model": chat.get("model", ""),
-        "output": [
-            {
-                "type": "message",
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": text}],
-            }
-        ],
-        "usage": chat.get("usage"),
+        "status": "completed",
+        "output": output,
+        "usage": usage,
     }
