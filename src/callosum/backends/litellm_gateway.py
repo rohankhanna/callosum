@@ -261,24 +261,40 @@ class LiteLLMGatewayBackend:
     async def responses_stream(
         self, body: dict[str, Any], handle: CallHandle | None = None
     ) -> AsyncIterator[bytes]:
-        """Buffered Responses-API SSE: call non-stream upstream, then
-        replay as the full sequence of events Codex CLI's parser expects.
+        """True stream-through Responses-API SSE.
 
-        Codex CLI's stream parser doesn't just read response.completed —
-        it tracks per-item output via response.output_item.added/done
-        plus item-specific events (response.output_text.delta/.done for
-        messages, response.function_call_arguments.delta/.done for
-        function calls). Emitting ONLY response.created + completed
-        leaves the parser with an empty in-memory output list and the
-        user sees nothing on screen, with no error because the stream
-        IS well-formed at the wire level.
+        Opens an httpx stream to LiteLLM (which streams from ollama) and
+        translates each chat-completions delta into the appropriate
+        Responses-API event AS IT ARRIVES. No buffering.
 
-        We synthesize each intermediate event from the buffered full
-        payload so a single ollama chat-completions call still produces
-        a Codex-CLI-compatible stream.
+        Why this matters:
+          * Cancellation propagates. When the client disconnects,
+            asyncio.CancelledError fires here, the `async with stream_ctx`
+            block exits, httpx closes the upstream TCP socket, ollama
+            sees the connection drop, and the runner can stop
+            generating. The previous buffered impl awaited the full
+            response before yielding anything, so cancellation reached
+            nothing.
+          * User sees progress live instead of a 30s+ stall.
+          * For thinking models with `think: true`, the user sees
+            thinking content stream too.
+
+        Translation state we track per choice index:
+          * message text accumulation (chat `delta.content` → Responses
+            `response.output_text.delta`)
+          * thinking accumulation (chat `delta.thinking` → Responses
+            `response.reasoning_summary_text.delta`)
+          * per-tool-call argument accumulation (chat `delta.tool_calls
+            [j].function.arguments` chunks → Responses
+            `response.function_call_arguments.delta` chunks)
+
+        On finish_reason or [DONE]: emit per-item .done events,
+        `response.output_item.done` for each, and `response.completed`
+        carrying the assembled output array + usage.
         """
-        full = await self.responses({**body, "stream": False}, handle)
-        resp_id = full.get("id", "resp-litellm")
+        out_body = self._apply_inference_params(
+            _strip_codex_only_fields({**body, "stream": True})
+        )
         seq = 0
 
         def _emit(event_type: str, payload: dict[str, Any]) -> bytes:
@@ -287,53 +303,267 @@ class LiteLLMGatewayBackend:
             ev = {"type": event_type, "sequence_number": seq, **payload}
             return f"event: {event_type}\ndata: {json.dumps(ev)}\n\n".encode()
 
-        yield _emit("response.created", {"response": {**full, "status": "in_progress", "output": []}})
-        yield _emit("response.in_progress", {"response": {**full, "status": "in_progress", "output": []}})
+        # Per-stream accumulation state. Indexed by "output_index" in the
+        # Responses-API sense; each output item gets a stable index from
+        # the order it FIRST appeared in the stream.
+        text_so_far = ""
+        thinking_so_far = ""
+        tool_calls_state: dict[int, dict[str, Any]] = {}  # idx → {id, name, args, output_index}
+        output_items: list[dict[str, Any]] = []  # final assembled output for response.completed
+        next_output_index = 0
+        reasoning_output_index: int | None = None
+        message_output_index: int | None = None
+        message_item_id: str | None = None
+        reasoning_item_id: str | None = None
+        resp_id = "resp-litellm"
+        upstream_model = out_body.get("model", "")
+        usage: dict[str, Any] | None = None
 
-        for idx, item in enumerate(full.get("output", [])):
-            if not isinstance(item, dict):
-                continue
-            yield _emit("response.output_item.added", {"output_index": idx, "item": item})
-            item_type = item.get("type")
-            item_id = item.get("id", f"item_{idx}")
-            if item_type == "message":
-                # Replay text as one delta + one done event.
-                content_list = item.get("content") or []
-                text = ""
-                if isinstance(content_list, list) and content_list:
-                    first = content_list[0]
-                    if isinstance(first, dict) and isinstance(first.get("text"), str):
-                        text = first["text"]
-                yield _emit("response.output_text.delta", {
-                    "item_id": item_id,
-                    "output_index": idx,
-                    "content_index": 0,
-                    "delta": text,
+        try:
+            stream_ctx = self._client.stream(
+                "POST",
+                f"{self._base_url}/v1/chat/completions",
+                json=out_body,
+                headers=self._build_headers(),
+            )
+            async with stream_ctx as response:
+                if handle is not None:
+                    handle.upstream_status = response.status_code
+                    handle.upstream_headers = dict(response.headers)
+                if response.status_code >= 400:
+                    await response.aread()
+                    raise error_from_response(response)
+                # Emit response.created early so clients show progress.
+                base_response = {
+                    "id": resp_id,
+                    "object": "response",
+                    "model": upstream_model,
+                    "status": "in_progress",
+                    "output": [],
+                }
+                yield _emit("response.created", {"response": base_response})
+                yield _emit("response.in_progress", {"response": base_response})
+
+                async for line in response.aiter_lines():
+                    if not line:
+                        continue
+                    if line.startswith("data:"):
+                        payload_str = line[5:].strip()
+                    else:
+                        continue
+                    if payload_str == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(payload_str)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(chunk.get("id"), str) and chunk["id"]:
+                        resp_id = chunk["id"]
+                    if isinstance(chunk.get("model"), str) and chunk["model"]:
+                        upstream_model = chunk["model"]
+                    if isinstance(chunk.get("usage"), dict):
+                        usage = chunk["usage"]
+                    choices = chunk.get("choices") or []
+                    if not isinstance(choices, list) or not choices:
+                        continue
+                    choice = choices[0]
+                    if not isinstance(choice, dict):
+                        continue
+                    delta = choice.get("delta") or {}
+                    if not isinstance(delta, dict):
+                        delta = {}
+
+                    # Thinking deltas (model-a0d5/model-a0g2/r1 thinking mode).
+                    thinking_delta = delta.get("thinking")
+                    if isinstance(thinking_delta, str) and thinking_delta:
+                        if reasoning_output_index is None:
+                            reasoning_output_index = next_output_index
+                            next_output_index += 1
+                            reasoning_item_id = f"rs_{resp_id}_{reasoning_output_index}"
+                            yield _emit("response.output_item.added", {
+                                "output_index": reasoning_output_index,
+                                "item": {
+                                    "type": "reasoning",
+                                    "id": reasoning_item_id,
+                                    "summary": [],
+                                },
+                            })
+                        thinking_so_far += thinking_delta
+                        yield _emit("response.reasoning_summary_text.delta", {
+                            "item_id": reasoning_item_id,
+                            "output_index": reasoning_output_index,
+                            "summary_index": 0,
+                            "delta": thinking_delta,
+                        })
+
+                    # Tool-call deltas.
+                    tool_calls_delta = delta.get("tool_calls") or []
+                    if isinstance(tool_calls_delta, list):
+                        for tc_delta in tool_calls_delta:
+                            if not isinstance(tc_delta, dict):
+                                continue
+                            tc_idx = tc_delta.get("index", 0)
+                            if not isinstance(tc_idx, int):
+                                tc_idx = 0
+                            state = tool_calls_state.get(tc_idx)
+                            if state is None:
+                                # First time we see this tool call — emit added.
+                                call_id = tc_delta.get("id") or f"fc_{resp_id}_{tc_idx}"
+                                fn = tc_delta.get("function") or {}
+                                name = fn.get("name", "") if isinstance(fn, dict) else ""
+                                out_idx = next_output_index
+                                next_output_index += 1
+                                state = {
+                                    "id": call_id,
+                                    "name": name,
+                                    "args": "",
+                                    "output_index": out_idx,
+                                    "item_id": f"fc_{call_id}",
+                                }
+                                tool_calls_state[tc_idx] = state
+                                yield _emit("response.output_item.added", {
+                                    "output_index": out_idx,
+                                    "item": {
+                                        "type": "function_call",
+                                        "id": state["item_id"],
+                                        "call_id": call_id,
+                                        "name": name,
+                                        "arguments": "",
+                                        "status": "in_progress",
+                                    },
+                                })
+                            else:
+                                fn = tc_delta.get("function") or {}
+                                if isinstance(fn, dict) and isinstance(fn.get("name"), str):
+                                    state["name"] = fn["name"] or state["name"]
+                            fn = tc_delta.get("function") or {}
+                            args_delta = fn.get("arguments") if isinstance(fn, dict) else None
+                            if isinstance(args_delta, str) and args_delta:
+                                state["args"] += args_delta
+                                yield _emit("response.function_call_arguments.delta", {
+                                    "item_id": state["item_id"],
+                                    "output_index": state["output_index"],
+                                    "delta": args_delta,
+                                })
+
+                    # Message text delta.
+                    content_delta = delta.get("content")
+                    if isinstance(content_delta, str) and content_delta:
+                        if message_output_index is None:
+                            message_output_index = next_output_index
+                            next_output_index += 1
+                            message_item_id = f"msg_{resp_id}_{message_output_index}"
+                            yield _emit("response.output_item.added", {
+                                "output_index": message_output_index,
+                                "item": {
+                                    "type": "message",
+                                    "id": message_item_id,
+                                    "role": "assistant",
+                                    "content": [],
+                                    "status": "in_progress",
+                                },
+                            })
+                        text_so_far += content_delta
+                        yield _emit("response.output_text.delta", {
+                            "item_id": message_item_id,
+                            "output_index": message_output_index,
+                            "content_index": 0,
+                            "delta": content_delta,
+                        })
+
+            # Stream ended cleanly.
+            # Emit per-item .done events in output order, then
+            # response.output_item.done, then response.completed.
+            if reasoning_output_index is not None:
+                yield _emit("response.reasoning_summary_text.done", {
+                    "item_id": reasoning_item_id,
+                    "output_index": reasoning_output_index,
+                    "summary_index": 0,
+                    "text": thinking_so_far,
                 })
-                yield _emit("response.output_text.done", {
-                    "item_id": item_id,
-                    "output_index": idx,
-                    "content_index": 0,
-                    "text": text,
+                reasoning_item = {
+                    "type": "reasoning",
+                    "id": reasoning_item_id,
+                    "summary": [{"type": "summary_text", "text": thinking_so_far}],
+                }
+                output_items.append(reasoning_item)
+                yield _emit("response.output_item.done", {
+                    "output_index": reasoning_output_index,
+                    "item": reasoning_item,
                 })
-            elif item_type == "function_call":
-                args = item.get("arguments", "")
-                if not isinstance(args, str):
-                    args = json.dumps(args)
-                yield _emit("response.function_call_arguments.delta", {
-                    "item_id": item_id,
-                    "output_index": idx,
-                    "delta": args,
-                })
+
+            for tc_idx in sorted(tool_calls_state):
+                state = tool_calls_state[tc_idx]
                 yield _emit("response.function_call_arguments.done", {
-                    "item_id": item_id,
-                    "output_index": idx,
-                    "arguments": args,
+                    "item_id": state["item_id"],
+                    "output_index": state["output_index"],
+                    "arguments": state["args"],
                 })
-            yield _emit("response.output_item.done", {"output_index": idx, "item": item})
+                fn_item = {
+                    "type": "function_call",
+                    "id": state["item_id"],
+                    "call_id": state["id"],
+                    "name": state["name"],
+                    "arguments": state["args"],
+                    "status": "completed",
+                }
+                output_items.append(fn_item)
+                yield _emit("response.output_item.done", {
+                    "output_index": state["output_index"],
+                    "item": fn_item,
+                })
 
-        yield _emit("response.completed", {"response": full})
-        yield b"data: [DONE]\n\n"
+            if message_output_index is not None:
+                yield _emit("response.output_text.done", {
+                    "item_id": message_item_id,
+                    "output_index": message_output_index,
+                    "content_index": 0,
+                    "text": text_so_far,
+                })
+                msg_item = {
+                    "type": "message",
+                    "id": message_item_id,
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": text_so_far}],
+                    "status": "completed",
+                }
+                output_items.append(msg_item)
+                yield _emit("response.output_item.done", {
+                    "output_index": message_output_index,
+                    "item": msg_item,
+                })
+
+            # Codex CLI requires input_tokens; map from chat usage shape.
+            chat_usage = usage if isinstance(usage, dict) else {}
+            usage_out = {
+                "input_tokens": int(chat_usage.get("prompt_tokens", 0) or 0),
+                "output_tokens": int(chat_usage.get("completion_tokens", 0) or 0),
+                "total_tokens": int(chat_usage.get("total_tokens", 0) or 0),
+            }
+            full_response = {
+                "id": resp_id,
+                "object": "response",
+                "model": upstream_model,
+                "status": "completed",
+                "output": output_items,
+                "usage": usage_out,
+            }
+            yield _emit("response.completed", {"response": full_response})
+            yield b"data: [DONE]\n\n"
+            # Success — clear the offline tracker.
+            self._on_transport_success_litellm()
+        except httpx.HTTPError as exc:
+            # Transport-level error during the stream — flip _healthy
+            # so the offline detector kicks in.
+            self._healthy = False
+            self._last_health_reason = "network"
+            raise BackendError(classification="transient", message=str(exc)) from exc
+
+    def _on_transport_success_litellm(self) -> None:
+        """No-op placeholder so the structure mirrors codex_auth_vault's
+        _on_transport_success. Currently we only flip _healthy on the
+        catalog refresh path; this hook is here for future symmetry."""
+        return
 
     def cell_capabilities(self, model: str) -> CellCapabilities:
         """Return real capabilities for `model`, discovered from ollama.

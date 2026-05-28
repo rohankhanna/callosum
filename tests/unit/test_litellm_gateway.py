@@ -470,6 +470,123 @@ async def test_chat_completions_raises_backenderror_on_4xx() -> None:
     await backend.aclose()
 
 
+async def test_responses_stream_translates_chat_deltas_as_they_arrive() -> None:
+    """Stream-through: as each chat-completions delta arrives, the
+    translator emits the corresponding Responses-API event. Asserts:
+    response.created arrives BEFORE the content fully accumulates."""
+
+    chunks = [
+        b'data: {"id":"x","model":"model-a0d5","choices":[{"delta":{"content":"Hel"}}]}\n\n',
+        b'data: {"id":"x","model":"model-a0d5","choices":[{"delta":{"content":"lo"}}]}\n\n',
+        b'data: {"id":"x","choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}\n\n',
+        b"data: [DONE]\n\n",
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json=_models_payload("model-a0d5"))
+        if request.url.path == "/v1/chat/completions":
+            return httpx.Response(
+                200,
+                content=b"".join(chunks),
+                headers={"content-type": "text/event-stream"},
+            )
+        return httpx.Response(404)
+
+    backend = LiteLLMGatewayBackend(
+        id="local", transport=httpx.MockTransport(handler)
+    )
+    events: list[dict[str, Any]] = []
+    async for raw in backend.responses_stream(
+        {"model": "model-a0d5", "input": "say hi", "stream": True}
+    ):
+        for ev_chunk in raw.split(b"\n\n"):
+            if not ev_chunk:
+                continue
+            for line in ev_chunk.split(b"\n"):
+                if line.startswith(b"data:"):
+                    payload_str = line[5:].strip().decode()
+                    if payload_str == "[DONE]":
+                        continue
+                    try:
+                        events.append(json.loads(payload_str))
+                    except json.JSONDecodeError:
+                        pass
+    types = [e["type"] for e in events]
+    # Order invariants the Codex CLI parser depends on:
+    assert types[0] == "response.created"
+    assert "response.in_progress" in types
+    assert "response.output_item.added" in types
+    # Text deltas were emitted INCREMENTALLY (we sent 2 content chunks).
+    text_deltas = [e for e in events if e["type"] == "response.output_text.delta"]
+    assert len(text_deltas) == 2
+    assert text_deltas[0]["delta"] == "Hel"
+    assert text_deltas[1]["delta"] == "lo"
+    # response.completed at the end carries assembled content + usage.
+    completed = [e for e in events if e["type"] == "response.completed"]
+    assert len(completed) == 1
+    full = completed[0]["response"]
+    assert full["output"][0]["content"][0]["text"] == "Hello"
+    assert full["usage"]["input_tokens"] == 3
+    assert full["usage"]["output_tokens"] == 2
+    await backend.aclose()
+
+
+async def test_responses_stream_translates_tool_call_argument_chunks() -> None:
+    """Tool-call arguments arrive in chunks (`{"`, then `"cmd":"ls"}`);
+    the translator should accumulate them and emit
+    function_call_arguments.delta for each chunk + a .done event at the
+    end with the full string."""
+
+    chunks = [
+        b'data: {"id":"x","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"shell","arguments":""}}]}}]}\n\n',
+        b'data: {"id":"x","choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"cm"}}]}}]}\n\n',
+        b'data: {"id":"x","choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"d\\":\\"ls\\"}"}}]}}]}\n\n',
+        b'data: {"id":"x","choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+        b"data: [DONE]\n\n",
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json=_models_payload("model-a0d5"))
+        if request.url.path == "/v1/chat/completions":
+            return httpx.Response(
+                200,
+                content=b"".join(chunks),
+                headers={"content-type": "text/event-stream"},
+            )
+        return httpx.Response(404)
+
+    backend = LiteLLMGatewayBackend(
+        id="local", transport=httpx.MockTransport(handler)
+    )
+    events: list[dict[str, Any]] = []
+    async for raw in backend.responses_stream(
+        {"model": "model-a0d5", "input": "x", "stream": True}
+    ):
+        for ev_chunk in raw.split(b"\n\n"):
+            for line in ev_chunk.split(b"\n"):
+                if line.startswith(b"data:"):
+                    s = line[5:].strip().decode()
+                    if s and s != "[DONE]":
+                        try:
+                            events.append(json.loads(s))
+                        except json.JSONDecodeError:
+                            pass
+    arg_deltas = [e for e in events if e["type"] == "response.function_call_arguments.delta"]
+    assert len(arg_deltas) == 2
+    arg_done = [e for e in events if e["type"] == "response.function_call_arguments.done"]
+    assert len(arg_done) == 1
+    assert arg_done[0]["arguments"] == '{"cmd":"ls"}'
+    completed = [e for e in events if e["type"] == "response.completed"]
+    full = completed[0]["response"]
+    fc = [o for o in full["output"] if o["type"] == "function_call"][0]
+    assert fc["name"] == "shell"
+    assert fc["arguments"] == '{"cmd":"ls"}'
+    assert fc["call_id"] == "call_1"
+    await backend.aclose()
+
+
 # ---------- cell_capabilities --------------------------------------------
 
 
