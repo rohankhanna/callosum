@@ -27,6 +27,7 @@ callosum = "callosum.__main__:main"
 callosum-ctl = "callosum.cli:main"
 callosum-embed-backfill = "callosum.jobs.embed_backfill:main"
 callosum-apply-failure-labels = "callosum.jobs.apply_failure_labels:main"
+callosum-recover-prompt-text = "callosum.jobs.recover_prompt_text:main"
 
 [dependency-groups]
 dev = [

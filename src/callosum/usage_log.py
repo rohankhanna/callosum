@@ -510,31 +510,92 @@ class UsageLog:
             self._conn.close()
 
 
+def _walk_text(node) -> list[str]:
+    """Concatenate every text-shaped string from a nested message body.
+
+    Handles three shapes that callosum sees in the wild:
+      * Chat completions `messages[].content` as str or as a list of
+        parts with `text`.
+      * Codex Responses API `input[].content[].text`.
+      * Top-level `instructions` strings.
+    """
+    if node is None:
+        return []
+    if isinstance(node, str):
+        return [node]
+    if isinstance(node, list):
+        out: list[str] = []
+        for x in node:
+            out.extend(_walk_text(x))
+        return out
+    if isinstance(node, dict):
+        if isinstance(node.get("text"), str):
+            return [node["text"]]
+        if "content" in node:
+            return _walk_text(node["content"])
+        out: list[str] = []
+        for v in node.values():
+            out.extend(_walk_text(v))
+        return out
+    return []
+
+
 def _extract_prompt_text(client_request: dict | None) -> str | None:
-    """Extract last user message text from OpenAI-format client request."""
+    """Extract user-visible text from an OpenAI-format client request.
+
+    Handles both Chat Completions (`messages`) and Codex Responses
+    API (`input` + `instructions`). Earlier versions only read the
+    Chat Completions shape, so every /v1/responses request — i.e.
+    every Codex CLI session — silently logged NULL prompt_text.
+    Caught by an embed-backfill audit showing 52,265 rows with
+    req_payload populated but prompt_text NULL.
+    """
     if client_request is None:
         return None
     try:
-        msgs = client_request.get("messages", [])
-        for m in reversed(msgs):
-            if m.get("role") == "user":
-                c = m.get("content", "")
-                return c if isinstance(c, str) else str(c)
+        parts: list[str] = []
+        for key in ("input", "messages", "instructions"):
+            if key in client_request:
+                parts.extend(_walk_text(client_request[key]))
+        text = "\n".join(p for p in parts if p)
+        return text if text else None
     except Exception:
-        pass
-    return None
+        return None
 
 
 def _extract_response_text(resp_payload: bytes | None) -> str | None:
-    """Extract first assistant message text from OpenAI-format response payload."""
+    """Extract assistant-visible text from a response payload.
+
+    Same dual-shape problem as `_extract_prompt_text`: the original
+    impl only handled Chat Completions `choices[0].message.content`
+    and missed the Codex Responses API
+    `output[].content[].text` shape. Now walks both.
+    """
     if resp_payload is None:
         return None
     try:
-        resp_dict = json.loads(resp_payload)
-        choices = resp_dict.get("choices", [])
-        if choices and "message" in choices[0]:
-            c = choices[0]["message"].get("content", "")
-            return c if isinstance(c, str) else str(c)
+        resp = json.loads(resp_payload)
+        if not isinstance(resp, dict):
+            return None
+        # Responses API shape.
+        if "output" in resp:
+            parts = _walk_text(resp["output"])
+            text = "\n".join(p for p in parts if p)
+            if text:
+                return text
+        # Chat Completions shape.
+        choices = resp.get("choices")
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+            msg = choices[0].get("message")
+            if isinstance(msg, dict):
+                c = msg.get("content")
+                if isinstance(c, str) and c:
+                    return c
+                if isinstance(c, list):
+                    parts = _walk_text(c)
+                    text = "\n".join(p for p in parts if p)
+                    if text:
+                        return text
     except Exception:
         pass
     return None
