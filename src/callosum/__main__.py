@@ -109,6 +109,7 @@ def main() -> None:
             auto_router_config=cfg.auto_router,
             startup_smoke_test=cfg.server.startup_smoke_test,
             smoke_test_interval_seconds=cfg.server.smoke_test_interval_seconds,
+            operator_state=operator_state,
         ),
         host=host,
         port=port,

@@ -209,6 +209,7 @@ def create_app(
     auto_router_config: AutoRouterConfig | None = None,
     startup_smoke_test: bool = False,
     smoke_test_interval_seconds: int = 0,
+    operator_state: Any = None,
 ) -> FastAPI:
     from callosum.state import StateStore
 
@@ -378,6 +379,14 @@ def create_app(
     # Install quality labeling UI if usage_log is available
     if usage_log is not None:
         install_label_ui(app, usage_log)
+
+    # Admin HTTP surface — gated by an admin token persisted under
+    # ~/.config/callosum/admin_token. The callosum CLI reads that token
+    # and calls into these endpoints to manage operator state without
+    # restarting the proxy.
+    if operator_state is not None:
+        from callosum.admin import install_admin_routes
+        install_admin_routes(app, operator_state)
 
     # Bearer middleware for /v1/* and /diagnose/* — only enforced when an
     # auth service is configured. In single-operator mode (no auth db) those
@@ -669,6 +678,7 @@ def create_app(
             state_store=state_store,
             auto_cfg=auto_cfg,
             router=router,
+            operator_state=operator_state,
             live_cells_fn=_live_cells,
         )
         # Add X-Proxy-Request-ID header if a request was logged
@@ -704,6 +714,7 @@ def create_app(
             state_store=state_store,
             auto_cfg=auto_cfg,
             router=router,
+            operator_state=operator_state,
             live_cells_fn=_live_cells,
         )
         # Add X-Proxy-Request-ID header if a request was logged
@@ -784,6 +795,7 @@ async def _dispatch_route(
     state_store: Any | None = None,
     auto_cfg: AutoRouterConfig | None = None,
     router: Router | None = None,
+    operator_state: Any = None,
     live_cells_fn: Callable[[], list[Cell]] | None = None,
 ) -> Any:
     """HTTP entry-point. Pulls session_id + api_key off the Request, then
@@ -810,6 +822,7 @@ async def _dispatch_route(
         state_store=state_store,
         auto_cfg=auto_cfg,
         router=router,
+            operator_state=operator_state,
         live_cells_fn=live_cells_fn,
     )
 
@@ -832,6 +845,7 @@ async def _dispatch_internal(
     state_store: Any | None = None,
     auto_cfg: AutoRouterConfig | None = None,
     router: Router | None = None,
+    operator_state: Any = None,
     live_cells_fn: Callable[[], list[Cell]] | None = None,
 ) -> Any:
     if auto_cfg is None:
@@ -872,6 +886,30 @@ async def _dispatch_internal(
     # the request log's `routing_mode` column for provenance.
     if router is not None:
         cells_now = live_cells_fn()
+        # Operator denylist + mode filters BEFORE routability — operator
+        # decisions are absolute. denylist drops named cells; mode
+        # constrains which backend kinds are eligible.
+        if operator_state is not None:
+            _mode = operator_state.get_mode()
+            if _mode in ("offline", "local-only"):
+                cells_now = [
+                    c for c in cells_now
+                    if any(
+                        c.model in b.advertised_models
+                        and getattr(b, "kind", "") == "litellm_gateway"
+                        for b in backends_list
+                    )
+                ]
+            elif _mode == "remote-only":
+                cells_now = [
+                    c for c in cells_now
+                    if any(
+                        c.model in b.advertised_models
+                        and getattr(b, "kind", "") != "litellm_gateway"
+                        for b in backends_list
+                    )
+                ]
+            cells_now = [c for c in cells_now if not operator_state.is_denied(c.model)]
         # Drop cells whose only serving backends are currently unroutable
         # (Codex weekly-exhausted, on cooldown, gateway down). The Router's
         # capability filter further drops cells whose physical capabilities

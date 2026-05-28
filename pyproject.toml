@@ -24,6 +24,7 @@ embeddings = [
 
 [project.scripts]
 callosum = "callosum.__main__:main"
+callosum-ctl = "callosum.cli:main"
 
 [dependency-groups]
 dev = [

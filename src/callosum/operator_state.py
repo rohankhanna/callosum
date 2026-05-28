@@ -56,7 +56,31 @@ _SCHEMA = [
         updated_at REAL NOT NULL
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS cell_denylist (
+        model TEXT PRIMARY KEY,
+        reason TEXT,
+        added_at REAL NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS operator_mode (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        mode TEXT NOT NULL,
+        updated_at REAL NOT NULL
+    )
+    """,
 ]
+
+# Allowed values for the single-row operator_mode table. `auto` is the
+# default — Router considers all routable backends. The others give the
+# operator a kill-switch when they want to constrain routing without
+# editing config.toml:
+#   * offline:     ignore remote backends entirely (force local-only)
+#   * local-only:  same as offline but explicit semantics
+#   * remote-only: ignore local backends (e.g. while debugging a local
+#                  serving stack)
+VALID_OPERATOR_MODES = frozenset({"auto", "offline", "local-only", "remote-only"})
 
 
 class OperatorState:
@@ -132,6 +156,76 @@ class OperatorState:
                 "DELETE FROM inference_overrides WHERE model = ?", (model,)
             )
             self._conn.commit()
+
+    # ---------- cell denylist --------------------------------------------
+
+    def add_denied_cell(self, model: str, reason: str | None = None) -> None:
+        """Add `model` to the denylist. Future routing decisions exclude
+        any cell whose model matches before the capability filter runs."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO cell_denylist (model, reason, added_at) "
+                "VALUES (?, ?, ?) "
+                "ON CONFLICT(model) DO UPDATE SET "
+                "reason=excluded.reason, added_at=excluded.added_at",
+                (model, reason, time.time()),
+            )
+            self._conn.commit()
+
+    def remove_denied_cell(self, model: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM cell_denylist WHERE model = ?", (model,)
+            )
+            self._conn.commit()
+
+    def list_denied_cells(self) -> list[tuple[str, str | None]]:
+        """Return [(model, reason), ...] in insertion order."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT model, reason FROM cell_denylist ORDER BY added_at"
+            ).fetchall()
+        return [(str(m), r if r is None or isinstance(r, str) else None) for m, r in rows]
+
+    def is_denied(self, model: str) -> bool:
+        """Hot-path check: is this model in the denylist? Sub-millisecond
+        SELECT — called once per routing decision."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM cell_denylist WHERE model = ? LIMIT 1", (model,)
+            ).fetchone()
+        return row is not None
+
+    # ---------- operator mode --------------------------------------------
+
+    def get_mode(self) -> str:
+        """Return current operator mode. Defaults to 'auto' if never set."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT mode FROM operator_mode WHERE id = 1"
+            ).fetchone()
+        if row is None:
+            return "auto"
+        mode = str(row[0])
+        return mode if mode in VALID_OPERATOR_MODES else "auto"
+
+    def set_mode(self, mode: str) -> None:
+        """Set the operator mode. Raises ValueError on unknown mode."""
+        if mode not in VALID_OPERATOR_MODES:
+            raise ValueError(
+                f"unknown mode {mode!r}; valid: {sorted(VALID_OPERATOR_MODES)}"
+            )
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO operator_mode (id, mode, updated_at) "
+                "VALUES (1, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET "
+                "mode=excluded.mode, updated_at=excluded.updated_at",
+                (mode, time.time()),
+            )
+            self._conn.commit()
+
+    # ---------- inference overrides (existing) ---------------------------
 
     def list_inference_overrides(self) -> list[tuple[str, dict[str, Any], bool]]:
         """Return all rows as (model, params, force). Used by the CLI's
