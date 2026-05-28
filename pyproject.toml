@@ -25,6 +25,8 @@ embeddings = [
 [project.scripts]
 callosum = "callosum.__main__:main"
 callosum-ctl = "callosum.cli:main"
+callosum-embed-backfill = "callosum.jobs.embed_backfill:main"
+callosum-apply-failure-labels = "callosum.jobs.apply_failure_labels:main"
 
 [dependency-groups]
 dev = [
