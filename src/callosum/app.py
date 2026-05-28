@@ -358,6 +358,33 @@ def create_app(
                         state_store.set_model_release_timestamp(time.time())
                 except Exception:
                     logger.exception("startup model-list refresh failed for %r", backend.id)
+        # Phase 6: kNN predictor reload from the request log's labeled
+        # rows. Only fires if the operator picked the knn predictor —
+        # uniform predictor doesn't need data and avoids the SQLite
+        # scan on every startup.
+        if (
+            router is not None
+            and auto_cfg.routing.quality_predictor == "knn"
+            and usage_log is not None
+            and getattr(usage_log, "path", None) is not None
+        ):
+            try:
+                from callosum.routing.predictor.loader import (
+                    labeled_rows_from_request_log,
+                )
+                router._predictor.reload(  # type: ignore[attr-defined]
+                    labeled_rows_from_request_log(
+                        usage_log.path, limit=50_000,
+                    )
+                )
+                logger.warning(
+                    "router: kNN predictor reloaded from request log"
+                )
+            except Exception:
+                logger.exception(
+                    "router: kNN predictor reload failed; predictor "
+                    "stays cold-start uniform"
+                )
         if startup_smoke_test and backends_list:
             await _run_startup_smoke_test(backends_list)
         smoke_tester.start()
