@@ -11,6 +11,15 @@ dependencies = [
     "httpx[http2]>=0.27",
     "pydantic>=2.6",
     "argon2-cffi>=23.1",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+# Real embedding providers. Skip when using the noop provider — keeps
+# the proxy installable without dragging in torch / huggingface stacks
+# (multi-GB). Install with `pip install -e '.[embeddings]'`.
+embeddings = [
+    "sentence-transformers>=3.0",
 ]
 
 [project.scripts]

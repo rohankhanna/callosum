@@ -164,6 +164,16 @@ END""",
     "ALTER TABLE requests ADD COLUMN recommender_source TEXT",
     "CREATE INDEX IF NOT EXISTS idx_requests_recommender_source"
     " ON requests(recommender_source)",
+    # Phase 4 learning-router columns: raw float32 bytes of the prompt
+    # embedding and (optionally) response embedding, populated when the
+    # configured EmbeddingProvider is non-noop. Used by the kNN
+    # predictor's reload() at startup and after each predictor-train
+    # Dispatch job checkpoint. Existing production DBs may already have
+    # these columns from an earlier label-UI plan migration; the
+    # ALTER TABLE is wrapped in a try/except in the migration loop so
+    # a "duplicate column" error is silently ignored.
+    "ALTER TABLE requests ADD COLUMN prompt_embedding BLOB",
+    "ALTER TABLE requests ADD COLUMN response_embedding BLOB",
 ]
 
 
@@ -216,6 +226,13 @@ class UsageLogEntry:
     recommender_classifier_cell: str | None = None
     recommender_raw_output: str | None = None
     recommender_source: str | None = None
+    # Raw float32 bytes of the prompt embedding produced by the routing
+    # EmbeddingProvider. NULL when the noop provider is active (cold-
+    # start configuration) or when text extraction returned empty.
+    # Persisted to the `prompt_embedding` BLOB column; the kNN
+    # predictor reloads it via np.frombuffer at startup / after
+    # training-job checkpoints.
+    prompt_embedding: bytes | None = None
 
 
 @dataclass(slots=True)
@@ -353,6 +370,7 @@ class UsageLog:
             entry.recommender_classifier_cell,
             entry.recommender_raw_output,
             entry.recommender_source,
+            entry.prompt_embedding,
         )
         with self._lock:
             cursor = self._conn.execute(
@@ -375,12 +393,12 @@ class UsageLog:
                     requested_model, requested_reasoning_effort, routing_mode,
                     prompt_complexity_class, prompt_text, response_text,
                     recommender_classifier_cell, recommender_raw_output,
-                    recommender_source
+                    recommender_source, prompt_embedding
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 """,
                 row,

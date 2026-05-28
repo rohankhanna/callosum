@@ -854,6 +854,10 @@ async def _dispatch_internal(
     recommender_classifier_cell: str | None = None
     recommender_raw_output: str | None = None
     recommender_source: str | None = None
+    # Embedding for the prompt — populated by the EmbeddingProvider, lands
+    # in the prompt_embedding BLOB column. Stays None when noop provider
+    # is configured. Feeds the kNN predictor at training time.
+    prompt_embedding: bytes | None = None
     cell_candidates: tuple[Cell, ...] = ()
 
     # Look up current session context size for context-safe routing
@@ -899,6 +903,9 @@ async def _dispatch_internal(
             else None
         )
         recommender_source = "router"
+        # Persist the prompt embedding for the kNN predictor's training
+        # corpus. None when the noop embedding provider is selected.
+        prompt_embedding = decision.features.embedding
         # Candidate cells the dispatch layer walks if the primary's
         # backend pool 5xxs. Capped at MAX_CELL_ATTEMPTS so retry
         # latency stays bounded.
@@ -935,6 +942,7 @@ async def _dispatch_internal(
             recommender_classifier_cell=recommender_classifier_cell,
             recommender_raw_output=recommender_raw_output,
             recommender_source=recommender_source,
+                prompt_embedding=prompt_embedding,
         )
     return await _dispatch_nonstream_with_cell_retry(
         body,
@@ -955,6 +963,7 @@ async def _dispatch_internal(
         recommender_classifier_cell=recommender_classifier_cell,
         recommender_raw_output=recommender_raw_output,
         recommender_source=recommender_source,
+                prompt_embedding=prompt_embedding,
     )
 
 
@@ -1198,6 +1207,7 @@ async def _dispatch_nonstream(
     recommender_classifier_cell: str | None = None,
     recommender_raw_output: str | None = None,
     recommender_source: str | None = None,
+    prompt_embedding: bytes | None = None,
 ) -> dict[str, Any]:
     excluded: set[str] = set()
     excluded_errors: dict[str, BackendError] = {}
@@ -1239,6 +1249,7 @@ async def _dispatch_nonstream(
                 recommender_classifier_cell=recommender_classifier_cell,
                 recommender_raw_output=recommender_raw_output,
                 recommender_source=recommender_source,
+                prompt_embedding=prompt_embedding,
             )
             last_error = exc
             if exc.classification not in RETRYABLE:
@@ -1277,6 +1288,7 @@ async def _dispatch_nonstream(
             recommender_classifier_cell=recommender_classifier_cell,
             recommender_raw_output=recommender_raw_output,
             recommender_source=recommender_source,
+                prompt_embedding=prompt_embedding,
         )
         return result
 
@@ -1345,6 +1357,7 @@ async def _dispatch_stream(
     recommender_classifier_cell: str | None = None,
     recommender_raw_output: str | None = None,
     recommender_source: str | None = None,
+    prompt_embedding: bytes | None = None,
 ) -> StreamingResponse:
     excluded: set[str] = set()
     excluded_errors: dict[str, BackendError] = {}
@@ -1387,6 +1400,7 @@ async def _dispatch_stream(
                 recommender_classifier_cell=recommender_classifier_cell,
                 recommender_raw_output=recommender_raw_output,
                 recommender_source=recommender_source,
+                prompt_embedding=prompt_embedding,
             )
             _remember_binding(session_registry, session_id, backend.id)
             return StreamingResponse(_empty_iter(), media_type="text/event-stream")
@@ -1414,6 +1428,7 @@ async def _dispatch_stream(
                 recommender_classifier_cell=recommender_classifier_cell,
                 recommender_raw_output=recommender_raw_output,
                 recommender_source=recommender_source,
+                prompt_embedding=prompt_embedding,
             )
             last_error = exc
             if exc.classification not in RETRYABLE:
@@ -1456,6 +1471,7 @@ async def _dispatch_stream(
                 recommender_classifier_cell=recommender_classifier_cell,
                 recommender_raw_output=recommender_raw_output,
                 recommender_source=recommender_source,
+                prompt_embedding=prompt_embedding,
             ),
             media_type="text/event-stream",
         )
@@ -2079,6 +2095,7 @@ async def _log_on_complete(
     recommender_classifier_cell: str | None = None,
     recommender_raw_output: str | None = None,
     recommender_source: str | None = None,
+    prompt_embedding: bytes | None = None,
 ) -> AsyncIterator[bytes]:
     """Pass-through wrapper that writes the usage log row when the stream ends.
 
@@ -2110,6 +2127,7 @@ async def _log_on_complete(
         recommender_classifier_cell=recommender_classifier_cell,
         recommender_raw_output=recommender_raw_output,
         recommender_source=recommender_source,
+                prompt_embedding=prompt_embedding,
     )
 
 
@@ -2196,6 +2214,7 @@ def _log_attempt(
     recommender_classifier_cell: str | None = None,
     recommender_raw_output: str | None = None,
     recommender_source: str | None = None,
+    prompt_embedding: bytes | None = None,
 ) -> None:
     if usage_log is None:
         return
@@ -2250,6 +2269,7 @@ def _log_attempt(
         recommender_classifier_cell=recommender_classifier_cell,
         recommender_raw_output=recommender_raw_output,
         recommender_source=recommender_source,
+                prompt_embedding=prompt_embedding,
     )
     request_id = usage_log.record(entry)
     # Store request_id in context for response handlers to access

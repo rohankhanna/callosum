@@ -25,17 +25,7 @@ _DECISION_BOUNDARY = 0.5
 
 class CostWeightedSelector:
     """CellSelector impl picking cheapest candidate above the decision
-    boundary; tiebreak by parameter_count descending (most capable
-    within tier wins); cheapest overall as a best-effort fallback.
-
-    The parameter_count tiebreaker is principled, not arbitrary: model
-    capacity is a measurable property, and within a cost tier the more-
-    parameterized cell is empirically more capable on agentic/tool-use
-    workloads. Cells without parameter_count (typically remote cells
-    where the backend doesn't expose it) tiebreak as 0, sorting last
-    within their cost tier — fine, since cost mostly differentiates
-    remote cells already.
-    """
+    boundary; cheapest overall as a best-effort fallback."""
 
     id: str = "cost-weighted"
 
@@ -52,12 +42,4 @@ class CostWeightedSelector:
             c for c, p in predictions.items() if p >= _DECISION_BOUNDARY
         ]
         pool = qualifying if qualifying else list(predictions.keys())
-
-        def _rank(c: Cell) -> tuple[int, int]:
-            caps = capabilities[c]
-            # Negate parameter_count so larger values sort FIRST (Python
-            # tuple sort is ascending). None becomes 0 → sorts last
-            # within its cost tier.
-            return (caps.cost_rank, -(caps.parameter_count or 0))
-
-        return min(pool, key=_rank)
+        return min(pool, key=lambda c: capabilities[c].cost_rank)

@@ -18,10 +18,19 @@ from pydantic import BaseModel, ConfigDict
 from callosum.cell_grid import Cell
 from callosum.routing.capability import CapabilityFilter
 from callosum.routing.embedding.noop import NoopEmbeddingProvider
+from callosum.routing.predictor.knn import KNNPredictor
 from callosum.routing.predictor.uniform import UniformPriorPredictor
 from callosum.routing.protocols import CellCapabilities
 from callosum.routing.router import Router
 from callosum.routing.selector.cost_weighted import CostWeightedSelector
+
+
+def _bge_provider_factory():
+    """Lazy import + construct of the BGE provider so the module
+    can be imported without sentence-transformers installed. Selected
+    only when operator configures embedding_provider='bge-large-en-v1.5'."""
+    from callosum.routing.embedding.bge import BGELargeEmbeddingProvider
+    return BGELargeEmbeddingProvider()
 
 
 class RoutingConfig(BaseModel):
@@ -40,10 +49,12 @@ class RoutingConfig(BaseModel):
 
 _EMBEDDING_IMPLS: dict[str, Callable[[], object]] = {
     "noop": NoopEmbeddingProvider,
+    "bge-large-en-v1.5": _bge_provider_factory,
 }
 
 _PREDICTOR_IMPLS: dict[str, Callable[[], object]] = {
     "uniform": UniformPriorPredictor,
+    "knn": KNNPredictor,
 }
 
 _SELECTOR_IMPLS: dict[str, Callable[[], object]] = {
