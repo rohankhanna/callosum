@@ -85,15 +85,42 @@ def test_router_picks_only_tool_capable_cell() -> None:
     assert decision.cell == REMOTE_MID
 
 
-def test_router_picks_large_context_cell_when_prompt_is_huge() -> None:
-    """A 250K-token prompt won't fit in 128K LOCAL; the 256K MID has
-    just enough; HIGH has plenty. Cheapest compatible wins."""
+def test_router_prefers_large_context_cell_when_prompt_is_huge() -> None:
+    """A 250K-token prompt no longer EXCLUDES LOCAL (128K) — the filter
+    is soft, not hard. But the Router's window-fit scaling penalizes
+    LOCAL's prediction enough that the selector should prefer MID
+    (256K, full headroom) over LOCAL even though LOCAL is cheaper.
+    Window fit is the routing preference signal the user asked for."""
     router = _build()
     huge = "x" * 750_000  # ~250K tokens at chars/3
     body = {"messages": [{"role": "user", "content": huge}]}
     decision = asyncio.run(router.route(body, [LOCAL, REMOTE_MID, REMOTE_HIGH]))
-    # 250K tokens + 4K headroom > 128K → LOCAL out. 256K > 254K → MID in.
+    # MID has full headroom (256K > 254K budget); LOCAL doesn't (128K < 254K)
+    # so its scaled prediction halves. With uniform prior 0.5, LOCAL → ~0.25,
+    # falls below the selector's 0.5 cutoff, MID at 0.5 wins.
     assert decision.cell == REMOTE_MID
+    # LOCAL must still be in the candidate list — soft preference, not exclusion.
+    assert LOCAL in decision.candidates
+
+
+def test_router_falls_back_to_overflowing_cell_when_nothing_fits() -> None:
+    """When every cell looks too small for the (over-counted) estimate,
+    the Router still returns a decision. The least-bad cell wins —
+    largest window, then cheapest. Upstream is the source of truth on
+    whether the prompt actually overflows."""
+    router = _build()
+    huge = "x" * 1_500_000  # ~500K tokens at chars/3 — exceeds even HIGH's 400K
+    body = {"messages": [{"role": "user", "content": huge}]}
+    decision = asyncio.run(router.route(body, [LOCAL, REMOTE_MID, REMOTE_HIGH]))
+    # All three overflow → all scaled below 0.5 → selector falls back to
+    # cheapest overall, but in proportion to fit ratio. HIGH has the best
+    # fit ratio (400/504 vs 256/504 vs 128/504), so candidates should be
+    # ordered with HIGH near the top of the retry list.
+    assert decision.cell in (LOCAL, REMOTE_MID, REMOTE_HIGH)
+    # The biggest-window cell should appear before the smallest one in
+    # the candidate retry order.
+    cands = list(decision.candidates)
+    assert cands.index(REMOTE_HIGH) < cands.index(LOCAL)
 
 
 def test_router_raises_when_nothing_compatible() -> None:

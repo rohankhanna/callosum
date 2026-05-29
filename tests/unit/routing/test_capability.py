@@ -1,4 +1,9 @@
-"""Tests for routing/capability.py — deterministic filter."""
+"""Tests for routing/capability.py — deterministic filter.
+
+The filter only enforces HARD requirements (modality, tools). Context
+window is intentionally a soft preference applied later by the Router,
+not a hard filter — see capability.py module docstring for why.
+"""
 
 from __future__ import annotations
 
@@ -25,14 +30,18 @@ def _caps(*, ctx: int = 128_000, modalities=("text",), tools: bool = False, cost
     )
 
 
-def test_filter_drops_cell_whose_context_is_too_small() -> None:
+def test_filter_no_longer_drops_on_context_window() -> None:
+    """A 250K-token prompt against a 128K cell used to drop. Now the
+    filter keeps the cell — window fit is a soft preference applied by
+    the Router's selection step, not a hard filter. Upstream is the
+    source of truth for actual context overflow."""
     small = Cell(model="tiny", reasoning_effort="default")
     big = Cell(model="big", reasoning_effort="default")
     caps = {small: _caps(ctx=4_000), big: _caps(ctx=256_000)}
     f = CapabilityFilter(capabilities_of=caps.__getitem__)
     out = f.filter([small, big], _features(tokens=10_000))
+    assert small in out
     assert big in out
-    assert small not in out
 
 
 def test_filter_drops_cell_without_required_modality() -> None:
@@ -68,10 +77,11 @@ def test_filter_keeps_cell_when_tools_not_needed() -> None:
     assert no_tools in out
 
 
-def test_filter_returns_empty_when_no_cell_qualifies() -> None:
-    """No physical cell can serve a 1M-token image-bearing prompt with
-    only text-only 128K cells available. Empty list is correct — the
-    Router converts this to a NoCompatibleCellError."""
+def test_filter_returns_empty_only_on_modality_or_tool_mismatch() -> None:
+    """An image-bearing prompt against text-only cells yields empty.
+    Router converts empty → NoCompatibleCellError → client-facing 4xx.
+    Note: token count is intentionally absurd here to prove it does NOT
+    affect the filter outcome — only modality does."""
     text_only = Cell(model="text-only", reasoning_effort="default")
     caps = {text_only: _caps(ctx=128_000, modalities=("text",))}
     f = CapabilityFilter(capabilities_of=caps.__getitem__)
