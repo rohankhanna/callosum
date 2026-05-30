@@ -293,8 +293,11 @@ def create_app(
     # run with no ML deps — uniform predictor returns 0.5 for everyone,
     # cost selector picks cheapest compatible → local-first by default.
     router: Router | None = None
+    # Pre-declared so the routing-events installer (further down) can
+    # safely reference it even when no backends are configured.
+    _capabilities_of: Callable[[Cell], CellCapabilities] | None = None
     if backends_list:
-        def _capabilities_of(cell: Cell) -> CellCapabilities:
+        def _capabilities_of_impl(cell: Cell) -> CellCapabilities:
             """Look up a cell's capabilities via the backend that
             advertises its model. Falls back to safe defaults when no
             backend recognizes the model (would mean a stale cell grid
@@ -312,6 +315,7 @@ def create_app(
                 supports_tools=False,
                 cost_rank=10,
             )
+        _capabilities_of = _capabilities_of_impl
         router = build_router(auto_cfg.routing, capabilities_of=_capabilities_of)
 
     smoke_tester = _PeriodicSmokeTester(
@@ -406,6 +410,20 @@ def create_app(
     # Install quality labeling UI if usage_log is available
     if usage_log is not None:
         install_label_ui(app, usage_log)
+
+    # Install routing-events SSE stream (consumed by external sidecar
+    # observers like the snorkel HUD). One event per recorded request,
+    # carrying the served cell, real context window, status, latency,
+    # tokens, retries, and current operator mode. Shape documented at
+    # callosum.routing_events module docstring.
+    if usage_log is not None:
+        from callosum.routing_events import install_routing_events
+        install_routing_events(
+            app,
+            usage_log=usage_log,
+            operator_state=operator_state,
+            capabilities_of=_capabilities_of,
+        )
 
     # Admin HTTP surface — gated by an admin token persisted under
     # ~/.config/callosum/admin_token. The callosum CLI reads that token
