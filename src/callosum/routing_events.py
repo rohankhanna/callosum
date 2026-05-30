@@ -8,6 +8,7 @@ consume without poking at the SQLite schema:
     {
       "request_id": int,
       "ts": float,                    # unix seconds, when the request started
+      "session_id": str | null,       # client-declared session (one per Codex CLI process)
       "requested_model": str | null,  # what the client asked the proxy for
       "served_cell": str,             # which cell actually handled it
       "served_context_window": int | null,  # the served cell's REAL window
@@ -23,6 +24,12 @@ Subscribers receive events starting from when they connect; there is no
 backfill. A `: keepalive` comment fires every 30s of idle so proxies
 and load-balancers don't close the connection between requests.
 
+Filtering: GET /events/routing accepts an optional `?session_id=<id>`
+query parameter. When provided, only events whose session_id matches
+are forwarded to that subscriber. Subscribers without a filter receive
+every event (used by general observability tools and by per-instance
+sidecars like snorkel BEFORE they anchor on their child's session_id).
+
 Design notes for consumers (e.g. the `snorkel` sidecar HUD):
   * `requested_model` is what the client (Codex CLI) put in the request;
     `served_cell` is what callosum's router chose. They often differ.
@@ -31,6 +38,10 @@ Design notes for consumers (e.g. the `snorkel` sidecar HUD):
   * `served_context_window` is the served cell's REAL advertised window.
     Use this — not the client's assumed window — when computing "how
     much of the context have I used?"
+  * `session_id` is the client-declared session header (Codex CLI sends
+    one stable value per process via the `session-id` header). Use this
+    to distinguish events from concurrent Codex instances all sharing
+    the same callosum proxy.
   * Slow consumers drop events (per-subscriber queue has a maxsize and
     QueueFull is silently swallowed). Don't rely on this stream for
     accounting; use the SQLite log for that.
@@ -57,9 +68,10 @@ if TYPE_CHECKING:
 class _RoutingEventBroadcaster:
     """Fan-out of routing-event payloads to all subscribed queues.
 
-    Each new subscriber gets its own bounded queue. Slow consumers
-    drop events (QueueFull is swallowed) rather than backpressure the
-    request-handling thread that's calling notify().
+    Each new subscriber gets its own bounded queue plus an optional
+    session_id filter. Slow consumers drop events (QueueFull is
+    swallowed) rather than backpressure the request-handling thread
+    that's calling notify().
     """
 
     def __init__(
@@ -72,25 +84,37 @@ class _RoutingEventBroadcaster:
         self._usage_log = usage_log
         self._operator_state = operator_state
         self._capabilities_of = capabilities_of
-        self._queues: list[asyncio.Queue[dict[str, Any]]] = []
+        # Each entry is (queue, session_id_filter). Filter is None for
+        # subscribers that want every event; a string filter forwards
+        # only events whose payload session_id matches exactly.
+        self._queues: list[tuple[asyncio.Queue[dict[str, Any]], str | None]] = []
 
-    def subscribe(self) -> asyncio.Queue[dict[str, Any]]:
+    def subscribe(
+        self, *, session_id: str | None = None
+    ) -> asyncio.Queue[dict[str, Any]]:
+        """Subscribe to the event stream.
+
+        When `session_id` is provided, only events whose payload
+        session_id matches exactly are forwarded to this subscriber.
+        When None, every event is forwarded. Per-instance sidecars
+        (e.g. snorkel wrapping one specific codex child) pass the
+        session_id they've anchored on; general observers leave it
+        None.
+        """
         q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=100)
-        self._queues.append(q)
+        self._queues.append((q, session_id))
         return q
 
     def unsubscribe(self, q: asyncio.Queue[dict[str, Any]]) -> None:
-        try:
-            self._queues.remove(q)
-        except ValueError:
-            pass
+        self._queues = [(qq, f) for (qq, f) in self._queues if qq is not q]
 
     def notify(self, request_id: int) -> None:
         """Called from sync context after usage_log.record() inserts a row.
 
-        Builds the rich payload, fans out to subscribers. Defensive: any
-        exception is swallowed so the request-handling thread is never
-        impacted by an observability bug.
+        Builds the rich payload, fans out to subscribers respecting
+        each subscriber's session_id filter. Defensive: any exception
+        is swallowed so the request-handling thread is never impacted
+        by an observability bug.
         """
         try:
             payload = self._build_payload(request_id)
@@ -98,7 +122,17 @@ class _RoutingEventBroadcaster:
             return
         if payload is None:
             return
-        for q in list(self._queues):
+        event_session_id = payload.get("session_id")
+        for q, filter_session_id in list(self._queues):
+            # Unfiltered subscribers get every event. Filtered ones get
+            # only events whose session_id matches the filter — used by
+            # per-instance sidecars to avoid showing other instances'
+            # routing decisions in their HUD.
+            if (
+                filter_session_id is not None
+                and event_session_id != filter_session_id
+            ):
+                continue
             try:
                 q.put_nowait(payload)
             except asyncio.QueueFull:
@@ -113,7 +147,7 @@ class _RoutingEventBroadcaster:
         try:
             row = conn.execute(
                 "SELECT ts_start, model, reasoning_effort, requested_model, "
-                "status, latency_ms, prompt_tokens, completion_tokens "
+                "session_id, status, latency_ms, prompt_tokens, completion_tokens "
                 "FROM requests WHERE id = ?",
                 (request_id,),
             ).fetchone()
@@ -124,6 +158,7 @@ class _RoutingEventBroadcaster:
                 model,
                 effort,
                 requested_model,
+                session_id,
                 status,
                 latency_ms,
                 prompt_tokens,
@@ -168,6 +203,7 @@ class _RoutingEventBroadcaster:
         return {
             "request_id": int(request_id),
             "ts": float(ts_start) if ts_start is not None else 0.0,
+            "session_id": session_id,
             "requested_model": requested_model,
             "served_cell": model,
             "served_context_window": served_context_window,
@@ -205,8 +241,17 @@ def install_routing_events(
     )
 
     @app.get("/events/routing", include_in_schema=False)
-    async def routing_events_stream() -> StreamingResponse:
-        q = broadcaster.subscribe()
+    async def routing_events_stream(
+        session_id: str | None = None,
+    ) -> StreamingResponse:
+        """SSE stream of routing events.
+
+        Pass `?session_id=<id>` to receive only events whose
+        session_id matches exactly — used by per-instance sidecars
+        (e.g. snorkel) that have anchored on a specific codex child.
+        Omit the param to receive every event (general observability).
+        """
+        q = broadcaster.subscribe(session_id=session_id)
 
         async def generate():
             try:

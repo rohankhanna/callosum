@@ -48,7 +48,17 @@ def _utc_timestamp() -> str:
 
 # Clients opt into sticky routing by sending this header. When absent, every
 # request is a fresh selection. There is no server-side "session mode" knob.
-SESSION_HEADER = "x-codex-session-id"
+# Codex CLI sends `session-id` per-instance (one stable value for the
+# lifetime of one codex process) — confirmed in the upstream codex source
+# at codex-rs/codex-api/src/requests/headers.rs. Earlier code looked for
+# `x-codex-session-id` which never matched real Codex traffic, so every
+# request's session_id column ended up NULL despite the per-instance
+# value being right there on the wire. Accept both names so any older
+# custom client that happens to send the prefixed form keeps working.
+# Order matters: the unprefixed `session-id` (what real Codex sends) is
+# checked first; the prefixed form is a fallback. HTTP headers are
+# case-insensitive at the request.headers layer.
+SESSION_HEADERS: tuple[str, ...] = ("session-id", "x-codex-session-id")
 
 NonstreamCall = Callable[[Backend, dict[str, Any], CallHandle], Awaitable[dict[str, Any]]]
 StreamCall = Callable[[Backend, dict[str, Any], CallHandle], AsyncIterator[bytes]]
@@ -1067,11 +1077,17 @@ def _session_id_from_request(request: Request, *, pinned: str | None) -> str | N
     # A pin is an operator override: it wins over any client-declared session.
     if pinned is not None:
         return None
-    raw = request.headers.get(SESSION_HEADER)
-    if raw is None:
-        return None
-    session_id = raw.strip()
-    return session_id or None
+    # Walk the accepted header names in preference order. First non-empty
+    # value wins. Empty values fall through to None so callers can treat
+    # "no client session" uniformly.
+    for name in SESSION_HEADERS:
+        raw = request.headers.get(name)
+        if raw is None:
+            continue
+        session_id = raw.strip()
+        if session_id:
+            return session_id
+    return None
 
 
 def _remember_binding(registry: SessionRegistry, session_id: str | None, backend_id: str) -> None:

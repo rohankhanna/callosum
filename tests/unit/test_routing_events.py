@@ -41,7 +41,7 @@ class _FakeOperatorState:
         return self._mode
 
 
-def _make_db(tmp_path: Path) -> Path:
+def _make_db(tmp_path: Path, *, session_id: str | None = "sess-abc123") -> Path:
     """Create a tiny requests schema and seed one row."""
     db = tmp_path / "requests.sqlite"
     conn = sqlite3.connect(str(db))
@@ -53,6 +53,7 @@ def _make_db(tmp_path: Path) -> Path:
             model TEXT,
             reasoning_effort TEXT,
             requested_model TEXT,
+            session_id TEXT,
             status INTEGER NOT NULL,
             latency_ms INTEGER NOT NULL,
             prompt_tokens INTEGER,
@@ -67,10 +68,11 @@ def _make_db(tmp_path: Path) -> Path:
     )
     conn.execute(
         "INSERT INTO requests (id, ts_start, model, reasoning_effort, "
-        "requested_model, status, latency_ms, prompt_tokens, completion_tokens) "
-        "VALUES (?,?,?,?,?,?,?,?,?)",
+        "requested_model, session_id, status, latency_ms, prompt_tokens, "
+        "completion_tokens) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?)",
         (42, 1780000000.5, "model-a0a9", "default",
-         "model-a0e8", 200, 38267, 8421, 270),
+         "model-a0e8", session_id, 200, 38267, 8421, 270),
     )
     conn.commit()
     conn.close()
@@ -108,6 +110,7 @@ def test_builds_payload_with_all_fields(tmp_path: Path) -> None:
     assert payload is not None
     assert payload["request_id"] == 42
     assert payload["ts"] == 1780000000.5
+    assert payload["session_id"] == "sess-abc123"
     assert payload["requested_model"] == "model-a0e8"
     assert payload["served_cell"] == "model-a0a9"
     assert payload["served_context_window"] == 128_000
@@ -117,6 +120,64 @@ def test_builds_payload_with_all_fields(tmp_path: Path) -> None:
     assert payload["completion_tokens"] == 270
     assert payload["retry_count"] == 0
     assert payload["mode"] == "auto"
+
+
+def test_filter_forwards_only_matching_session(tmp_path: Path) -> None:
+    """When a subscriber passes a session_id filter, only events whose
+    payload session_id matches are forwarded. Other events go to
+    unfiltered subscribers but not this one. This is what lets
+    per-instance sidecars (snorkel) avoid showing other instances'
+    routing decisions."""
+    db = _make_db(tmp_path, session_id="sess-A")
+    bcast = _RoutingEventBroadcaster(
+        usage_log=_FakeUsageLog(db),
+        operator_state=None,
+        capabilities_of=None,
+    )
+
+    async def _scenario() -> None:
+        filtered_q = bcast.subscribe(session_id="sess-A")
+        other_q = bcast.subscribe(session_id="sess-B")
+        unfiltered_q = bcast.subscribe()
+
+        # Push the row that has session_id="sess-A".
+        bcast.notify(42)
+
+        # filtered_q sees it (filter matches).
+        assert filtered_q.qsize() == 1
+        payload = filtered_q.get_nowait()
+        assert payload["session_id"] == "sess-A"
+
+        # other_q does NOT see it (filter mismatch).
+        assert other_q.qsize() == 0
+
+        # unfiltered_q sees it (no filter).
+        assert unfiltered_q.qsize() == 1
+
+    asyncio.run(_scenario())
+
+
+def test_filter_handles_null_session_id_event(tmp_path: Path) -> None:
+    """Events without a session_id (the client didn't send the header)
+    only reach unfiltered subscribers. A subscriber with any filter
+    won't match a null session_id."""
+    db = _make_db(tmp_path, session_id=None)
+    bcast = _RoutingEventBroadcaster(
+        usage_log=_FakeUsageLog(db),
+        operator_state=None,
+        capabilities_of=None,
+    )
+
+    async def _scenario() -> None:
+        filtered_q = bcast.subscribe(session_id="sess-A")
+        unfiltered_q = bcast.subscribe()
+        bcast.notify(42)
+        assert filtered_q.qsize() == 0  # filter "sess-A" != None
+        assert unfiltered_q.qsize() == 1
+        payload = unfiltered_q.get_nowait()
+        assert payload["session_id"] is None
+
+    asyncio.run(_scenario())
 
 
 def test_retry_count_reflects_cell_retry_history(tmp_path: Path) -> None:
@@ -234,6 +295,7 @@ def test_status_defaults_to_zero_when_null(tmp_path: Path, status: int | None,
             model TEXT,
             reasoning_effort TEXT,
             requested_model TEXT,
+            session_id TEXT,
             status INTEGER,
             latency_ms INTEGER,
             prompt_tokens INTEGER,
