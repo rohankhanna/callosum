@@ -27,6 +27,7 @@ from callosum.backends.litellm_gateway import (
     LiteLLMGatewayBackend,
     _chat_to_responses_response,
     _responses_to_chat_request,
+    _strip_codex_only_fields,
 )
 
 
@@ -203,6 +204,44 @@ async def test_master_key_added_as_bearer_when_set() -> None:
 # ---------- /v1/responses translation ---------------------------------------
 
 
+def test_strip_codex_only_fields_drops_parallel_tool_calls() -> None:
+    """parallel_tool_calls is a standard OpenAI Chat-Completions field
+    but ollama doesn't implement it. LiteLLM (in its default
+    drop_params=false mode) errors hard with UnsupportedParamsError
+    instead of silently dropping the field, surfacing as a 400 to the
+    caller. Stripping it at the proxy is harmless because no local
+    backend can honor the flag anyway."""
+    body = {
+        "model": "model-a0c7",
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": [{"type": "function", "function": {"name": "f"}}],
+        "parallel_tool_calls": True,
+        "temperature": 0.7,
+    }
+    out = _strip_codex_only_fields(body)
+    assert "parallel_tool_calls" not in out
+    # Other fields untouched.
+    assert out["model"] == "model-a0c7"
+    assert out["tools"] == body["tools"]
+    assert out["temperature"] == 0.7
+    # Original body not mutated.
+    assert body["parallel_tool_calls"] is True
+
+
+def test_strip_codex_only_fields_drops_reasoning() -> None:
+    body = {"model": "x", "messages": [], "reasoning": {"effort": "high"}}
+    out = _strip_codex_only_fields(body)
+    assert "reasoning" not in out
+
+
+def test_strip_codex_only_fields_is_noop_when_no_stripped_keys_present() -> None:
+    """Fast path: if none of the strip-keys are in the body, return the
+    same dict reference (no allocation). Important on the hot path."""
+    body = {"model": "x", "messages": [{"role": "user", "content": "hi"}]}
+    out = _strip_codex_only_fields(body)
+    assert out is body  # same reference
+
+
 def test_responses_to_chat_request_collapses_input_list_to_messages() -> None:
     body = {
         "model": "model-a0d3",
@@ -221,6 +260,168 @@ def test_responses_to_chat_request_collapses_input_list_to_messages() -> None:
         {"role": "system", "content": "be terse"},
         {"role": "user", "content": "what is 2+2?"},
     ]
+
+
+def test_responses_to_chat_request_translates_function_call_to_tool_call() -> None:
+    """A function_call item in the Responses input becomes a chat
+    `assistant` message with `tool_calls`. This is the shape every
+    chat-completions backend (OpenAI, ollama, vLLM, LiteLLM) expects."""
+    body = {
+        "model": "model-a0c7",
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "list files"}],
+            },
+            {
+                "type": "function_call",
+                "call_id": "call_abc123",
+                "name": "exec_command",
+                "arguments": '{"cmd":"ls"}',
+            },
+        ],
+    }
+    chat = _responses_to_chat_request(body)
+    assert chat["messages"] == [
+        {"role": "user", "content": "list files"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_abc123",
+                    "type": "function",
+                    "function": {
+                        "name": "exec_command",
+                        "arguments": '{"cmd":"ls"}',
+                    },
+                }
+            ],
+        },
+    ]
+
+
+def test_responses_to_chat_request_groups_consecutive_function_calls() -> None:
+    """Multiple consecutive function_call items collapse into ONE
+    assistant message with multiple tool_calls — OpenAI's parallel-
+    tool-call shape, which is what every modern chat-completions
+    backend understands."""
+    body = {
+        "model": "x",
+        "input": [
+            {"type": "function_call", "call_id": "c1", "name": "f1", "arguments": "{}"},
+            {"type": "function_call", "call_id": "c2", "name": "f2", "arguments": "{}"},
+            {"type": "function_call", "call_id": "c3", "name": "f3", "arguments": "{}"},
+        ],
+    }
+    chat = _responses_to_chat_request(body)
+    assert len(chat["messages"]) == 1
+    assert chat["messages"][0]["role"] == "assistant"
+    assert len(chat["messages"][0]["tool_calls"]) == 3
+    assert [tc["id"] for tc in chat["messages"][0]["tool_calls"]] == ["c1", "c2", "c3"]
+
+
+def test_responses_to_chat_request_emits_tool_message_for_function_call_output() -> None:
+    """function_call_output items become `role: tool` messages with
+    tool_call_id matching the call. Without this branch, any tool-using
+    conversation history would lose its tool outputs at the proxy."""
+    body = {
+        "model": "x",
+        "input": [
+            {"type": "function_call", "call_id": "c1", "name": "shell", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "c1", "output": "file1\nfile2\n"},
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "now what"}],
+            },
+        ],
+    }
+    chat = _responses_to_chat_request(body)
+    assert chat["messages"] == [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "shell", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "file1\nfile2\n"},
+        {"role": "user", "content": "now what"},
+    ]
+
+
+def test_responses_to_chat_request_drops_reasoning_items() -> None:
+    """Encrypted reasoning blobs have no chat-completions equivalent.
+    Dropping them is correct — the visible assistant messages still
+    carry the conclusions the prior reasoning produced. Without this,
+    a tool-using session that accumulated 100+ reasoning items would
+    blow past every local model's context window for zero benefit."""
+    body = {
+        "model": "x",
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hi"}],
+            },
+            {
+                "type": "reasoning",
+                "encrypted_content": "gAAAA..." * 500,  # 3KB of encrypted CoT
+                "summary": [],
+                "content": None,
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hello"}],
+            },
+        ],
+    }
+    chat = _responses_to_chat_request(body)
+    assert [m["role"] for m in chat["messages"]] == ["user", "assistant"]
+    assert not any("encrypted" in json.dumps(m) for m in chat["messages"])
+
+
+def test_responses_to_chat_request_preserves_stream_and_tools_passthrough() -> None:
+    """Non-Responses-only keys (stream, stream_options, tools, tool_choice,
+    temperature, max_tokens, etc.) carry over unchanged. Without this the
+    streaming-path caller would lose `stream: true` and `stream_options`
+    when the translator runs, breaking the entire SSE path."""
+    body = {
+        "model": "x",
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "temperature": 0.7,
+        "max_tokens": 500,
+        "tools": [{"type": "function", "function": {"name": "f"}}],
+        "tool_choice": "auto",
+        "parallel_tool_calls": True,
+        "instructions": "be helpful",
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hi"}],
+            }
+        ],
+    }
+    chat = _responses_to_chat_request(body)
+    assert chat["stream"] is True
+    assert chat["stream_options"] == {"include_usage": True}
+    assert chat["temperature"] == 0.7
+    assert chat["max_tokens"] == 500
+    assert chat["tools"] == [{"type": "function", "function": {"name": "f"}}]
+    assert chat["tool_choice"] == "auto"
+    assert chat["parallel_tool_calls"] is True
+    # `instructions` and `input` are Responses-only — should NOT survive.
+    assert "instructions" not in chat
+    assert "input" not in chat
 
 
 def test_chat_to_responses_response_wraps_assistant_text() -> None:

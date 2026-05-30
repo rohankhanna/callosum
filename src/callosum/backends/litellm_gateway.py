@@ -295,6 +295,30 @@ class LiteLLMGatewayBackend:
         out_body = self._apply_inference_params(
             _strip_codex_only_fields({**body, "stream": True})
         )
+        # If the body arrived in Responses-API shape (has `input` instead
+        # of `messages`), translate to Chat Completions shape before
+        # forwarding. This is the streaming counterpart of what `responses`
+        # already does on the non-stream path. Without this, LiteLLM's
+        # Router throws TypeError("missing required argument: 'messages'")
+        # against any bare ollama / vLLM endpoint that doesn't have a
+        # Responses-API translation wrapper running in front. Idempotent:
+        # if the body is already in Chat shape, this branch is skipped.
+        if "input" in out_body and "messages" not in out_body:
+            out_body = _responses_to_chat_request(out_body)
+        # OpenAI Chat Completions streaming omits the `usage` block
+        # unless include_usage is explicitly requested. Without it, no
+        # SSE chunk carries token counts, the terminal response.completed
+        # event ships zeros, and downstream token accounting is NULL for
+        # every streamed local-served request. ollama / LiteLLM / vLLM
+        # all honor this flag in their OpenAI-compatible mode. We set
+        # it unconditionally because every streamed chat completion
+        # benefits from it; if the operator already set it in the body,
+        # ours is a no-op (same value).
+        stream_options = out_body.get("stream_options")
+        if not isinstance(stream_options, dict):
+            stream_options = {}
+        stream_options["include_usage"] = True
+        out_body["stream_options"] = stream_options
         seq = 0
 
         def _emit(event_type: str, payload: dict[str, Any]) -> bytes:
@@ -794,23 +818,31 @@ class LiteLLMGatewayBackend:
 
 
 # ---------- body hygiene ------------------------------------------------
-# Local backends don't understand Codex-specific request fields. The cell
-# recommender writes `reasoning.effort = "<level>"` for whichever cell it
-# picks (including local cells, where the synthesized effort is "default").
-# LiteLLM may forward unknown fields blindly to ollama/vllm/etc., which can
-# reject them or behave unpredictably. Strip the keys the local side
-# definitely doesn't take before sending.
-
-_CODEX_ONLY_BODY_KEYS = ("reasoning",)
+# Local backends (ollama / vLLM / model-a0e0 behind LiteLLM) don't honor
+# every Chat-Completions request field OpenAI advertises. LiteLLM in
+# `drop_params: false` mode (the default in local LLM gateway's config) errors
+# hard instead of silently dropping — `litellm.UnsupportedParamsError`
+# bubbles up as a 400 to the caller. Strip the fields known to trigger
+# this BEFORE sending. Currently includes:
+#   * `reasoning`: Codex-specific routing hint; no local backend uses it.
+#   * `parallel_tool_calls`: standard Chat-Completions field (controls
+#     whether the model emits multiple tool calls in one turn) but ollama
+#     does not implement it. The model defaults to its native behavior
+#     either way; dropping the flag is harmless because no local backend
+#     can honor it. Add new keys as more upstream incompatibilities
+#     surface in real traffic.
+_CODEX_ONLY_BODY_KEYS = ("reasoning", "parallel_tool_calls")
 
 
 def _strip_codex_only_fields(body: dict[str, Any]) -> dict[str, Any]:
-    """Drop Codex-only request keys from a body destined for a local backend.
+    """Drop request keys local backends refuse from a body destined for
+    a local backend.
 
-    Pure-fn returns a new dict; the caller's `body` is untouched. Add new
-    keys to `_CODEX_ONLY_BODY_KEYS` as we discover more that local servers
-    refuse — kept conservative (only `reasoning` today) to minimize the
-    chance of silently dropping a field a local server actually supports.
+    Pure-fn returns a new dict; the caller's `body` is untouched. The
+    name is historical — the strip list started as Codex-only fields but
+    has grown to cover any field that OpenAI Chat Completions advertises
+    but local OpenAI-compatible servers reject. See _CODEX_ONLY_BODY_KEYS
+    docstring for the current contents and why each is dropped.
     """
     if not any(k in body for k in _CODEX_ONLY_BODY_KEYS):
         return body
@@ -822,10 +854,80 @@ def _strip_codex_only_fields(body: dict[str, Any]) -> dict[str, Any]:
 # refactor if a third backend needs the same translation.
 
 
-def _responses_to_chat_request(body: dict[str, Any]) -> dict[str, Any]:
-    """Minimal translation of /v1/responses request body to /v1/chat/completions
-    shape. Sufficient for the simple "give me text back" path.
+# Keys that are part of the Responses-API request envelope and have no
+# meaning for /v1/chat/completions. Stripped during translation so the
+# Chat backend doesn't reject the body or silently ignore them. Everything
+# else (stream, stream_options, temperature, tools, tool_choice, max_tokens,
+# top_p, parallel_tool_calls, n, seed, response_format, …) is preserved
+# verbatim — keeps the translator small as new request fields are added
+# upstream.
+_RESPONSES_ONLY_KEYS: frozenset[str] = frozenset({
+    "input",
+    "instructions",
+    "store",
+    "include",
+    "prompt_cache_key",
+    "client_metadata",
+    "text",  # Responses-API response_format equivalent; not the same field
+    "reasoning",  # Codex-only request hint; redundant since _strip_codex_only_fields
+})
+
+
+def _extract_text_from_content(content: Any) -> str:
+    """Pull all text from a Responses-API `content` field.
+
+    The Responses API allows content to be either a plain string OR a list
+    of part dicts like `{"type": "input_text", "text": "..."}`. Both shapes
+    appear in Codex CLI traffic. Return the concatenation of every text-
+    bearing part; non-text parts (images, audio) are silently skipped here
+    because the chat-completions translator can't represent them in a
+    text-only role.content slot.
     """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for p in content:
+            if isinstance(p, dict) and isinstance(p.get("text"), str):
+                parts.append(p["text"])
+        return "".join(parts)
+    return ""
+
+
+def _responses_to_chat_request(body: dict[str, Any]) -> dict[str, Any]:
+    """Translate a Codex /v1/responses request body to /v1/chat/completions shape.
+
+    Handles the item types Codex CLI actually sends:
+
+      * `message` (user / assistant / developer / system): copied to a
+        chat message with the same role + extracted text.
+      * `function_call`: collected into a pending tool_calls list; consecutive
+        function_calls collapse into ONE assistant message with multiple
+        tool_calls (matches OpenAI's parallel-tool-call shape so downstream
+        models that paid attention to its training know what to do).
+      * `function_call_output`: flushes the pending tool_calls group, then
+        emits a `role: tool` message with `tool_call_id` matching the call.
+      * `custom_tool_call` / `custom_tool_call_output`: same as function_*,
+        treated identically since the on-wire shape is the same.
+      * `reasoning`: DROPPED. The encrypted_content blobs are OpenAI-server-
+        side state with no chat-completions representation. The model loses
+        its prior internal CoT but the visible assistant messages still
+        carry the conclusions, which is what matters for continuation.
+      * `compaction`: preserved as a system note so the model knows prior
+        turns were summarized away.
+
+    Preserves every other top-level key from the input body (stream,
+    stream_options, temperature, tools, tool_choice, max_tokens, top_p,
+    parallel_tool_calls, etc.) so future Responses-API fields that ALSO
+    apply to chat-completions don't need a translator change.
+    """
+    # Start with every non-Responses-only key carried over unchanged. This
+    # is the opposite of a key whitelist — we explicitly know what to
+    # drop, and pass through everything else. Reduces translator churn as
+    # the upstream API grows.
+    chat_body: dict[str, Any] = {
+        k: v for k, v in body.items() if k not in _RESPONSES_ONLY_KEYS
+    }
     messages: list[dict[str, Any]] = []
     instructions = body.get("instructions")
     if isinstance(instructions, str) and instructions:
@@ -834,33 +936,86 @@ def _responses_to_chat_request(body: dict[str, Any]) -> dict[str, Any]:
     if isinstance(input_block, str):
         messages.append({"role": "user", "content": input_block})
     elif isinstance(input_block, list):
+        # Pending group of consecutive function_call items, materialized as
+        # a single assistant message with multiple tool_calls when something
+        # non-function_call interrupts the run.
+        pending_tool_calls: list[dict[str, Any]] = []
+
+        def _flush_pending() -> None:
+            if pending_tool_calls:
+                messages.append({
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": list(pending_tool_calls),
+                })
+                pending_tool_calls.clear()
+
         for item in input_block:
             if not isinstance(item, dict):
                 continue
-            if item.get("type") != "message":
+            t = item.get("type")
+            if t == "message":
+                _flush_pending()
+                role = item.get("role", "user")
+                text = _extract_text_from_content(item.get("content"))
+                # Always emit even if text is empty — preserves turn
+                # structure for models that expect alternation.
+                messages.append({"role": role, "content": text})
+            elif t in ("function_call", "custom_tool_call"):
+                call_id = item.get("call_id") or item.get("id", "")
+                args = item.get("arguments")
+                if args is None:
+                    # custom_tool_call uses `input` instead of `arguments`.
+                    args = item.get("input", "")
+                if isinstance(args, (dict, list)):
+                    args = json.dumps(args)
+                elif not isinstance(args, str):
+                    args = "{}"
+                pending_tool_calls.append({
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": item.get("name", ""),
+                        "arguments": args,
+                    },
+                })
+            elif t in ("function_call_output", "custom_tool_call_output"):
+                _flush_pending()
+                output = item.get("output", "")
+                if isinstance(output, (dict, list)):
+                    output = json.dumps(output)
+                elif not isinstance(output, str):
+                    output = str(output)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": item.get("call_id", ""),
+                    "content": output,
+                })
+            elif t == "reasoning":
+                # Encrypted CoT from prior OpenAI turns; no chat-completions
+                # equivalent. Dropping it is correct, not lossy in the sense
+                # that matters — visible assistant messages already encode
+                # the externally-stated conclusions of whatever the prior
+                # reasoning produced.
                 continue
-            role = item.get("role", "user")
-            content = item.get("content")
-            text = ""
-            if isinstance(content, str):
-                text = content
-            elif isinstance(content, list):
-                parts = [
-                    p.get("text", "")
-                    for p in content
-                    if isinstance(p, dict) and isinstance(p.get("text"), str)
-                ]
-                text = "".join(parts)
-            messages.append({"role": role, "content": text})
+            elif t == "compaction":
+                summary = (
+                    _extract_text_from_content(item.get("content"))
+                    or (item.get("summary") if isinstance(item.get("summary"), str) else "")
+                )
+                if summary:
+                    _flush_pending()
+                    messages.append({
+                        "role": "system",
+                        "content": f"[compacted prior turns: {summary}]",
+                    })
+            # Unknown types are intentionally dropped. Add a branch here
+            # the first time a new type surfaces in real traffic.
+        _flush_pending()
     if not messages:
         messages.append({"role": "user", "content": ""})
-    chat_body: dict[str, Any] = {
-        "model": body.get("model", ""),
-        "messages": messages,
-    }
-    for key in ("temperature", "max_tokens", "top_p", "tools", "tool_choice"):
-        if key in body:
-            chat_body[key] = body[key]
+    chat_body["model"] = body.get("model", "")
+    chat_body["messages"] = messages
     return chat_body
 
 
