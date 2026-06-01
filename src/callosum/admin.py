@@ -17,6 +17,7 @@ Endpoints (all under /admin):
   POST /admin/denylist         → add/remove a denied cell
   GET  /admin/mode             → current mode
   POST /admin/mode             → set mode
+  POST /admin/probe-tools      → run tool-call probe against advertised cells
 
 Designed for the CLI; not intended for browser / human consumption.
 JSON in, JSON out.
@@ -25,6 +26,7 @@ JSON in, JSON out.
 from __future__ import annotations
 
 import secrets
+import time
 from pathlib import Path
 from typing import Any
 
@@ -58,10 +60,23 @@ def ensure_admin_token() -> str:
     return token
 
 
-def install_admin_routes(app: FastAPI, operator_state: OperatorState) -> None:
-    """Mount the /admin/* endpoints on `app`, gated by the admin token."""
+def install_admin_routes(
+    app: FastAPI,
+    operator_state: OperatorState,
+    *,
+    backends: list[Any] | None = None,
+) -> None:
+    """Mount the /admin/* endpoints on `app`, gated by the admin token.
+
+    `backends` is an optional list of loaded backend objects. When
+    provided, the /admin/probe-tools endpoint can iterate them to run
+    the verification probe against each cell. When None, that endpoint
+    returns an empty result (callosum was started without any backends
+    or the wiring isn't passing them through yet).
+    """
     token = ensure_admin_token()
     router = APIRouter(prefix="/admin", tags=["admin"])
+    backends_list: list[Any] = list(backends) if backends else []
 
     def _check(request: Request) -> None:
         auth = request.headers.get("Authorization", "")
@@ -164,5 +179,81 @@ def install_admin_routes(app: FastAPI, operator_state: OperatorState) -> None:
             )
         operator_state.set_mode(mode)
         return {"status": "set", "mode": mode}
+
+    @router.post("/probe-tools")
+    async def admin_probe_tools(request: Request) -> dict[str, Any]:
+        """Run the tool-call verification probe against every advertised
+        cell across the configured backends. Returns per-cell pass/fail
+        plus timing and any error encountered.
+
+        Optional JSON body: `{"models": ["name1", "name2", ...]}` to
+        restrict probing to a subset. Default probes every model the
+        loaded backends advertise.
+
+        This is intentionally synchronous from the CLI's perspective:
+        the endpoint awaits all probes before returning. For a pool of
+        ~5-10 cells with 26B-class local models, expect 30s-3min total.
+        Future work could surface streaming progress via SSE; for now
+        the operator runs `callosum-ctl probe-tools` and waits.
+        """
+        _check(request)
+        from callosum.routing.probe import probe_supports_tools
+
+        body: dict[str, Any] = {}
+        try:
+            body = await request.json()
+        except Exception:
+            # Empty / non-JSON body = "probe everything" — friendlier
+            # than 400'ing on a body that's allowed to be absent.
+            body = {}
+        wanted = body.get("models") if isinstance(body, dict) else None
+        wanted_set: set[str] | None = (
+            set(wanted) if isinstance(wanted, list) else None
+        )
+
+        results: list[dict[str, Any]] = []
+        if not backends_list:
+            return {
+                "results": results,
+                "note": (
+                    "no backends wired into the admin surface; restart "
+                    "the proxy to ensure backends are passed through"
+                ),
+            }
+        for backend in backends_list:
+            advertised = getattr(backend, "advertised_models", frozenset())
+            for model in sorted(advertised):
+                if wanted_set is not None and model not in wanted_set:
+                    continue
+                if not hasattr(backend, "responses"):
+                    # Backend doesn't expose the non-stream responses
+                    # path the probe needs — skip rather than fail.
+                    continue
+
+                async def _call(probe_body: dict[str, Any], _b=backend) -> dict[str, Any]:
+                    # Closure binds the current backend so each probe
+                    # hits the right one. The probe-supports-tools
+                    # function signature is decoupled from backend
+                    # internals — this thin closure is the seam.
+                    return await _b.responses(probe_body)
+
+                t0 = time.time()
+                error_msg: str | None = None
+                supports: bool = False
+                try:
+                    supports = await probe_supports_tools(
+                        model=model, call_responses=_call
+                    )
+                except Exception as exc:
+                    error_msg = f"{type(exc).__name__}: {exc}"
+                latency_ms = int((time.time() - t0) * 1000)
+                results.append({
+                    "model": model,
+                    "backend": getattr(backend, "id", "?"),
+                    "supports_tools": supports,
+                    "latency_ms": latency_ms,
+                    "error": error_msg,
+                })
+        return {"results": results}
 
     app.include_router(router)

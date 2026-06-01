@@ -441,7 +441,7 @@ def create_app(
     # restarting the proxy.
     if operator_state is not None:
         from callosum.admin import install_admin_routes
-        install_admin_routes(app, operator_state)
+        install_admin_routes(app, operator_state, backends=backends_list)
 
     # Bearer middleware for /v1/* and /diagnose/* — only enforced when an
     # auth service is configured. In single-operator mode (no auth db) those

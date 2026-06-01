@@ -50,8 +50,21 @@ def _admin_token() -> str:
     )
 
 
-def _request(method: str, path: str, body: dict[str, Any] | None = None) -> Any:
-    """Send one HTTP request to the proxy's admin endpoint."""
+def _request(
+    method: str,
+    path: str,
+    body: dict[str, Any] | None = None,
+    *,
+    timeout: float = 10.0,
+) -> Any:
+    """Send one HTTP request to the proxy's admin endpoint.
+
+    Default timeout is short (10s) because most admin endpoints are
+    state-snapshot reads. Long-running endpoints (e.g. /admin/probe-tools
+    which sequentially probes every advertised cell) override this
+    explicitly — callers should pass a value sized to the worst-case
+    workload, not the typical case.
+    """
     base = os.environ.get("CALLOSUM_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
     url = f"{base}{path}"
     headers = {"Authorization": f"Bearer {_admin_token()}"}
@@ -61,7 +74,7 @@ def _request(method: str, path: str, body: dict[str, Any] | None = None) -> Any:
         headers["Content-Type"] = "application/json"
     req = request.Request(url, method=method, headers=headers, data=data)
     try:
-        with request.urlopen(req, timeout=10) as resp:
+        with request.urlopen(req, timeout=timeout) as resp:
             payload = resp.read()
     except error.HTTPError as e:
         body_text = e.read().decode("utf-8", errors="replace")
@@ -173,6 +186,34 @@ def cmd_mode_set(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_probe_tools(args: argparse.Namespace) -> int:
+    """Run the tool-call verification probe and print per-cell results.
+
+    The proxy iterates every advertised cell across loaded backends,
+    sends a canonical single-tool request, and reports whether the
+    response carries a structured `function_call` output item per the
+    OpenAI Responses-API shape. Cells that emit text-as-JSON (the
+    model-a0e5 quirk) or refuse to use the tool fail; the operator can
+    follow up with `callosum-ctl denylist add <model>` to keep them
+    out of tool-using routing decisions.
+
+    For a pool of ~5-10 cells with 26B-class local models, expect
+    total wall time of 30s-3min. Streaming progress is a follow-up.
+    """
+    body: dict[str, Any] = {}
+    if args.models:
+        body["models"] = args.models
+    # Long timeout because the endpoint serially probes every advertised
+    # cell. 26B-class local models on CPU/single-GPU can take 60s+ each.
+    # 30 min ceiling is generous enough for a 10-cell pool of slow
+    # local models without ever spinning forever.
+    result = _request(
+        "POST", "/admin/probe-tools", body, timeout=1800.0
+    )
+    _print(result)
+    return 0
+
+
 # ---------- parser -----------------------------------------------------
 
 
@@ -226,6 +267,18 @@ def build_parser() -> argparse.ArgumentParser:
     sm = pm.add_parser("set", help="Set the mode.")
     sm.add_argument("mode", choices=["auto", "offline", "local-only", "remote-only"])
     sm.set_defaults(func=cmd_mode_set)
+
+    p_probe = sub.add_parser(
+        "probe-tools",
+        help="Run tool-call verification probe against advertised cells.",
+    )
+    p_probe.add_argument(
+        "--models",
+        nargs="*",
+        default=None,
+        help="Restrict probing to this subset of model names. Default probes all.",
+    )
+    p_probe.set_defaults(func=cmd_probe_tools)
 
     return parser
 
