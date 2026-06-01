@@ -261,4 +261,90 @@ def install_admin_routes(
                 })
         return {"results": results}
 
+    @router.post("/cell-call")
+    async def admin_cell_call(request: Request) -> dict[str, Any]:
+        """Send an arbitrary Responses-API body to a specific cell,
+        bypassing the router. Returns the upstream response (or error)
+        along with timing.
+
+        Designed for the model-capability test harness: tests build
+        a Codex-shape request body, target one cell explicitly, and
+        record findings about how that cell responded. Without this
+        endpoint, tests would have to mutate operator_state's denylist
+        to force routing to a specific cell — destructive, slow, racy.
+
+        Request body shape:
+          {
+            "model": "<cell-model-name>",
+            "body": <full Responses-API request object>,
+            "timeout_s": <optional float>
+          }
+
+        Response shape:
+          {
+            "status": "ok" | "error",
+            "served_by": "<backend-id>",
+            "latency_ms": int,
+            "response": <upstream response dict on success>,
+            "error": "<error class + message on failure>"
+          }
+
+        This endpoint is admin-token-gated (same as the rest of /admin/*)
+        because it bypasses every other guardrail the router applies —
+        denylist, mode filter, capability filter, all skipped. Operator
+        intent is "I know what I'm doing, just hit this cell."
+        """
+        _check(request)
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise HTTPException(400, "expected JSON object")
+        model = payload.get("model")
+        body = payload.get("body")
+        if not isinstance(model, str) or not model:
+            raise HTTPException(400, "`model` (string) is required")
+        if not isinstance(body, dict):
+            raise HTTPException(400, "`body` (object) is required")
+
+        target_backend: Any = None
+        for backend in backends_list:
+            advertised: frozenset[str] = getattr(
+                backend, "advertised_models", frozenset()
+            )
+            if model in advertised and hasattr(backend, "responses"):
+                target_backend = backend
+                break
+        if target_backend is None:
+            raise HTTPException(
+                404,
+                f"no backend advertises cell {model!r} with a non-stream "
+                "responses() entry point",
+            )
+
+        # Force the model field in the body so the test harness can
+        # send a body with model="" or a different name and still
+        # route correctly to the target cell.
+        body = dict(body)
+        body["model"] = model
+
+        t0 = time.time()
+        try:
+            response = await target_backend.responses(body)
+            latency_ms = int((time.time() - t0) * 1000)
+            return {
+                "status": "ok",
+                "served_by": getattr(target_backend, "id", "?"),
+                "latency_ms": latency_ms,
+                "response": response,
+                "error": None,
+            }
+        except Exception as exc:
+            latency_ms = int((time.time() - t0) * 1000)
+            return {
+                "status": "error",
+                "served_by": getattr(target_backend, "id", "?"),
+                "latency_ms": latency_ms,
+                "response": None,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
     app.include_router(router)
