@@ -32,7 +32,7 @@ def main() -> None:
     # OK/SKIPPED lines get silently dropped — operator only sees FAILED.
     logging.getLogger("callosum.startup").setLevel(logging.INFO)
     if not logging.getLogger().handlers:
-        # Use UTC timestamps in ISO 8601 format per polestar compliance
+        # Use UTC timestamps in ISO 8601 format per control plane compliance
         logging.basicConfig(
             level=logging.INFO,
             format="%(asctime)s %(levelname)s:  %(message)s",

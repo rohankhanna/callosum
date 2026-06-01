@@ -85,8 +85,8 @@ and the upstream-classifier-driven recommender that replaced it ran
 inline per request. Phase 5 of the learning-router refactor (2026)
 puts the embedding-backfill workload back into Dispatch territory.
 
-## Polestar reference
+## control plane reference
 
-The canonical policy is `~/Desktop/polestar/The Baselines Document`
+The canonical policy is `~/Desktop/control plane/The Baselines Document`
 ("Dispatch Local Orchestration") and `The Compliance Checklist`
 ("Dispatch Orchestration").

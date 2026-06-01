@@ -39,6 +39,7 @@ from callosum.backend import BackendKind, CallHandle, HealthStatus, UsageSnapsho
 from callosum.backends._http import error_from_response
 from callosum.cell_grid import ModelMetadata
 from callosum.errors import BackendError
+from callosum.sse_tee import ResponsesStreamCollector
 from callosum.operator_state import (
     BACKEND_DEFAULT_INFERENCE_PARAMS,
     OperatorState,
@@ -291,7 +292,39 @@ class LiteLLMGatewayBackend:
         On finish_reason or [DONE]: emit per-item .done events,
         `response.output_item.done` for each, and `response.completed`
         carrying the assembled output array + usage.
+
+        This method wraps its own translated output stream in a
+        ResponsesStreamCollector and assigns the result to
+        `handle.stream_summary` so the dispatch layer can extract the
+        `response.completed` event's usage block and populate
+        prompt_tokens/completion_tokens/total_tokens columns in the
+        request log. Without this wrap, token accounting is silently
+        NULL for every local-served streamed request. The actual
+        translation runs in `_responses_stream_inner` so the public
+        method can compose the collector + the generator without
+        twisting either's control flow.
         """
+        # Capture the inner generator's output as it flows so the
+        # final `handle.stream_summary` has a parseable raw_blob
+        # containing the emitted response.completed event.
+        collector = ResponsesStreamCollector(
+            self._responses_stream_inner(body, handle)
+        )
+        try:
+            async for chunk in collector.iter_through():
+                yield chunk
+        finally:
+            if handle is not None:
+                handle.stream_summary = collector.summary
+
+    async def _responses_stream_inner(
+        self, body: dict[str, Any], handle: CallHandle | None
+    ) -> AsyncIterator[bytes]:
+        """The translation generator. Was previously the body of
+        `responses_stream` directly; split out so the outer method
+        can tee the output through a ResponsesStreamCollector to
+        populate stream_summary on the handle. See `responses_stream`
+        docstring for the rationale."""
         out_body = self._apply_inference_params(
             _strip_codex_only_fields({**body, "stream": True})
         )

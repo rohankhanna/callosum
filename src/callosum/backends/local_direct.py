@@ -37,6 +37,7 @@ from callosum.backends._http import error_from_response
 from callosum.cell_grid import ModelMetadata
 from callosum.errors import BackendError
 from callosum.local import LocalModelRegistrySource, ModelEntry
+from callosum.sse_tee import ResponsesStreamCollector
 from callosum.operator_state import (
     BACKEND_DEFAULT_INFERENCE_PARAMS,
     OperatorState,
@@ -86,9 +87,35 @@ class LocalModelRegistryBackend:
 
     @property
     def advertised_models(self) -> frozenset[str]:
-        """Set of model_ids local LLM gateway currently reports. Reads from
-        the source's cache — cheap."""
-        return frozenset(m.id for m in self._source.models())
+        """Set of model_ids local LLM gateway currently reports, filtered to
+        cells this backend can actually serve on the streaming-responses
+        path.
+
+        Why the filter exists: callosum's primary inbound traffic
+        (Codex CLI) hits /v1/responses with `stream: true`. Chat-only
+        cells from local LLM gateway (api_surfaces == ("chat",), e.g. bare
+        `model-a0a9`) can't serve that path from this backend
+        — `responses_stream` raises BackendError for them because no
+        chat→responses stream translator is wired here. Advertising
+        them anyway causes the router to pick them as primary, the
+        request to 502 instantly with that error, and dispatch's
+        cell-retry to fall through to a `-responses-proxy` sibling
+        on the SAME backend that DOES serve responses natively. The
+        net effect is one wasted 41-567ms roundtrip plus a noise row
+        in the request log per real user request, with zero functional
+        gain — the responses-proxy sibling serves the same underlying
+        model. Filter the bare cells out at the source so the router
+        never picks them in the first place.
+
+        The deferred follow-up is to extract LiteLLMGatewayBackend's
+        chat→responses stream translator into a shared helper and
+        wire it here too; once that lands, chat-only cells become
+        directly serveable and this filter can be dropped.
+        """
+        return frozenset(
+            m.id for m in self._source.models()
+            if "responses" in m.api_surfaces
+        )
 
     @property
     def model_metadata(self) -> dict[str, ModelMetadata]:
@@ -96,9 +123,15 @@ class LocalModelRegistryBackend:
         merger picks them up alongside Codex models. Sort priority
         offset above the Codex range so local cells appear AFTER
         Codex in the grid's default ordering (the cost-weighted
-        selector still picks cheapest, but ties resolve consistently)."""
+        selector still picks cheapest, but ties resolve consistently).
+
+        Mirrors `advertised_models` in filtering out chat-only cells —
+        see that property's docstring for the rationale.
+        """
         out: dict[str, ModelMetadata] = {}
         for idx, m in enumerate(self._source.models()):
+            if "responses" not in m.api_surfaces:
+                continue
             out[m.id] = ModelMetadata(
                 slug=m.id,
                 supported_in_api=True,
@@ -322,8 +355,21 @@ class LocalModelRegistryBackend:
                     if response.status_code >= 400:
                         await response.aread()
                         raise error_from_response(response)
-                    async for chunk in response.aiter_bytes():
+                    # Wrap in a tee'ing collector so the bytes flow to
+                    # the caller AND get buffered for parse-after-end.
+                    # Dispatch reads `handle.stream_summary` to extract
+                    # the upstream `response.completed` event's usage
+                    # block — without this wrap, prompt_tokens /
+                    # completion_tokens / total_tokens columns end up
+                    # NULL for every local-served streamed request and
+                    # any downstream consumer (shadow-eval, future
+                    # bandit) loses cost/length signal entirely.
+                    # Mirrors codex_auth_vault.responses_stream:510-514.
+                    collector = ResponsesStreamCollector(response.aiter_bytes())
+                    async for chunk in collector.iter_through():
                         yield chunk
+                    if handle is not None:
+                        handle.stream_summary = collector.summary
                 return
             except httpx.HTTPError as exc:
                 self._healthy = False
