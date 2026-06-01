@@ -1,0 +1,69 @@
+@startuml request_lifecycle
+' Callosum request lifecycle — what happens between a client POST and
+' the streamed response, including the parts the operator surfaces in
+' callosum-ctl / snorkel / /events/routing care about.
+'
+' This is a sequence at the process-internal level — not API contracts.
+
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName "Helvetica"
+skinparam shadowing false
+skinparam sequence {
+  ArrowColor #444444
+  LifeLineBorderColor #888888
+  ParticipantBorderColor #444444
+  ParticipantBackgroundColor #FFE4B5
+  ParticipantFontColor #000000
+}
+
+participant "Client" as C
+participant "FastAPI\napp.py" as App
+participant "Router\nrouting/*" as R
+participant "Capability\nFilter" as CF
+participant "Selector" as S
+participant "Backend\n(picked cell)" as B
+participant "Upstream\n(cloud or local)" as U
+participant "Usage\nLog" as UL
+database "operator_state\n.sqlite" as OS
+
+C -> App : POST /v1/responses (stream)
+App -> OS : get_mode() + denylist
+App -> R : route(body, cells_after_mode_filter)
+R -> R : extract_features(body)\n(tokens, modalities, needs_tools)
+R -> CF : filter(cells, features)
+CF --> R : compatible cells
+R -> R : predict(features, compatible)\n(uniform | knn)
+R -> S : select(scaled_predictions, capabilities)
+S --> R : chosen cell + ranked candidates
+R --> App : RoutingDecision
+
+note right of App
+  Cell-retry walks
+  candidates on 5xx
+  (not on 4xx).
+end note
+
+App -> B : responses_stream(body)
+B -> U : POST /responses or /v1/chat/completions
+U --> B : SSE event stream
+B -> B : ResponsesStreamCollector\ntees bytes for usage parse
+B --> App : SSE bytes (forwarded)
+App --> C : SSE bytes (yielded as they arrive)
+
+note over B
+  Backend sets
+  handle.stream_summary
+  after stream end.
+end note
+
+B --> App : stream complete
+App -> UL : record(UsageLogEntry)\n(tokens parsed from response.completed)
+
+note right of UL
+  usage_log.record() triggers
+  /events/routing broadcaster
+  notify() → snorkel sidecar
+  HUD updates in real time.
+end note
+
+@enduml

@@ -1,0 +1,57 @@
+# Architecture diagrams
+
+Version-controlled sources for callosum's architecture diagrams.
+
+Per the active control plane, diagrams used in architecture docs must be
+generated from version-controlled source, not maintained primarily as
+hand-edited image files. Each `.puml` file in this directory is a
+PlantUML source; the matching `.svg` next to it is the rendered output.
+Regenerate when the source changes.
+
+## Sources
+
+- `request_lifecycle.puml` — sequence diagram of one request from
+  inbound POST through routing decision, backend dispatch, upstream
+  streaming, and usage-log write. Mirrors the lifecycle described in
+  prose in `ARCHITECTURE.md`. Renders without external dependencies
+  (just PlantUML + Java).
+
+The static runtime topology (the box-and-arrows view of which
+processes / modules are involved) is documented as ASCII in
+`ARCHITECTURE.md`. A rendered SVG topology view would benefit from
+Graphviz `dot` as the layout engine for component / rectangle
+diagrams; installing Graphviz is a host-internal change that belongs
+in the dotfiles repo. When that lands, a `runtime_topology.puml`
+source can join this directory.
+
+## Rendering
+
+```
+scripts/render_diagrams.sh
+```
+
+Output: `docs/architecture/*.svg` next to each `.puml` source.
+
+The script expects PlantUML's single-file jar at
+`~/.local/share/plantuml/plantuml.jar`. If you haven't installed it
+yet, the script prints a clear message and exits non-zero. The jar is
+a single-file download from `https://plantuml.com/download`; it is
+kept under the user's local share rather than committed to this repo.
+Java is the only other requirement and is already standard on this
+workstation.
+
+## Why PlantUML and not Structurizr / Mermaid / diagrams-as-code
+
+- **PlantUML + Java** runs with what is already on the workstation;
+  no language runtime install, no `npm`/Chromium dependency.
+- Pure-text source is diff-friendly. Source review catches drift
+  between intent and what gets rendered.
+- SVG output is the control plane's preferred public format for
+  architecture artifacts.
+- Sequence diagrams in PlantUML do not need Graphviz, which is the
+  most common friction with `dot`-backed component diagrams.
+
+Switching to Structurizr DSL later is reasonable if the diagram
+inventory grows past a handful of files and the C4-model formalism
+starts paying off; for the current scope (one sequence diagram) the
+overhead would exceed the benefit.

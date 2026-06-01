@@ -115,9 +115,26 @@ operator state schema, that change must come with an ADR.
 
 ## Diagrams
 
-There is no diagram source yet. The ASCII topology above is the
-current placeholder. The control plane requires diagrams generated from
-version-controlled source; closing that gap is a follow-up.
+Version-controlled diagram source lives under `docs/architecture/`.
+Each `.puml` file is a PlantUML source; the matching `.svg` next to
+it is the rendered output, regenerated via `scripts/render_diagrams.sh`.
+
+Current diagrams:
+
+- `docs/architecture/request_lifecycle.puml` / `.svg` — sequence
+  diagram for one request from inbound POST through routing decision,
+  backend dispatch, upstream streaming, and usage-log write. Renders
+  with PlantUML + Java alone (no Graphviz required).
+
+The static runtime topology (which processes/modules are involved
+and how they wire) is the ASCII view above. A richer rendered
+topology diagram requires Graphviz `dot` as PlantUML's layout engine
+for component-rectangle diagrams; installing Graphviz is a
+host-internal change owned by the dotfiles repo. When that lands,
+`docs/architecture/runtime_topology.puml` can be added.
+
+See `docs/architecture/README.md` for the full rendering procedure
+and the tooling-choice rationale.
 
 ## Verification path
 
