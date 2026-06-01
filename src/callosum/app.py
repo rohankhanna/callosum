@@ -4,13 +4,12 @@ import asyncio
 import contextlib
 import json
 import logging
-import random
 import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -27,23 +26,23 @@ from callosum.auth import (
 from callosum.auth_db import ApiKey, Session
 from callosum.backend import Backend, CallHandle
 from callosum.cell_grid import VIRTUAL_MODELS, Cell, build_cells, live_completion_models
-from callosum.routing.factory import build_router
-from callosum.routing.protocols import CellCapabilities
-from callosum.routing.router import NoCompatibleCellError, Router
 from callosum.config import AutoRouterConfig
 from callosum.errors import RETRYABLE, BackendError, ErrorClass
 from callosum.fallback import FallbackExecutor, should_attempt_fallback
+from callosum.label_ui import install_label_ui
+from callosum.routing.factory import build_router
+from callosum.routing.protocols import CellCapabilities
+from callosum.routing.router import NoCompatibleCellError, Router
 from callosum.selector import select
 from callosum.session import SessionRegistry
 from callosum.usage_log import RoutingAttempt, UsageLog, UsageLogEntry
-from callosum.label_ui import install_label_ui
 
 logger = logging.getLogger("callosum.startup")
 
 
 def _utc_timestamp() -> str:
     """Return current time in ISO 8601 UTC format with Z suffix."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 # Clients opt into sticky routing by sending this header. When absent, every
@@ -1110,7 +1109,7 @@ MAX_CELL_ATTEMPTS = 3
 async def _dispatch_nonstream_with_cell_retry(
     body: dict[str, Any],
     *,
-    candidates: tuple["Cell", ...],
+    candidates: tuple[Cell, ...],
     usage_log: UsageLog | None,
     model: str,
     **kwargs: Any,
@@ -1206,7 +1205,7 @@ async def _dispatch_nonstream_with_cell_retry(
 async def _dispatch_stream_with_cell_retry(
     body: dict[str, Any],
     *,
-    candidates: tuple["Cell", ...],
+    candidates: tuple[Cell, ...],
     usage_log: UsageLog | None,
     model: str,
     **kwargs: Any,
@@ -2775,10 +2774,10 @@ def _log_smoke_result(result: dict[str, Any]) -> None:
         cooldown_until = result.get("cooldown_until_ts")
         reason = result.get("reason", "in cooldown")
         if cooldown_until is not None:
-            from datetime import datetime, timezone
+            from datetime import datetime
             try:
                 reset_time = datetime.fromtimestamp(
-                    cooldown_until, tz=timezone.utc
+                    cooldown_until, tz=UTC
                 ).isoformat()
                 reason = f"{reason} (reset at {reset_time})"
             except (OverflowError, ValueError, OSError):
@@ -2802,7 +2801,7 @@ def _log_smoke_result(result: dict[str, Any]) -> None:
     if classification == "rate_limited":
         quota = result.get("quota_after")
         if quota is not None:
-            from datetime import datetime, timezone
+            from datetime import datetime
             exhaustion_info = []
 
             # 5-hour quota status
@@ -2811,7 +2810,7 @@ def _log_smoke_result(result: dict[str, Any]) -> None:
                 exhaustion_info.append(f"5h-window {pct}%")
                 if pct >= 99:
                     if quota.five_hourly_reset_at is not None:
-                        reset = datetime.fromtimestamp(quota.five_hourly_reset_at, tz=timezone.utc)
+                        reset = datetime.fromtimestamp(quota.five_hourly_reset_at, tz=UTC)
                         exhaustion_info.append(f"(resets {reset.isoformat()})")
                     else:
                         exhaustion_info.append("(resets ~5 hours)")
@@ -2822,7 +2821,7 @@ def _log_smoke_result(result: dict[str, Any]) -> None:
                 exhaustion_info.append(f"weekly {pct}%")
                 if pct >= 99:
                     if quota.weekly_reset_at is not None:
-                        reset = datetime.fromtimestamp(quota.weekly_reset_at, tz=timezone.utc)
+                        reset = datetime.fromtimestamp(quota.weekly_reset_at, tz=UTC)
                         exhaustion_info.append(f"(resets {reset.isoformat()})")
                     else:
                         exhaustion_info.append("(resets ~7 days)")
@@ -3095,7 +3094,7 @@ def _no_viable(
             ts = _utc_timestamp()
             msg = f"[{ts}] all backends exhausted for model {model!r}. Failures: {'; '.join(failures)}"
             if recovery_ts:
-                recovery_dt = datetime.fromtimestamp(recovery_ts, tz=timezone.utc)
+                recovery_dt = datetime.fromtimestamp(recovery_ts, tz=UTC)
                 recovery_s = max(1, int(recovery_ts - time.time()))
                 msg += f" | Earliest recovery: {recovery_dt.isoformat()} (in {recovery_s}s)"
             logger.warning(msg)
@@ -3129,7 +3128,7 @@ def _no_viable(
     if recovery_ts and status == 429:
         retry_after_s = max(1, int(recovery_ts - time.time()))
         headers["Retry-After"] = str(retry_after_s)
-        recovery_dt = datetime.fromtimestamp(recovery_ts, tz=timezone.utc)
+        recovery_dt = datetime.fromtimestamp(recovery_ts, tz=UTC)
         headers["X-Retry-After-UTC"] = recovery_dt.isoformat()
 
     return HTTPException(

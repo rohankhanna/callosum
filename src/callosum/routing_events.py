@@ -77,9 +77,9 @@ class _RoutingEventBroadcaster:
     def __init__(
         self,
         *,
-        usage_log: "UsageLog",
-        operator_state: "OperatorState | None",
-        capabilities_of: "Callable[[Cell], CellCapabilities] | None",
+        usage_log: UsageLog,
+        operator_state: OperatorState | None,
+        capabilities_of: Callable[[Cell], CellCapabilities] | None,
     ) -> None:
         self._usage_log = usage_log
         self._operator_state = operator_state
@@ -225,9 +225,9 @@ class _RoutingEventBroadcaster:
 def install_routing_events(
     app: FastAPI,
     *,
-    usage_log: "UsageLog",
-    operator_state: "OperatorState | None",
-    capabilities_of: "Callable[[Cell], CellCapabilities] | None",
+    usage_log: UsageLog,
+    operator_state: OperatorState | None,
+    capabilities_of: Callable[[Cell], CellCapabilities] | None,
 ) -> None:
     """Mount `GET /events/routing` and wire the broadcaster to usage_log.
 
@@ -259,7 +259,7 @@ def install_routing_events(
                     try:
                         payload = await asyncio.wait_for(q.get(), timeout=30.0)
                         yield f"data: {json.dumps(payload)}\n\n".encode()
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         # SSE comment line keeps proxies/load-balancers
                         # from closing the connection during idle.
                         yield b": keepalive\n\n"

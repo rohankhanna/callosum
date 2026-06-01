@@ -147,7 +147,7 @@ def run(
                 print("apply_failure_labels: SIGTERM; exiting", file=sys.stderr)
                 break
             if max_rows is not None and processed_total >= max_rows:
-                print(f"apply_failure_labels: reached --max-rows", file=sys.stderr)
+                print("apply_failure_labels: reached --max-rows", file=sys.stderr)
                 break
             rows = _fetch_batch(conn, since_id=cursor, limit=batch_size)
             if not rows:

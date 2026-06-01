@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import uvicorn
@@ -39,7 +39,7 @@ def main() -> None:
             datefmt="%Y-%m-%dT%H:%M:%SZ",
         )
         # Convert to UTC
-        logging.Formatter.converter = lambda *args: datetime.now(timezone.utc).timetuple()
+        logging.Formatter.converter = lambda *args: datetime.now(UTC).timetuple()
 
     parser = argparse.ArgumentParser(prog="callosum")
     parser.add_argument("--config", type=Path, default=_default_config_path())

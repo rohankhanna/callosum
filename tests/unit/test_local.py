@@ -10,8 +10,6 @@ import json
 import subprocess
 from typing import Any
 
-import pytest
-
 from callosum.local import LocalModelRegistrySource, ModelEntry
 
 

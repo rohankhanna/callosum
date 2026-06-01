@@ -16,7 +16,6 @@ from __future__ import annotations
 from callosum.cell_grid import Cell
 from callosum.routing.protocols import CellCapabilities
 
-
 # Max-likelihood decision boundary for a binary classifier. Not a
 # routing-quality threshold — the boundary at which P(satisfy) > P(fail)
 # crosses 50/50.

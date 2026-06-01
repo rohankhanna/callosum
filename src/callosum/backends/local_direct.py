@@ -24,7 +24,6 @@ Compared to talking to ollama directly:
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from collections.abc import AsyncIterator
@@ -37,13 +36,13 @@ from callosum.backends._http import error_from_response
 from callosum.cell_grid import ModelMetadata
 from callosum.errors import BackendError
 from callosum.local import LocalModelRegistrySource, ModelEntry
-from callosum.sse_tee import ResponsesStreamCollector
 from callosum.operator_state import (
     BACKEND_DEFAULT_INFERENCE_PARAMS,
     OperatorState,
     merge_inference_params,
 )
 from callosum.routing.protocols import CellCapabilities
+from callosum.sse_tee import ResponsesStreamCollector
 
 logger = logging.getLogger(__name__)
 

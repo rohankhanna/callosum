@@ -37,7 +37,6 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-
 # Canonical probe request body in Codex Responses-API shape. Designed to
 # be unambiguous about what the model should do: there is exactly one
 # tool, and the user message is a direct instruction to use it with

@@ -438,7 +438,7 @@ class UsageLog:
     def record_routing_attempts(
         self,
         request_id: int,
-        attempts: list["RoutingAttempt"],
+        attempts: list[RoutingAttempt],
     ) -> None:
         """Bulk-insert per-attempt rows for a single request.
 

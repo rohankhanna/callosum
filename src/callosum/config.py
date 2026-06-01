@@ -9,11 +9,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from callosum.auth_vault import AuthVault
 from callosum.backend import Backend
-from callosum.routing.factory import RoutingConfig
 from callosum.backends.codex_auth_vault import (
     DEFAULT_BASE_URL as CODEX_AUTH_VAULT_DEFAULT_BASE_URL,
 )
 from callosum.backends.codex_auth_vault import CodexAuthVaultBackend
+from callosum.routing.factory import RoutingConfig
 from callosum.state import StateStore
 
 BackendType = Literal["codex_auth_vault", "credential_proxy"]

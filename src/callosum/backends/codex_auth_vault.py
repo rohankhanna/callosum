@@ -6,7 +6,7 @@ import os
 import time
 import uuid
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -598,7 +598,7 @@ class CodexAuthVaultBackend:
 
 def _extract_model_catalog(
     payload: Any,
-) -> tuple[frozenset[str], dict[str, int], dict[str, "ModelMetadata"]]:
+) -> tuple[frozenset[str], dict[str, int], dict[str, ModelMetadata]]:
     """Pull model slugs, context windows, and full per-model metadata from an
     upstream `/backend-api/codex/models` response.
 
@@ -839,7 +839,7 @@ def _log_cooldown_set(backend_id: str, cooldown_until: float, quota: Any) -> Non
     logger = logging.getLogger("callosum.backend")
     now = time.time()
     recovery_seconds = cooldown_until - now
-    recovery_dt = datetime.fromtimestamp(cooldown_until, tz=timezone.utc)
+    recovery_dt = datetime.fromtimestamp(cooldown_until, tz=UTC)
 
     if recovery_seconds < 0:
         duration_str = "immediate"
@@ -853,7 +853,7 @@ def _log_cooldown_set(backend_id: str, cooldown_until: float, quota: Any) -> Non
         duration_str = f"{hours}h {minutes}m"
 
     if quota is not None and quota.weekly_used_percent is not None and quota.weekly_used_percent >= 99:
-        reason = f"weekly 100% exhausted"
+        reason = "weekly 100% exhausted"
     elif quota is not None and quota.five_hourly_used_percent is not None and quota.five_hourly_used_percent >= 95:
         reason = f"5h window {quota.five_hourly_used_percent}% exhausted"
     else:

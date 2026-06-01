@@ -12,7 +12,6 @@ from typing import Any
 
 from callosum.routing.protocols import EmbeddingProvider, PromptFeatures
 
-
 # Conversion factor for the rough token estimate. Matches the existing
 # `_approx_input_tokens` in the legacy recommender — ~3 chars/token gives
 # a ~33% safety margin over real Codex tokenization. Kept here instead of

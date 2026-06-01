@@ -63,13 +63,13 @@ class BGELargeEmbeddingProvider:
         # are lock-free.
         with self._load_lock:
             if self._model is None:
-                from sentence_transformers import SentenceTransformer
                 # FP16 on CUDA: BGE-large at FP32 is compute-bound on
                 # the forward pass; on modern GPUs (Ampere, Hopper,
                 # Blackwell) FP16 inference runs 2-3x faster with
                 # negligible quality loss for embedding tasks. Falls
                 # back to FP32 on CPU or older GPUs.
                 import torch
+                from sentence_transformers import SentenceTransformer
                 use_fp16 = torch.cuda.is_available()
                 kwargs: dict = {}
                 if use_fp16:

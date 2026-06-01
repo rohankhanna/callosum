@@ -39,13 +39,13 @@ from callosum.backend import BackendKind, CallHandle, HealthStatus, UsageSnapsho
 from callosum.backends._http import error_from_response
 from callosum.cell_grid import ModelMetadata
 from callosum.errors import BackendError
-from callosum.sse_tee import ResponsesStreamCollector
 from callosum.operator_state import (
     BACKEND_DEFAULT_INFERENCE_PARAMS,
     OperatorState,
     merge_inference_params,
 )
 from callosum.routing.protocols import CellCapabilities
+from callosum.sse_tee import ResponsesStreamCollector
 
 DEFAULT_BASE_URL = "http://127.0.0.1:4000"
 DEFAULT_CATALOG_REFRESH_S = 60.0  # local model lineup changes via yaml reloads — keep fresh

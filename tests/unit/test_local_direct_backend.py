@@ -12,8 +12,6 @@ functional capability.
 
 from __future__ import annotations
 
-from typing import Any
-
 from callosum.backends.local_direct import LocalModelRegistryBackend
 from callosum.local import ModelEntry
 

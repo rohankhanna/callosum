@@ -14,7 +14,6 @@ from typing import Protocol
 
 from callosum.cell_grid import Cell
 
-
 # ---------- request-side facts (immutable per request) ----------------------
 
 

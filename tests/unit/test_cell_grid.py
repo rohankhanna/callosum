@@ -6,7 +6,6 @@ from pathlib import Path
 from callosum.cell_grid import (
     DEFAULT_MODELS,
     REASONING_LEVELS,
-    Cell,
     CellCoverage,
     build_cells,
     coverage_from_db,

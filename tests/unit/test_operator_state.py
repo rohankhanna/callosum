@@ -9,7 +9,6 @@ from callosum.operator_state import (
     merge_inference_params,
 )
 
-
 # ---------- merge_inference_params ----------
 
 

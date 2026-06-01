@@ -19,7 +19,7 @@ actual context overflow.
 from __future__ import annotations
 
 from callosum.cell_grid import Cell
-from callosum.routing.protocols import CellCapabilities, PromptFeatures
+from callosum.routing.protocols import PromptFeatures
 
 
 class CapabilityFilter:

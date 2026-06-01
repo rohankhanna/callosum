@@ -11,7 +11,6 @@ from callosum.routing.factory import RoutingConfig, build_router
 from callosum.routing.protocols import CellCapabilities
 from callosum.routing.router import NoCompatibleCellError
 
-
 # Hand-built capabilities map for testing.
 LOCAL = Cell(model="local-llm", reasoning_effort="default")
 REMOTE_MID = Cell(model="remote-mid", reasoning_effort="medium")

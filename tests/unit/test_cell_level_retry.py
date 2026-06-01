@@ -31,7 +31,6 @@ from callosum.app import (
 from callosum.cell_grid import Cell
 from callosum.usage_log import UsageLog, UsageLogEntry
 
-
 CELLS = [
     Cell(model="model-a", reasoning_effort="high", context_window=128_000),
     Cell(model="model-b", reasoning_effort="medium", context_window=128_000),
