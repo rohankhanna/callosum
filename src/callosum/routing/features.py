@@ -41,10 +41,10 @@ def _walk_text(node: Any) -> list[str]:
             return [node["text"]]
         if "content" in node:
             return _walk_text(node["content"])
-        out: list[str] = []
+        dict_out: list[str] = []
         for v in node.values():
-            out.extend(_walk_text(v))
-        return out
+            dict_out.extend(_walk_text(v))
+        return dict_out
     return []
 
 
@@ -104,9 +104,7 @@ def _detect_tools(body: dict[str, Any]) -> bool:
     if isinstance(tools, list) and tools:
         return True
     functions = body.get("functions")
-    if isinstance(functions, list) and functions:
-        return True
-    return False
+    return bool(isinstance(functions, list) and functions)
 
 
 async def extract_features(

@@ -271,9 +271,8 @@ def merge_inference_params(
     out: dict[str, Any] = dict(client_body)
     param_keys: set[str] = set(backend_defaults) | set(operator_overrides)
     for k in param_keys:
-        if k in operator_overrides:
-            if operator_force or k not in out:
-                out[k] = operator_overrides[k]
+        if k in operator_overrides and (operator_force or k not in out):
+            out[k] = operator_overrides[k]
         if k in backend_defaults and k not in out:
             out[k] = backend_defaults[k]
     return out

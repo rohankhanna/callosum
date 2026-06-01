@@ -8,7 +8,10 @@ import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from callosum.cell_grid import ModelMetadata
 
 import httpx
 
@@ -106,7 +109,6 @@ class CodexAuthVaultBackend:
         # Full per-model metadata from the upstream catalog (ModelMetadata
         # records). Empty when we haven't fetched yet OR when the upstream
         # response omitted the fields. Callers fall back to local defaults.
-        from callosum.cell_grid import ModelMetadata
         self._model_metadata: dict[str, ModelMetadata] = {}
         self._models_fetched_at: float = 0.0
         self._models_refresh_s = models_refresh_s
@@ -340,9 +342,11 @@ class CodexAuthVaultBackend:
         now = time.time()
         snap_cooldown = self._usage.cooldown_until_ts
         effective_cooldown = snap_cooldown
-        if self._transport_cooldown_until_ts > now:
-            if effective_cooldown is None or self._transport_cooldown_until_ts > effective_cooldown:
-                effective_cooldown = self._transport_cooldown_until_ts
+        if self._transport_cooldown_until_ts > now and (
+            effective_cooldown is None
+            or self._transport_cooldown_until_ts > effective_cooldown
+        ):
+            effective_cooldown = self._transport_cooldown_until_ts
         if (
             weekly_exhausted == self._usage.weekly_exhausted
             and effective_cooldown == self._usage.cooldown_until_ts
@@ -714,10 +718,7 @@ def _chat_to_responses_request(body: dict[str, Any], *, stream: bool) -> dict[st
             role = raw.get("role")
             if role == "system":
                 content_text = _content_as_text(raw.get("content"))
-                if instructions is None:
-                    instructions = content_text
-                else:
-                    instructions = f"{instructions}\n{content_text}"
+                instructions = content_text if instructions is None else f"{instructions}\n{content_text}"
                 continue
             if role in ("user", "assistant"):
                 input_items.append(

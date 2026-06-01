@@ -33,8 +33,6 @@ from typing import Any, cast
 
 import httpx
 
-logger = logging.getLogger(__name__)
-
 from callosum.backend import BackendKind, CallHandle, HealthStatus, UsageSnapshot
 from callosum.backends._http import error_from_response
 from callosum.cell_grid import ModelMetadata
@@ -46,6 +44,8 @@ from callosum.operator_state import (
 )
 from callosum.routing.protocols import CellCapabilities
 from callosum.sse_tee import ResponsesStreamCollector
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "http://127.0.0.1:4000"
 DEFAULT_CATALOG_REFRESH_S = 60.0  # local model lineup changes via yaml reloads — keep fresh
@@ -1135,8 +1135,9 @@ def _chat_to_responses_response(chat: dict[str, Any]) -> dict[str, Any]:
     # "missing field 'input_tokens'" when the response.completed event
     # lacks it, so we ALWAYS emit at least zeros — even when ollama
     # omits usage from its chat-completions reply.
-    chat_usage = chat.get("usage") if isinstance(chat.get("usage"), dict) else {}
-    usage = {
+    _maybe_usage = chat.get("usage")
+    chat_usage: dict[str, Any] = _maybe_usage if isinstance(_maybe_usage, dict) else {}
+    usage: dict[str, Any] = {
         "input_tokens": int(chat_usage.get("prompt_tokens", 0) or 0),
         "output_tokens": int(chat_usage.get("completion_tokens", 0) or 0),
         "total_tokens": int(chat_usage.get("total_tokens", 0) or 0),
@@ -1144,10 +1145,12 @@ def _chat_to_responses_response(chat: dict[str, Any]) -> dict[str, Any]:
     # Preserve any cache / reasoning-token sub-fields the upstream
     # included — they're optional in the Responses API but if present
     # they help downstream cost accounting.
-    if isinstance(chat_usage.get("prompt_tokens_details"), dict):
-        usage["input_tokens_details"] = chat_usage["prompt_tokens_details"]
-    if isinstance(chat_usage.get("completion_tokens_details"), dict):
-        usage["output_tokens_details"] = chat_usage["completion_tokens_details"]
+    prompt_details = chat_usage.get("prompt_tokens_details")
+    if isinstance(prompt_details, dict):
+        usage["input_tokens_details"] = prompt_details
+    completion_details = chat_usage.get("completion_tokens_details")
+    if isinstance(completion_details, dict):
+        usage["output_tokens_details"] = completion_details
     return {
         "id": chat.get("id", "resp-litellm"),
         "object": "response",

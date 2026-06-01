@@ -15,6 +15,7 @@ LiteLLM gateway. These tests cover:
 
 from __future__ import annotations
 
+import contextlib
 import json
 from typing import Any
 
@@ -92,7 +93,7 @@ async def test_model_metadata_marks_local_models_as_listable_default_effort() ->
     await backend.health()  # populate catalog
     md = backend.model_metadata
     assert set(md.keys()) == {"model-a0d3", "model-a0d9"}
-    for slug, m in md.items():
+    for _slug, m in md.items():
         assert m.supported_in_api is True
         assert m.visibility == "list"
         assert m.supported_reasoning_levels == ("default",)
@@ -709,10 +710,8 @@ async def test_responses_stream_translates_chat_deltas_as_they_arrive() -> None:
                     payload_str = line[5:].strip().decode()
                     if payload_str == "[DONE]":
                         continue
-                    try:
+                    with contextlib.suppress(json.JSONDecodeError):
                         events.append(json.loads(payload_str))
-                    except json.JSONDecodeError:
-                        pass
     types = [e["type"] for e in events]
     # Order invariants the Codex CLI parser depends on:
     assert types[0] == "response.created"
@@ -770,10 +769,8 @@ async def test_responses_stream_translates_tool_call_argument_chunks() -> None:
                 if line.startswith(b"data:"):
                     s = line[5:].strip().decode()
                     if s and s != "[DONE]":
-                        try:
+                        with contextlib.suppress(json.JSONDecodeError):
                             events.append(json.loads(s))
-                        except json.JSONDecodeError:
-                            pass
     arg_deltas = [e for e in events if e["type"] == "response.function_call_arguments.delta"]
     assert len(arg_deltas) == 2
     arg_done = [e for e in events if e["type"] == "response.function_call_arguments.done"]

@@ -155,7 +155,7 @@ def run(
                     except Exception:
                         embeddings.append(b"")
             items = [
-                (rid, emb) for rid, emb in zip(ids, embeddings) if emb
+                (rid, emb) for rid, emb in zip(ids, embeddings, strict=True) if emb
             ]
             _write_embeddings(conn, items)
             cursor = rows[-1][0]

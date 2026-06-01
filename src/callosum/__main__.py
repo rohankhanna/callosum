@@ -54,6 +54,8 @@ def main() -> None:
     # Operator-state DB: persistent runtime knobs the CLI manages
     # (inference-param overrides today; denylist + mode + priority in
     # later steps). Lives alongside auth.sqlite under state.dir.
+    if cfg.state.dir is None:
+        parser.error("config.state.dir must be set")
     operator_state = OperatorState(cfg.state.dir / "operator_state.sqlite")
     backends = build_backends(cfg)
     # Auto-register a LiteLLM gateway backend when the operator points us at

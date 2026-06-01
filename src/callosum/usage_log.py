@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 import threading
@@ -7,6 +8,7 @@ import zlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from callosum.codex_quota import CodexQuotaSnapshot
 
@@ -218,7 +220,7 @@ class UsageLogEntry:
     prompt_complexity_class: int | None = None
     # Original OpenAI-format client request dict (before any translation/routing).
     # Used to extract prompt text for label UI keyword search.
-    client_request: dict | None = None
+    client_request: dict[str, Any] | None = None
     # Recommender provenance — see _MIGRATIONS for column-level docs. Populated
     # only on rows where the cell recommender fired and got a live upstream
     # decision (upstream/alternative); NULL on pass-through, cache, and
@@ -429,10 +431,8 @@ class UsageLog:
             row_id = int(request_id)
         # Call callbacks outside lock to avoid deadlock if callback tries to query
         for cb in self._new_request_callbacks:
-            try:
+            with contextlib.suppress(Exception):
                 cb(row_id)
-            except Exception:
-                pass
         return row_id
 
     def record_routing_attempts(
@@ -510,7 +510,7 @@ class UsageLog:
             self._conn.close()
 
 
-def _walk_text(node) -> list[str]:
+def _walk_text(node: Any) -> list[str]:
     """Concatenate every text-shaped string from a nested message body.
 
     Handles three shapes that callosum sees in the wild:
@@ -533,14 +533,14 @@ def _walk_text(node) -> list[str]:
             return [node["text"]]
         if "content" in node:
             return _walk_text(node["content"])
-        out: list[str] = []
+        dict_out: list[str] = []
         for v in node.values():
-            out.extend(_walk_text(v))
-        return out
+            dict_out.extend(_walk_text(v))
+        return dict_out
     return []
 
 
-def _extract_prompt_text(client_request: dict | None) -> str | None:
+def _extract_prompt_text(client_request: dict[str, Any] | None) -> str | None:
     """Extract user-visible text from an OpenAI-format client request.
 
     Handles both Chat Completions (`messages`) and Codex Responses

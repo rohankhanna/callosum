@@ -200,6 +200,11 @@ def build_backend(
     if cfg.type == "credential_proxy":
         from callosum.backends.credential_proxy import CredentialProxyBackend
 
+        if cfg.proxy_url is None or cfg.upstream_url is None:
+            raise ValueError(
+                f"credential_proxy backend {cfg.id!r}: proxy_url and "
+                "upstream_url are required"
+            )
         return CredentialProxyBackend(
             id=cfg.id,
             proxy_url=cfg.proxy_url,
@@ -209,6 +214,10 @@ def build_backend(
             state_store=state_store,
         )
     else:  # codex_auth_vault
+        if cfg.vault_path is None:
+            raise ValueError(
+                f"codex_auth_vault backend {cfg.id!r}: vault_path is required"
+            )
         vault = AuthVault(path=cfg.vault_path)
         return CodexAuthVaultBackend(
             id=cfg.id,

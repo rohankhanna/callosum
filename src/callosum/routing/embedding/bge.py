@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from typing import Any
 
 
 class BGELargeEmbeddingProvider:
@@ -71,7 +72,7 @@ class BGELargeEmbeddingProvider:
                 import torch
                 from sentence_transformers import SentenceTransformer
                 use_fp16 = torch.cuda.is_available()
-                kwargs: dict = {}
+                kwargs: dict[str, Any] = {}
                 if use_fp16:
                     # model_kwargs flows into the underlying transformers
                     # AutoModel constructor; torch_dtype=float16 keeps the

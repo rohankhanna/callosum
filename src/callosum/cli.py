@@ -285,7 +285,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
-    return args.func(args)
+    rc = args.func(args)
+    return int(rc) if rc is not None else 0
 
 
 if __name__ == "__main__":

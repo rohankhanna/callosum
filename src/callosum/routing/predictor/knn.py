@@ -19,6 +19,7 @@ interface.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import Any
 
 from callosum.cell_grid import Cell
 from callosum.routing.protocols import LabeledRow, PromptFeatures
@@ -65,12 +66,14 @@ class KNNPredictor:
             return {c: 0.5 for c in candidates}
         # Cosine similarity for normalized vectors == dot product.
         sims = self._embeddings @ q
-        # Top-K nearest neighbors.
-        if sims.shape[0] <= self._k:
-            top_idx = np.argsort(-sims)
-        else:
-            # argpartition is O(N) vs O(N log N) for argsort.
-            top_idx = np.argpartition(-sims, self._k)[: self._k]
+        # Top-K nearest neighbors. argpartition is O(N) vs argsort's
+        # O(N log N); only worth the extra branch when we have more
+        # than K candidates to choose from.
+        top_idx = (  # noqa: SIM108 — kept as if/else for the inline complexity note above
+            np.argsort(-sims)
+            if sims.shape[0] <= self._k
+            else np.argpartition(-sims, self._k)[: self._k]
+        )
         # Group neighbors by which cell they ran on; average outcomes.
         per_cell_sum: dict[str, float] = {}
         per_cell_count: dict[str, int] = {}
@@ -103,7 +106,7 @@ class KNNPredictor:
         second check.
         """
         np = self._np
-        embeddings: list = []
+        embeddings: list[Any] = []
         cell_keys: list[str] = []
         outcomes: list[float] = []
         for row in labeled:

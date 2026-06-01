@@ -25,6 +25,7 @@ JSON in, JSON out.
 
 from __future__ import annotations
 
+import contextlib
 import secrets
 import time
 from pathlib import Path
@@ -53,10 +54,8 @@ def ensure_admin_token() -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     token = secrets.token_urlsafe(32)
     path.write_text(token)
-    try:
+    with contextlib.suppress(OSError):
         path.chmod(0o600)
-    except OSError:
-        pass
     return token
 
 
@@ -221,7 +220,9 @@ def install_admin_routes(
                 ),
             }
         for backend in backends_list:
-            advertised = getattr(backend, "advertised_models", frozenset())
+            advertised: frozenset[str] = getattr(
+                backend, "advertised_models", frozenset()
+            )
             for model in sorted(advertised):
                 if wanted_set is not None and model not in wanted_set:
                     continue
@@ -230,12 +231,16 @@ def install_admin_routes(
                     # path the probe needs — skip rather than fail.
                     continue
 
-                async def _call(probe_body: dict[str, Any], _b=backend) -> dict[str, Any]:
+                async def _call(
+                    probe_body: dict[str, Any],
+                    _b: Any = backend,
+                ) -> dict[str, Any]:
                     # Closure binds the current backend so each probe
                     # hits the right one. The probe-supports-tools
                     # function signature is decoupled from backend
                     # internals — this thin closure is the seam.
-                    return await _b.responses(probe_body)
+                    result: dict[str, Any] = await _b.responses(probe_body)
+                    return result
 
                 t0 = time.time()
                 error_msg: str | None = None

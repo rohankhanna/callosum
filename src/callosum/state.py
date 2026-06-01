@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from dataclasses import asdict
@@ -65,10 +66,8 @@ class StateStore:
         # Read existing data to preserve model_release_timestamp
         existing = {}
         if self._timing_path.exists():
-            try:
+            with contextlib.suppress(OSError, json.JSONDecodeError):
                 existing = json.loads(self._timing_path.read_text())
-            except (OSError, json.JSONDecodeError):
-                pass
         existing["startup_timestamp"] = ts
         tmp = self._timing_path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(existing))
@@ -96,10 +95,8 @@ class StateStore:
         # Read existing data to preserve startup_timestamp
         existing = {}
         if self._timing_path.exists():
-            try:
+            with contextlib.suppress(OSError, json.JSONDecodeError):
                 existing = json.loads(self._timing_path.read_text())
-            except (OSError, json.JSONDecodeError):
-                pass
         existing["model_release_timestamp"] = ts
         tmp = self._timing_path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(existing))

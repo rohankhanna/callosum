@@ -32,6 +32,7 @@ import sys
 import time
 import zlib
 from pathlib import Path
+from typing import Any
 
 from callosum.usage_log import _extract_prompt_text, _extract_response_text
 
@@ -83,7 +84,7 @@ def _fetch_batch(
     ]
 
 
-def _decompress_dict(blob: bytes | None) -> dict | None:
+def _decompress_dict(blob: bytes | None) -> dict[str, Any] | None:
     if not blob:
         return None
     try:

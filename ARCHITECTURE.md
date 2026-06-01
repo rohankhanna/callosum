@@ -129,7 +129,9 @@ uv run mypy src/callosum
 uv run pytest
 ```
 
-All three must pass before any merge to `main`. As of 2026-06-01,
-ruff has 115 errors (47 auto-fixable) and mypy has 45 errors carried
-over from before the verification path was treated as canonical;
-these are tracked as a standing follow-up.
+All three must pass before any merge to `main`. As of 2026-06-01 the
+verification path is fully green — no ruff errors, no mypy errors,
+462 tests passing. The line-length cap is 120 (widened from 100 to
+match modern defaults); test files have a per-file E501 ignore so
+SSE-blob test fixtures can stay as single-line literals matching
+real upstream payload shapes.

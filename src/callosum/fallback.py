@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -73,7 +74,7 @@ class FallbackExecutor:
         )
 
     def should_retry_with_backoff(
-        self, error_classifications: dict[str, str]
+        self, error_classifications: Mapping[str, str]
     ) -> bool:
         """Decide if we should retry with exponential backoff.
 
@@ -108,7 +109,7 @@ class FallbackExecutor:
         return None
 
     def should_try_different_backend(
-        self, error_classifications: dict[str, str]
+        self, error_classifications: Mapping[str, str]
     ) -> bool:
         """Decide if we should try a completely different backend.
 
@@ -126,7 +127,7 @@ class FallbackExecutor:
         return backend_specific > 0
 
     def log_final_exhaustion(
-        self, model: str, error_classifications: dict[str, str]
+        self, model: str, error_classifications: Mapping[str, str]
     ) -> None:
         """Log when all strategies are exhausted."""
         ts = _utc_timestamp()
@@ -142,15 +143,11 @@ class FallbackExecutor:
 
 
 def should_attempt_fallback(
-    error_classifications: dict[str, str],
+    error_classifications: Mapping[str, str],
 ) -> bool:
     """Quick check: is fallback strategy worth attempting?
 
     Returns False only if errors suggest permanent unavailability.
     """
     # If all backends return "unknown_model" or "auth_invalid", don't fallback
-    if all(
-        c in {"unknown_model", "auth_invalid"} for c in error_classifications.values()
-    ):
-        return False
-    return True
+    return not all(c in {"unknown_model", "auth_invalid"} for c in error_classifications.values())

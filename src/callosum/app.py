@@ -230,7 +230,7 @@ def create_app(
     state_store: StateStore | None = None
     for b in backends_list:
         if hasattr(b, "_state_store"):
-            state_store = b._state_store  # type: ignore
+            state_store = b._state_store
             break
 
     def _live_cells() -> list[Cell]:
@@ -268,8 +268,21 @@ def create_app(
                     merged_metadata[slug] = m
                 else:
                     # Pick the record with more populated fields.
-                    new_filled = sum(1 for f in (m.supported_in_api, m.visibility, m.priority, m.context_window) if f is not None)
-                    old_filled = sum(1 for f in (existing.supported_in_api, existing.visibility, existing.priority, existing.context_window) if f is not None)
+                    new_filled = sum(
+                        1
+                        for f in (m.supported_in_api, m.visibility, m.priority, m.context_window)
+                        if f is not None
+                    )
+                    old_filled = sum(
+                        1
+                        for f in (
+                            existing.supported_in_api,
+                            existing.visibility,
+                            existing.priority,
+                            existing.context_window,
+                        )
+                        if f is not None
+                    )
                     if new_filled > old_filled:
                         merged_metadata[slug] = m
 
@@ -316,7 +329,8 @@ def create_app(
                 if cell.model in b.advertised_models:
                     fn = getattr(b, "cell_capabilities", None)
                     if fn is not None:
-                        return fn(cell.model)
+                        result: CellCapabilities = fn(cell.model)
+                        return result
                     break
             return CellCapabilities(
                 context_window=128_000,
@@ -385,7 +399,7 @@ def create_app(
                 from callosum.routing.predictor.loader import (
                     labeled_rows_from_request_log,
                 )
-                router._predictor.reload(  # type: ignore[attr-defined]
+                router._predictor.reload(
                     labeled_rows_from_request_log(
                         usage_log.path, limit=50_000,
                     )
@@ -710,8 +724,11 @@ def create_app(
             usage_log.record_quality(request_id, rating, "user")
         except Exception as exc:
             logging.getLogger("callosum.app").warning("feedback record failed: %s", exc)
-            raise HTTPException(status_code=400, detail="request_id not found or feedback failed")
-        return {"status": "recorded", "request_id": request_id}
+            raise HTTPException(
+                status_code=400,
+                detail="request_id not found or feedback failed",
+            ) from exc
+        return {"status": "recorded", "request_id": str(request_id)}
 
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
@@ -928,10 +945,11 @@ async def _dispatch_internal(
     prompt_embedding: bytes | None = None
     cell_candidates: tuple[Cell, ...] = ()
 
-    # Look up current session context size for context-safe routing
-    session_prompt_tokens: int | None = None
-    if session_id is not None and usage_log is not None:
-        session_prompt_tokens = usage_log.last_session_prompt_tokens(session_id)
+    # `session_prompt_tokens` lookup used to feed the now-removed hard
+    # context-window capability filter (see capability.py module
+    # docstring). Window fit is now a soft preference applied by the
+    # Router using the request body's own size, so the previous
+    # per-session lookup is no longer needed on the hot path.
 
     # Route ALL requests through the learning router. Codex CLI sending
     # `model-a0e8`, Hermes sending `model-a0c3`, and explicit `auto`
@@ -1395,9 +1413,12 @@ async def _dispatch_nonstream(
     for backend in backends_list:
         try:
             usage = await backend.usage_snapshot()
-            if usage and usage.cooldown_until_ts:
-                if recovery_ts is None or usage.cooldown_until_ts < recovery_ts:
-                    recovery_ts = usage.cooldown_until_ts
+            if (
+                usage
+                and usage.cooldown_until_ts
+                and (recovery_ts is None or usage.cooldown_until_ts < recovery_ts)
+            ):
+                recovery_ts = usage.cooldown_until_ts
         except Exception:
             pass  # Skip backends that fail to report usage
 
@@ -1579,9 +1600,12 @@ async def _dispatch_stream(
     for backend in backends_list:
         try:
             usage = await backend.usage_snapshot()
-            if usage and usage.cooldown_until_ts:
-                if recovery_ts is None or usage.cooldown_until_ts < recovery_ts:
-                    recovery_ts = usage.cooldown_until_ts
+            if (
+                usage
+                and usage.cooldown_until_ts
+                and (recovery_ts is None or usage.cooldown_until_ts < recovery_ts)
+            ):
+                recovery_ts = usage.cooldown_until_ts
         except Exception:
             pass  # Skip backends that fail to report usage
 
@@ -2020,7 +2044,7 @@ async def _extract_complexity_from_stream(
         leftover = parts[-1]
         events = parts[:-1]
 
-        for idx, ev in enumerate(events):
+        for ev in events:
             if decided:
                 yield ev + b"\n\n"
                 continue
@@ -2075,7 +2099,6 @@ async def _scrub_full_text_events(
                 yield ev + b"\n\n"
                 continue
             lines = ev_str.split("\n")
-            modified_any = False
             new_lines: list[str] = []
             for line in lines:
                 if not line.startswith("data: "):
@@ -2092,7 +2115,6 @@ async def _scrub_full_text_events(
                     continue
                 if _scrub_full_text_event(data):
                     new_lines.append("data: " + json.dumps(data))
-                    modified_any = True
                 else:
                     new_lines.append(line)
             yield ("\n".join(new_lines)).encode("utf-8") + b"\n\n"
@@ -2471,7 +2493,7 @@ def _active_api_key_count(auth_service: Any) -> int:
     """Best-effort count of active API keys for 401 diagnostics. Returns -1
     if the count can't be obtained — the error path must never raise."""
     try:
-        return auth_service.db.count_active_api_keys()
+        return int(auth_service.db.count_active_api_keys())
     except Exception:
         return -1
 

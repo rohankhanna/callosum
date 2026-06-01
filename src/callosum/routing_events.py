@@ -50,9 +50,10 @@ Design notes for consumers (e.g. the `snorkel` sidecar HUD):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import sqlite3
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI
@@ -133,12 +134,10 @@ class _RoutingEventBroadcaster:
                 and event_session_id != filter_session_id
             ):
                 continue
-            try:
+            # Slow consumer; we'd rather drop an observability event
+            # than backpressure the proxy.
+            with contextlib.suppress(asyncio.QueueFull):
                 q.put_nowait(payload)
-            except asyncio.QueueFull:
-                # Slow consumer; we'd rather drop an observability event
-                # than backpressure the proxy.
-                pass
 
     def _build_payload(self, request_id: int) -> dict[str, Any] | None:
         # Fresh connection so we don't contend with usage_log's writer
@@ -253,7 +252,7 @@ def install_routing_events(
         """
         q = broadcaster.subscribe(session_id=session_id)
 
-        async def generate():
+        async def generate() -> AsyncIterator[bytes]:
             try:
                 while True:
                     try:

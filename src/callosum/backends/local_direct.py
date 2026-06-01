@@ -55,7 +55,8 @@ class LocalModelRegistryBackend:
     """Backend that uses local LLM gateway for discovery and routes inference
     directly to each model's runtime endpoint."""
 
-    kind: BackendKind = "litellm_gateway"  # reuse existing kind so the cell-grid + routing pipeline don't need to learn a new tag
+    # reuse existing kind so the cell-grid + routing pipeline don't need to learn a new tag
+    kind: BackendKind = "litellm_gateway"
 
     def __init__(
         self,
@@ -180,7 +181,7 @@ class LocalModelRegistryBackend:
         models = self._source.models()
         if models:
             return HealthStatus(available=True, reason="ok")
-        return HealthStatus(available=False, reason="no models")
+        return HealthStatus(available=False, reason="unknown")
 
     async def usage_snapshot(self) -> UsageSnapshot:
         # Local cells have no quota; tiny non-zero remaining_fraction

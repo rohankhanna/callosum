@@ -162,9 +162,8 @@ class LocalModelRegistrySource:
         refresh hook)."""
         with self._lock:
             now = time.time()
-            if not force and (now - self._cache.fetched_at) < self._refresh_s:
-                if self._cache.healthy:
-                    return list(self._cache.models)
+            if not force and (now - self._cache.fetched_at) < self._refresh_s and self._cache.healthy:
+                return list(self._cache.models)
             self._cache = self._fetch_locked()
             return list(self._cache.models)
 

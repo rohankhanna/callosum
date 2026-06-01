@@ -64,7 +64,8 @@ def _decompress(blob: bytes | None) -> dict[str, Any] | None:
         return None
     try:
         raw = zlib.decompress(blob)
-        return json.loads(raw)
+        result = json.loads(raw)
+        return result if isinstance(result, dict) else None
     except Exception:
         return None
 

@@ -189,9 +189,8 @@ def live_completion_models_from_metadata(
         # If neither supported_in_api nor visibility was given, fall back
         # to the name-shape filter so we don't accidentally route to
         # embeddings / audio / review-style models.
-        if m.supported_in_api is None and m.visibility is None:
-            if not is_completion_model(slug):
-                continue
+        if m.supported_in_api is None and m.visibility is None and not is_completion_model(slug):
+            continue
         # Sort key: priority asc (lower=stronger), with high sentinel for missing.
         prio = m.priority if m.priority is not None else 10_000
         out.append((prio, slug, slug))

@@ -18,8 +18,10 @@ actual context overflow.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from callosum.cell_grid import Cell
-from callosum.routing.protocols import PromptFeatures
+from callosum.routing.protocols import CellCapabilities, PromptFeatures
 
 
 class CapabilityFilter:
@@ -32,8 +34,7 @@ class CapabilityFilter:
     decoupled from backend-shape detail.
     """
 
-    def __init__(self, capabilities_of):
-        # capabilities_of: Callable[[Cell], CellCapabilities]
+    def __init__(self, capabilities_of: Callable[[Cell], CellCapabilities]) -> None:
         self._capabilities_of = capabilities_of
 
     def filter(

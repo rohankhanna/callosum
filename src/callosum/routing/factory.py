@@ -20,12 +20,17 @@ from callosum.routing.capability import CapabilityFilter
 from callosum.routing.embedding.noop import NoopEmbeddingProvider
 from callosum.routing.predictor.knn import KNNPredictor
 from callosum.routing.predictor.uniform import UniformPriorPredictor
-from callosum.routing.protocols import CellCapabilities
+from callosum.routing.protocols import (
+    CellCapabilities,
+    CellSelector,
+    EmbeddingProvider,
+    QualityPredictor,
+)
 from callosum.routing.router import Router
 from callosum.routing.selector.cost_weighted import CostWeightedSelector
 
 
-def _bge_provider_factory():
+def _bge_provider_factory() -> EmbeddingProvider:
     """Lazy import + construct of the BGE provider so the module
     can be imported without sentence-transformers installed. Selected
     only when operator configures embedding_provider='bge-large-en-v1.5'."""
@@ -47,17 +52,17 @@ class RoutingConfig(BaseModel):
     cell_selector: str = "cost-weighted"
 
 
-_EMBEDDING_IMPLS: dict[str, Callable[[], object]] = {
+_EMBEDDING_IMPLS: dict[str, Callable[[], EmbeddingProvider]] = {
     "noop": NoopEmbeddingProvider,
     "bge-large-en-v1.5": _bge_provider_factory,
 }
 
-_PREDICTOR_IMPLS: dict[str, Callable[[], object]] = {
+_PREDICTOR_IMPLS: dict[str, Callable[[], QualityPredictor]] = {
     "uniform": UniformPriorPredictor,
     "knn": KNNPredictor,
 }
 
-_SELECTOR_IMPLS: dict[str, Callable[[], object]] = {
+_SELECTOR_IMPLS: dict[str, Callable[[], CellSelector]] = {
     "cost-weighted": CostWeightedSelector,
 }
 
