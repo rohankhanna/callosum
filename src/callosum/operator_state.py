@@ -70,6 +70,17 @@ _SCHEMA = [
         updated_at REAL NOT NULL
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS probe_results (
+        backend_id TEXT NOT NULL,
+        model TEXT NOT NULL,
+        probed_at REAL NOT NULL,
+        supports_tools INTEGER NOT NULL,
+        error TEXT,
+        latency_ms INTEGER,
+        PRIMARY KEY (backend_id, model)
+    )
+    """,
 ]
 
 # Allowed values for the single-row operator_mode table. `auto` is the
@@ -224,6 +235,87 @@ class OperatorState:
                 (mode, time.time()),
             )
             self._conn.commit()
+
+    # ---------- probe results --------------------------------------------
+
+    def get_probe_result(
+        self, backend_id: str, model: str
+    ) -> tuple[bool, float] | None:
+        """Hot-path read used by `_capabilities_of` to override
+        `supports_tools` for cells that failed the verification probe.
+
+        Returns (supports_tools, probed_at) when a result is cached.
+        Returns None when this cell has never been probed — caller
+        falls back to the backend's claimed capability.
+
+        Probe results have no TTL enforcement in this read path —
+        callers (the probe scheduler) decide when to re-probe by
+        consulting `probed_at`.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT supports_tools, probed_at FROM probe_results "
+                "WHERE backend_id = ? AND model = ?",
+                (backend_id, model),
+            ).fetchone()
+        if row is None:
+            return None
+        return (bool(row[0]), float(row[1]))
+
+    def set_probe_result(
+        self,
+        backend_id: str,
+        model: str,
+        *,
+        supports_tools: bool,
+        error: str | None = None,
+        latency_ms: int | None = None,
+    ) -> None:
+        """Persist the outcome of a tool-call verification probe for one
+        cell. Called by the probe scheduler after each probe completes.
+        Idempotent: re-probing the same cell overwrites the prior row
+        with a fresh `probed_at` timestamp.
+        """
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO probe_results "
+                "(backend_id, model, probed_at, supports_tools, error, latency_ms) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(backend_id, model) DO UPDATE SET "
+                "probed_at=excluded.probed_at, "
+                "supports_tools=excluded.supports_tools, "
+                "error=excluded.error, "
+                "latency_ms=excluded.latency_ms",
+                (
+                    backend_id,
+                    model,
+                    time.time(),
+                    1 if supports_tools else 0,
+                    error,
+                    latency_ms,
+                ),
+            )
+            self._conn.commit()
+
+    def list_probe_results(
+        self,
+    ) -> list[tuple[str, str, float, bool, str | None, int | None]]:
+        """Return all probe results as
+        (backend_id, model, probed_at, supports_tools, error, latency_ms).
+        Used by `callosum-ctl probe-tools list` to show the cached
+        view without re-probing.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT backend_id, model, probed_at, supports_tools, error, latency_ms "
+                "FROM probe_results ORDER BY backend_id, model"
+            ).fetchall()
+        return [
+            (str(r[0]), str(r[1]), float(r[2]), bool(r[3]),
+             r[4] if r[4] is None else str(r[4]),
+             r[5] if r[5] is None else int(r[5]))
+            for r in rows
+        ]
 
     # ---------- inference overrides (existing) ---------------------------
 

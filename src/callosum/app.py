@@ -324,14 +324,42 @@ def create_app(
             advertises its model. Falls back to safe defaults when no
             backend recognizes the model (would mean a stale cell grid
             — surface the safest non-blocking defaults so dispatch can
-            still try)."""
+            still try).
+
+            After the backend's own claim, consult the probe-results
+            cache: if a previous verification probe showed the cell
+            does NOT emit OpenAI-shaped tool_calls end-to-end through
+            callosum's pipeline, override supports_tools to False so
+            the router's CapabilityFilter automatically excludes it
+            from tool-using requests. The override is one-directional
+            (probe-fail can revoke claimed support; probe-pass cannot
+            grant unclaimed support) so a backend that says "no tools"
+            stays at "no tools" regardless of probe outcome.
+            """
+            from callosum.routing.probe_scheduler import supports_tools_override
+
             for b in backends_list:
                 if cell.model in b.advertised_models:
                     fn = getattr(b, "cell_capabilities", None)
-                    if fn is not None:
-                        result: CellCapabilities = fn(cell.model)
+                    if fn is None:
+                        break
+                    result: CellCapabilities = fn(cell.model)
+                    if operator_state is None or not result.supports_tools:
                         return result
-                    break
+                    override = supports_tools_override(
+                        operator_state=operator_state,
+                        backend_id=getattr(b, "id", "?"),
+                        model=cell.model,
+                    )
+                    if override is False:
+                        return CellCapabilities(
+                            context_window=result.context_window,
+                            modalities=result.modalities,
+                            supports_tools=False,
+                            cost_rank=result.cost_rank,
+                            parameter_count=result.parameter_count,
+                        )
+                    return result
             return CellCapabilities(
                 context_window=128_000,
                 modalities=frozenset({"text"}),
@@ -416,6 +444,19 @@ def create_app(
             await _run_startup_smoke_test(backends_list)
         smoke_tester.start()
         cooldown_prober.start()
+        # Kick off the auto-probe sweep so any newly-seen local cells
+        # get verified for OpenAI-shaped tool-call emission. Probes
+        # run serially in the background; cell_capabilities consults
+        # the persisted results to override supports_tools on cells
+        # that fail. Skipped when no operator_state is configured
+        # (e.g. throwaway test instances) since there's nowhere to
+        # persist the results.
+        if operator_state is not None and backends_list:
+            from callosum.routing.probe_scheduler import schedule_background_sweep
+            schedule_background_sweep(
+                backends=backends_list,
+                operator_state=operator_state,
+            )
         try:
             yield
         finally:
