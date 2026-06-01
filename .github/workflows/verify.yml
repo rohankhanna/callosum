@@ -1,0 +1,58 @@
+# Canonical verification path, exact match to what humans run locally.
+#
+# This workflow invokes the SAME commands documented in ARCHITECTURE.md:
+#
+#   uv run ruff check src/ tests/
+#   uv run ruff format --check .
+#   uv run mypy src/callosum
+#   uv run pytest
+#
+# No CI-specific shortcuts.  If a human can run it locally and it
+# passes, CI passes.  If CI fails, the same command locally would
+# also fail.  That symmetry is the rule.
+
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          # Pin uv to a recent stable; bump deliberately when
+          # validating a uv release locally.
+          version: "0.5.x"
+
+      - name: Install Python (uv-managed)
+        # uv reads pyproject.toml's requires-python (>=3.11) and
+        # installs a matching interpreter on the runner.
+        run: uv python install
+
+      - name: Sync dependencies
+        # `uv sync --all-extras` installs both the base + the
+        # `embeddings` optional group so the full test surface
+        # (including any embedding-related tests) is runnable.
+        run: uv sync --all-extras --dev
+
+      - name: ruff
+        run: uv run ruff check src/ tests/
+
+      - name: mypy
+        run: uv run mypy src/callosum
+
+      - name: pytest
+        # No -x: CI should report all failing tests, not just the
+        # first. -q keeps the log readable; verbose mode is one
+        # `--verbose` flag away when a specific failure needs detail.
+        run: uv run pytest -q
