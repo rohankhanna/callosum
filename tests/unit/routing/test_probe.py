@@ -1,9 +1,13 @@
 """Tests for the tool-call verification probe.
 
 Covers the contract: a cell passes only when it returns a Responses-API
-response carrying at least one structured `function_call` output item.
+response carrying at least one structured `function_call` output item
+AND no message text that parses as a tool-call-shaped JSON object.
+
 Quirks the probe MUST catch:
   * tool calls emitted as JSON text inside message content (model-a0e5 quirk)
+  * the dual-emit failure mode where the model produces BOTH a structured
+    function_call AND duplicates it as JSON in message text
   * empty output (model refused or produced nothing)
   * function_call items with malformed/missing required fields
   * backend errors → probe fails closed
@@ -25,10 +29,16 @@ from callosum.routing.probe import (
 def test_probe_body_targets_named_model() -> None:
     body = build_probe_body("model-a0a9")
     assert body["model"] == "model-a0a9"
-    # Tool must be present and named consistently for the assertion
-    # paths in response_has_structured_tool_call to mean anything.
+    # Tools list must be present and contain the hardened multi-tool
+    # set so the assertion paths in response_has_structured_tool_call
+    # match real-traffic shape rather than a single-tool probe.
     assert isinstance(body.get("tools"), list)
-    assert body["tools"][0]["name"] == "probe_echo"
+    tool_names = {t["name"] for t in body["tools"]}
+    # At least 6 tools — the hardening that catches the model-a0d5-31b
+    # false-positive case (single-tool probes degenerate into "always
+    # call that tool" which is easier than real traffic).
+    assert len(tool_names) >= 6
+    assert "exec_command" in tool_names
 
 
 def test_probe_body_is_fresh_copy_per_call() -> None:
@@ -43,6 +53,21 @@ def test_probe_body_is_fresh_copy_per_call() -> None:
     # list shouldn't affect body_b's.
     body_a["input"].append({"type": "junk"})
     assert {"type": "junk"} not in body_b["input"]
+
+
+def test_probe_body_is_realistic_size() -> None:
+    """The hardened probe targets ~5KB of context (instructions + user
+    message + tool definitions) so it stresses tool-disambiguation the
+    way real Codex CLI traffic does. The earlier ~200-byte probe
+    produced false positives — model-a0c8 passed the simple form and
+    failed real traffic. Asserting a lower bound on the realistic
+    size catches regressions where someone simplifies the probe back."""
+    body = build_probe_body("test")
+    import json as _json
+    total_chars = len(_json.dumps(body))
+    assert total_chars > 3000, (
+        f"probe body is only {total_chars} chars — hardening regressed."
+    )
 
 
 # ---------- response_has_structured_tool_call --------------------------
@@ -85,6 +110,98 @@ def test_text_as_json_in_content_is_rejected() -> None:
         ]
     }
     assert response_has_structured_tool_call(response) is False
+
+
+def test_dual_emit_failure_mode_rejected() -> None:
+    """The harder case the previous probe missed: the model emits BOTH
+    a structured function_call AND duplicates it as JSON in a message
+    text part. Codex CLI's parser will handle the structured call but
+    render the JSON-shaped text as visible terminal junk. The probe
+    must fail the cell on this pattern even though one half of the
+    output is correct.
+
+    This is the case where model-a0c8 passed the earlier simpler probe
+    (the structured call WAS present) but real Codex CLI traffic still
+    showed JSON-as-text in the user's terminal.
+    """
+    response = {
+        "output": [
+            {
+                "type": "function_call",
+                "name": "exec_command",
+                "arguments": '{"cmd":"git status"}',
+                "call_id": "fc_001",
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": '{"name":"exec_command","arguments":{"cmd":"git status"}}',
+                    }
+                ],
+            },
+        ]
+    }
+    assert response_has_structured_tool_call(response) is False
+
+
+def test_function_call_plus_real_explanatory_text_passes() -> None:
+    """The healthy pattern: model emits a structured function_call AND
+    a brief explanatory text message. Text content that isn't JSON-shaped
+    must NOT trigger the dual-emit rejection — otherwise we'd reject
+    every well-behaved model that explains what it's about to do."""
+    response = {
+        "output": [
+            {
+                "type": "function_call",
+                "name": "git_status",
+                "arguments": "{}",
+                "call_id": "fc_001",
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "Checking the current branch and uncommitted changes.",
+                    }
+                ],
+            },
+        ]
+    }
+    assert response_has_structured_tool_call(response) is True
+
+
+def test_function_call_plus_json_text_unrelated_to_tool_call_passes() -> None:
+    """Edge case: the model's explanatory text happens to contain a
+    JSON OBJECT, but it doesn't have the `name`+`arguments` shape of a
+    tool call. e.g. the model is explaining a config payload. Must NOT
+    trigger the dual-emit rejection — the rejection condition is
+    specifically tool-call-shaped JSON, not all JSON."""
+    response = {
+        "output": [
+            {
+                "type": "function_call",
+                "name": "read_file",
+                "arguments": '{"path":"config.json"}',
+                "call_id": "fc_001",
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": 'The expected config shape is {"port": 8765, "host": "127.0.0.1"}.',
+                    }
+                ],
+            },
+        ]
+    }
+    assert response_has_structured_tool_call(response) is True
 
 
 def test_empty_output_rejected() -> None:
