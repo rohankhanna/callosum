@@ -48,6 +48,14 @@ Environment="PATH=@UV_DIR@:@PATH_PREPEND@:/usr/local/bin:/usr/bin:/bin"
 # placeholder is replaced at runtime with a tmp file path.
 Environment="CALLOSUM_DEV_LOOP_AGENT=@AGENT_COMMAND@"
 
+# Operator-curated secrets file. Anything that the agent needs to
+# authenticate (CODEX_PROXY_TOKEN, API keys, etc.) lives here as
+# KEY=VALUE lines, mode 0600. The leading dash on the path makes
+# this file OPTIONAL — a unit start with the file missing logs a
+# warning but doesn't fail. Operators who don't need secrets can
+# simply not create the file.
+EnvironmentFile=-%h/.config/callosum-dev-loop.env
+
 # Invoke uv by absolute path so the unit works even if PATH is
 # misconfigured — defense in depth on top of the PATH= line above.
 # The dispatcher itself relies on PATH for its inner subprocesses
