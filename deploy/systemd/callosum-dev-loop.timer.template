@@ -1,0 +1,32 @@
+# callosum-dev-loop.timer — drives the dev-loop service on a cadence.
+#
+# This is the SCHEDULE for callosum-dev-loop.service. Install via
+# install.sh in this directory; do not copy directly.
+#
+# Cadence rationale: 6 hours matches the capability harness cadence
+# (callosum/capability/scheduler.py). The harness produces findings;
+# the dev-loop reads them. Running the dev-loop at the same rhythm
+# (or slightly less often) means every iteration has fresh data.
+#
+# OnBootSec=15min means a freshly-booted machine waits 15 min before
+# the first run, so reboots don't cause an immediate dev-loop fire
+# during the rest of the boot's settling-down period.
+
+[Unit]
+Description=callosum dev-loop schedule (every 6h)
+
+[Timer]
+# First fire 15 min after boot, then every 6h thereafter.
+OnBootSec=15min
+OnUnitActiveSec=6h
+
+# Persistent=true means a missed fire (machine off, systemd not
+# running) triggers on next start. Without this, a laptop suspended
+# through the scheduled time would simply skip iterations.
+Persistent=true
+
+# The unit name above must match the .service template's basename.
+Unit=callosum-dev-loop.service
+
+[Install]
+WantedBy=timers.target

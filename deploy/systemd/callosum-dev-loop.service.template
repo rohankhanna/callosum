@@ -1,0 +1,65 @@
+# callosum-dev-loop.service — one iteration of the dev loop.
+#
+# This file is a TEMPLATE. Do NOT install it directly. The install
+# script in this directory substitutes operator-specific values
+# (mise node path, repo location, agent command) and writes the
+# resulting unit to ~/.config/systemd/user/callosum-dev-loop.service.
+#
+# Substitution markers (all of the form @VAR_NAME@) are replaced by
+# install.sh:
+#   @REPO_ROOT@        — absolute path to your callosum checkout
+#   @PATH_PREPEND@     — colon-separated dirs prepended to PATH
+#                        (must include the mise node bin dir so the
+#                        codex shim can find `node`; see the cron
+#                        PATH gotcha in src/callosum/dev_loop/cli.py)
+#   @AGENT_COMMAND@    — your CALLOSUM_DEV_LOOP_AGENT template
+#                        (default: `codex exec --file {PROMPT_FILE}`)
+#
+# Service is Type=oneshot — fires, runs once, exits. Paired with the
+# .timer unit which determines the cadence. No restart-on-failure;
+# we don't want a failing iteration to spin in a retry loop.
+
+[Unit]
+Description=callosum dev-loop iteration (one-shot)
+# Don't run if the underlying callosum proxy isn't healthy. The
+# `Wants=` (not `Requires=`) means we'd PREFER callosum running but
+# won't refuse to fire if its unit name differs in your setup. If
+# your callosum runs under a different unit name, edit this line
+# or remove it.
+Wants=system-dependency-callosum.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=@REPO_ROOT@
+
+# The PATH gotcha defense. The dispatcher reads this env var and
+# prepends it to the subprocess PATH when spawning the agent. The
+# substituted value must include the directory containing the matching
+# `node` binary so the codex Node-shim can find its interpreter.
+Environment="CALLOSUM_DEV_LOOP_PATH_PREPEND=@PATH_PREPEND@"
+
+# Also set PATH directly so the dispatcher's own subprocess (uv,
+# git, pytest, etc.) can find them. Redundant with PATH_PREPEND for
+# the agent's needs but cleaner overall — without this, even
+# `uv run callosum-dev-loop run` might fail to locate uv itself in
+# the systemd-truncated PATH.
+Environment="PATH=@PATH_PREPEND@:/usr/local/bin:/usr/bin:/bin"
+
+# The agent command the dispatcher invokes. The {PROMPT_FILE}
+# placeholder is replaced at runtime with a tmp file path.
+Environment="CALLOSUM_DEV_LOOP_AGENT=@AGENT_COMMAND@"
+
+# The dispatcher should not run on a dirty working tree. Let it
+# fail clean rather than wrestle for control if you happen to be
+# editing the repo when the timer fires.
+ExecStart=/usr/bin/env uv run callosum-dev-loop run
+
+# Don't let one iteration hang forever. Codex with a meaningful
+# prompt typically completes in 1-3 minutes; one hour is a generous
+# upper bound that surfaces a stuck run.
+TimeoutStartSec=3600
+
+# Log to the journal so you can see what happened with:
+#   journalctl --user -u callosum-dev-loop.service --since '1 hour ago'
+StandardOutput=journal
+StandardError=journal
