@@ -136,6 +136,86 @@ host-internal change owned by the dotfiles repo. When that lands,
 See `docs/architecture/README.md` for the full rendering procedure
 and the tooling-choice rationale.
 
+## Self-observation and self-adaptation
+
+callosum is a router that observes its own behavior and can
+(optionally, with safety gates) write code to adapt itself. Five
+modules implement this:
+
+### Capability harness (`src/callosum/capability/`)
+
+A periodic in-process sweeper that probes every advertised local
+cell against a registered set of capability dimensions
+(`tool_call_shape`, `tool_call_at_scale`, ...). Each probe produces
+a `DimensionFinding` with status (`pass` / `fail` / `error` /
+`skipped`), summary, evidence, and — when status is `fail` — an
+`adapter_hint` that describes in concrete terms what a transform
+would need to do.
+
+Findings persist as JSON under `logs/capability_profiles/<cell>.json`.
+The runner (`callosum.capability.runner.run_dimensions`) is the
+single orchestrator both pytest (`tests/model_capability/`) and the
+in-process scheduler (`callosum.capability.scheduler.PeriodicHarnessSweep`)
+call into. Per-dimension TTL is one week; sweep cadence defaults to
+six hours (env-overridable via `CALLOSUM_HARNESS_SWEEP_INTERVAL_SECONDS`).
+
+### Weight identity (`src/callosum/capability/weight_identity.py`)
+
+Two cells routing to identical model weights through different
+transports (e.g. `model-a0a9` and
+`model-a0a1`) appear in the cell grid as
+unrelated rows. The weight-identity layer groups them: each cell's
+profile carries a `WeightIdentity{source, runtime, quantization,
+family}` so a downstream consumer can detect "same weights,
+divergent findings → the failure is in the transport, not the model."
+
+The layer is pluggable: `WeightIdentityProvider` is a protocol;
+concrete providers stack via `CompositeWeightIdentityProvider`. The
+default composite tries the local-llm CLI first, falls back to
+naming-pattern heuristics, then a null backstop. Adding a new source
+(manifest file, different CLI, HTTP endpoint) is one new class plus
+one item in `build_default_provider()`; no caller in `app.py`
+changes.
+
+### Canary baseline + failure registry (`src/callosum/canary/`)
+
+A configurable fraction (2-10%, default 10%) of inbound auto-mode
+requests are deliberately redirected to the remote-only path,
+regardless of what the router would have picked. The redirect
+creates a continuous A/B: comparing rolling failure rate of `auto`
+vs `canary_redirect` over real traffic produces a signal that
+detects local-side regressions without any synthetic probe.
+
+Quota-aware: scales down linearly when Codex weekly quota crosses
+80% used; fully suspends above 95%. Override via
+`CALLOSUM_CANARY_PERCENT` / `CALLOSUM_CANARY_FLOOR_PERCENT` etc.
+
+Every failed request also writes a structured row to the
+`failure_observations` table in the usage-log SQLite, with
+`effective_mode`, `symptom`, and `responsible_layer` attribution.
+The taxonomy is open-ended; we grow it from observed incidents
+rather than pre-declaring failure classes.
+
+`/status` exposes rolling per-mode failure rates over 1h / 6h / 24h
+windows. The dev loop (below) uses the same data to detect
+divergence.
+
+### Transform substrate (`src/callosum/transforms/`)
+
+Per-cell payload transforms live here. A `Transform` is a small
+protocol with `name`, `applies_to(ctx) → bool`, `transform_request`,
+and `transform_response`. The `TransformRegistry` walks registered
+transforms middleware-style after cell selection.
+
+Currently empty by default — shipping the substrate introduced zero
+behavior change. Per-transform error isolation (a buggy transform
+that raises is logged and skipped), name uniqueness enforcement at
+registration, and middleware-style ordering are all properties of
+the registry, tested.
+
+The package is available for per-model payload adapters.
+
+
 ## Verification path
 
 The canonical verification command is:

@@ -756,6 +756,42 @@ Cron example:
 
 For systemd users, prefer a `systemd.timer` over cron — easier to inspect via `systemctl list-timers` and to log with `journalctl`.
 
+## Self-observation and self-implementation (the dev loop)
+
+callosum observes its own routing behavior and, optionally, writes
+per-model adapter code for itself. The mechanism is gated by
+deterministic pre-filters and LLM judgment; it cannot push to a
+remote, merge to main, or run `git revert` autonomously.
+
+Components, briefly:
+
+- **Capability harness** — periodic in-process sweeper that probes
+  every local cell for tool-call behavior at small and at realistic
+  context sizes, writing structured findings (with adapter hints)
+  to `logs/capability_profiles/`. See `src/callosum/capability/`.
+- **Weight identity** — groups cells routing to the same underlying
+  weights so divergent findings are attributable to the transport,
+  not the model. Pluggable via `WeightIdentityProvider` protocol.
+- **Canary baseline** — 2–10% of `auto`-mode requests are redirected
+  to remote-only, giving a continuous A/B for regression detection.
+  Quota-aware. Surfaced on `/status`.
+- **Failure registry** — per-request structured failure observations
+  in the usage-log SQLite, with symptom and responsible-layer
+  attribution.
+- **Transform substrate** — `src/callosum/transforms/`, the package
+  where per-model payload adapters live. Empty by default; the dev
+  loop's only scope for writes.
+- **Dev loop** — `callosum-dev-loop` CLI. Reads the above as a
+  perception snapshot, runs a cheap pre-filter, only invokes the
+  agent when there's actionable signal. When invoked, the agent
+  writes (if anything) only inside the transform substrate; commits
+  land on `auto/dev-loop-*` branches for manual review.
+
+
+```bash
+bash deploy/systemd/install.sh --enable
+```
+
 ## Operational notes
 
 - **Background process interruption.** When running the service in the background with `&` (e.g., `uv run codex-proxy ... &`), the process is no longer in the terminal's foreground process group, so Ctrl+C won't reach it directly. Use `kill <pid>` or `killall codex-proxy` to stop background instances, or use a process manager (tmux, screen, systemd) for reliable lifecycle management. The service includes explicit signal handlers (SIGINT/SIGTERM) to ensure clean shutdown.
