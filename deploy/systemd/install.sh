@@ -88,17 +88,34 @@ if [[ ${uninstall} -eq 1 ]]; then
     exit 0
 fi
 
+# Resolve uv's absolute path. The systemd unit invokes uv directly
+# (no PATH lookup) to make the FIRST hop robust against PATH
+# misconfiguration. Without an absolute path, a unit running with
+# the systemd-truncated PATH (no ~/.local/bin/) would fail before
+# reaching the dispatcher's own PATH-handling logic.
+UV_PATH="${UV_PATH:-}"
+if [[ -z "${UV_PATH}" ]]; then
+    UV_PATH="$(command -v uv 2>/dev/null || true)"
+fi
+if [[ -z "${UV_PATH}" || ! -x "${UV_PATH}" ]]; then
+    echo "error: could not find 'uv' on PATH. Install uv (https://docs.astral.sh/uv/)" >&2
+    echo "       or set UV_PATH to the absolute path of the uv binary." >&2
+    exit 2
+fi
+UV_DIR="$(dirname "${UV_PATH}")"
+
 # Confirm the dispatcher binary actually exists. Better to fail
 # loudly here than have systemd surface a confusing error later.
-if ! (cd "${REPO_ROOT}" && uv run callosum-dev-loop --help >/dev/null 2>&1); then
-    echo "error: 'uv run callosum-dev-loop' did not run successfully from" >&2
-    echo "       ${REPO_ROOT}. Run 'uv sync' there first, or set REPO_ROOT" >&2
-    echo "       to the directory containing your callosum checkout." >&2
+if ! (cd "${REPO_ROOT}" && "${UV_PATH}" run callosum-dev-loop --help >/dev/null 2>&1); then
+    echo "error: '${UV_PATH} run callosum-dev-loop' did not run successfully" >&2
+    echo "       from ${REPO_ROOT}. Run '${UV_PATH} sync' there first, or set" >&2
+    echo "       REPO_ROOT to the directory containing your callosum checkout." >&2
     exit 2
 fi
 
 echo "installing callosum-dev-loop systemd units with:"
 echo "  REPO_ROOT     = ${REPO_ROOT}"
+echo "  UV_PATH       = ${UV_PATH}"
 echo "  PATH_PREPEND  = ${PATH_PREPEND}"
 echo "  AGENT_COMMAND = ${AGENT_COMMAND}"
 echo "  destination   = ${unit_dir}"
@@ -107,6 +124,8 @@ render() {
     local template="$1"
     sed \
         -e "s|@REPO_ROOT@|${REPO_ROOT}|g" \
+        -e "s|@UV_PATH@|${UV_PATH}|g" \
+        -e "s|@UV_DIR@|${UV_DIR}|g" \
         -e "s|@PATH_PREPEND@|${PATH_PREPEND}|g" \
         -e "s|@AGENT_COMMAND@|${AGENT_COMMAND}|g" \
         "${template}"

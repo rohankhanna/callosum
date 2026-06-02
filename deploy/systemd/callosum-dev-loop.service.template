@@ -38,21 +38,22 @@ WorkingDirectory=@REPO_ROOT@
 # `node` binary so the codex Node-shim can find its interpreter.
 Environment="CALLOSUM_DEV_LOOP_PATH_PREPEND=@PATH_PREPEND@"
 
-# Also set PATH directly so the dispatcher's own subprocess (uv,
-# git, pytest, etc.) can find them. Redundant with PATH_PREPEND for
-# the agent's needs but cleaner overall — without this, even
-# `uv run callosum-dev-loop run` might fail to locate uv itself in
-# the systemd-truncated PATH.
-Environment="PATH=@PATH_PREPEND@:/usr/local/bin:/usr/bin:/bin"
+# Also set PATH directly so the dispatcher's own subprocesses (git,
+# pytest, etc.) can find them. Includes the directory containing
+# `uv` (operator-specific — typically ~/.local/bin/). Redundant
+# with PATH_PREPEND for the agent's needs but cleaner overall.
+Environment="PATH=@UV_DIR@:@PATH_PREPEND@:/usr/local/bin:/usr/bin:/bin"
 
 # The agent command the dispatcher invokes. The {PROMPT_FILE}
 # placeholder is replaced at runtime with a tmp file path.
 Environment="CALLOSUM_DEV_LOOP_AGENT=@AGENT_COMMAND@"
 
-# The dispatcher should not run on a dirty working tree. Let it
-# fail clean rather than wrestle for control if you happen to be
-# editing the repo when the timer fires.
-ExecStart=/usr/bin/env uv run callosum-dev-loop run
+# Invoke uv by absolute path so the unit works even if PATH is
+# misconfigured — defense in depth on top of the PATH= line above.
+# The dispatcher itself relies on PATH for its inner subprocesses
+# (git, pytest), so getting PATH right is still important; this
+# ExecStart just ensures the FIRST hop succeeds.
+ExecStart=@UV_PATH@ run callosum-dev-loop run
 
 # Don't let one iteration hang forever. Codex with a meaningful
 # prompt typically completes in 1-3 minutes; one hour is a generous
