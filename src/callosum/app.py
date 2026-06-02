@@ -81,6 +81,33 @@ _extract_complexity_context: ContextVar[bool] = ContextVar("extract_complexity",
 # Context variable to store the extracted complexity class (1, 2, or 3) after response is processed.
 _complexity_class_context: ContextVar[int | None] = ContextVar("complexity_class", default=None)
 
+# Context variable carrying the per-request effective routing mode — the
+# mode this specific request was processed under. Set at the routing
+# entry point after the canary scheduler decides; read at log-write
+# time so the requests row records which mode bucket the row belongs
+# to. Distinct from the operator's `mode` (auto/remote-only/...) which
+# can change between requests; this captures the per-request choice.
+# Values: 'auto', 'canary_redirect', 'forced_remote', 'forced_local',
+# 'forced_offline', or None (no router; pass-through path).
+_effective_routing_mode_context: ContextVar[str | None] = ContextVar(
+    "effective_routing_mode", default=None
+)
+
+# Failure-observation registry holder. Set by create_app; consulted by
+# _log_attempt. Module-level rather than parameter-plumbed because
+# `_log_attempt` is called from many call sites and threading
+# `failure_registry` through every one would obscure the change.
+# Tests that need a non-default registry can monkey-patch this
+# attribute directly.
+_FAILURE_REGISTRY: Any = None
+
+# Canary scheduler holder. Same module-level pattern as the failure
+# registry: set in create_app, consulted in `_dispatch_route` (which
+# is module-level, not closed over create_app locals). The scheduler
+# is stateless aside from its RNG, so sharing one instance across
+# requests is fine. Tests can monkey-patch this attribute.
+_CANARY_SCHEDULER: Any = None
+
 # Complexity classification instruction appended to auto-learning requests.
 # The model outputs {{{1}}}, {{{2}}}, or {{{3}}} at the start of its response.
 _COMPLEXITY_CLASSIFIER_INSTRUCTION = (
@@ -220,11 +247,30 @@ def create_app(
     smoke_test_interval_seconds: int = 0,
     operator_state: Any = None,
 ) -> FastAPI:
+    from callosum.canary import CanaryScheduler, FailureRegistry
     from callosum.state import StateStore
 
     backends_list: list[Backend] = list(backends)
     pin_state = PinState()
     session_registry = sessions if sessions is not None else SessionRegistry()
+    # Canary scheduler decides per-request whether to redirect to the
+    # remote-only path as a baseline. Config is read from env at
+    # instantiation; one instance shared across requests (the scheduler
+    # is stateless aside from its RNG). The failure registry shares
+    # the usage_log SQLite DB so failure_observations can foreign-key
+    # to requests cleanly. Both are None when usage_log is None — the
+    # whole canary plumbing degrades to no-op without the request log.
+    canary_scheduler = CanaryScheduler()
+    failure_registry: FailureRegistry | None = (
+        FailureRegistry(usage_log.path) if usage_log is not None else None
+    )
+    # Publish to module-level holders so module-level functions
+    # (`_dispatch_route`, `_log_attempt`) can reach them without
+    # per-call-site plumbing. The previous holders are overwritten
+    # — tests that build multiple apps see the most-recent ones.
+    global _FAILURE_REGISTRY, _CANARY_SCHEDULER
+    _FAILURE_REGISTRY = failure_registry
+    _CANARY_SCHEDULER = canary_scheduler
 
     # Extract state_store from the first CodexAuthVaultBackend (for model release tracking)
     state_store: StateStore | None = None
@@ -622,11 +668,80 @@ def create_app(
             "quality_predictor": auto_cfg.routing.quality_predictor,
             "cell_selector": auto_cfg.routing.cell_selector,
         }
+        # Canary baseline block: current effective percent given live
+        # quota state, plus rolling per-mode failure rates over 1h /
+        # 6h / 24h windows. The dev loop polls this same data via SQL
+        # against the request log; surfacing it on /status lets an
+        # operator see at-a-glance whether auto-mode is diverging from
+        # the canary-redirect baseline. No auto-flipping logic yet —
+        # this is observational.
+        canary_block: dict[str, Any] = {
+            "config": {
+                "percent": canary_scheduler.config.percent,
+                "floor_percent": canary_scheduler.config.floor_percent,
+                "ceiling_percent": canary_scheduler.config.ceiling_percent,
+                "quota_warning_threshold": (
+                    canary_scheduler.config.quota_warning_threshold
+                ),
+                "quota_suspend_threshold": (
+                    canary_scheduler.config.quota_suspend_threshold
+                ),
+            },
+        }
+        # Compute effective percent for the most-constrained codex
+        # weekly window. Mirrors the same derivation as the routing-
+        # entry decision so the displayed effective percent matches
+        # what's actually being applied.
+        _q_pct: float | None = None
+        for _b in backends_list:
+            if getattr(_b, "kind", "") == "litellm_gateway":
+                continue
+            _q = getattr(_b, "_last_quota", None)
+            if _q is None:
+                continue
+            _w = getattr(_q, "weekly_used_percent", None)
+            if _w is None:
+                continue
+            if _q_pct is None or _w > _q_pct:
+                _q_pct = _w
+        canary_block["effective_percent"] = (
+            canary_scheduler.effective_percent(quota_used_percent=_q_pct)
+        )
+        canary_block["quota_used_percent"] = _q_pct
+        # Rolling per-mode stats. Skipped when usage_log is absent —
+        # /status still returns a partial canary block, just without
+        # the windows.
+        if usage_log is not None:
+            now_ts = time.time()
+            canary_block["windows"] = {}
+            for label, window_s in (
+                ("1h", 3600.0),
+                ("6h", 6 * 3600.0),
+                ("24h", 24 * 3600.0),
+            ):
+                stats = usage_log.per_mode_stats_since(
+                    since_ts=now_ts - window_s,
+                )
+                # Compute failure_rate per mode for at-a-glance reading.
+                # rate is None when total = 0 so consumers can
+                # distinguish "0% failure" from "no data."
+                annotated: dict[str, dict[str, Any]] = {}
+                for mode, counts in stats.items():
+                    total = counts["total"]
+                    failure_rate = (
+                        counts["failure"] / total if total > 0 else None
+                    )
+                    annotated[mode] = {
+                        **counts,
+                        "failure_rate": failure_rate,
+                    }
+                canary_block["windows"][label] = annotated
         return {
             "backends": entries,
             "pinned": pin_state.get(),
             "sessions": session_registry.snapshot(),
             "router": router_block,
+            "canary": canary_block,
         }
 
     if auth_service is not None:
@@ -1042,8 +1157,53 @@ async def _dispatch_internal(
         # Operator denylist + mode filters BEFORE routability — operator
         # decisions are absolute. denylist drops named cells; mode
         # constrains which backend kinds are eligible.
+        #
+        # Canary baseline: when operator is in auto, a configurable
+        # fraction of requests are diverted to remote-only for this
+        # request only (see callosum.canary). The fraction is bounded
+        # [2%, 10%] and scales down as Codex weekly quota approaches
+        # exhaustion. Canary requests skip local cells entirely, which
+        # is structurally what makes them a clean baseline: any local
+        # code change (transform, router tweak, harness adapter)
+        # cannot affect this request's outcome.
         if operator_state is not None:
             _mode = operator_state.get_mode()
+            # Map operator mode to effective_routing_mode for the log.
+            # Default mapping: 'auto' → 'auto', everything else → forced_*.
+            _effective_mode = (
+                _mode if _mode == "auto" else f"forced_{_mode.replace('-only', '')}"
+            )
+            # Quota for the canary scheduler. Walk codex_auth_vault
+            # backends, take the highest weekly_used_percent (the
+            # most-constrained). None means "unknown" — scheduler
+            # treats unknown as unconstrained.
+            _quota_pct: float | None = None
+            for _b in backends_list:
+                if getattr(_b, "kind", "") == "litellm_gateway":
+                    continue
+                _q = getattr(_b, "_last_quota", None)
+                if _q is None:
+                    continue
+                _w = getattr(_q, "weekly_used_percent", None)
+                if _w is None:
+                    continue
+                if _quota_pct is None or _w > _quota_pct:
+                    _quota_pct = _w
+            from callosum.canary import CanaryDecision
+            _sched = _CANARY_SCHEDULER
+            if _sched is not None:
+                _canary = _sched.decide(
+                    operator_mode=_mode, quota_used_percent=_quota_pct,
+                )
+            else:
+                _canary = CanaryDecision.NORMAL
+            if _canary == CanaryDecision.REDIRECT_REMOTE:
+                # Override _mode for THIS request only; operator state
+                # stays untouched. effective_mode reflects the
+                # redirect so the row lands in the canary bucket.
+                _mode = "remote-only"
+                _effective_mode = "canary_redirect"
+            _effective_routing_mode_context.set(_effective_mode)
             if _mode in ("offline", "local-only"):
                 cells_now = [
                     c for c in cells_now
@@ -2437,6 +2597,12 @@ def _log_attempt(
         tokens = _Tokens(None, None, None, None, None)
     status = error.status_code if error is not None else 200
     classification = error.classification if error is not None else "ok"
+    # Per-request effective mode for the canary baseline accounting.
+    # Pulled from the ContextVar set at the routing entry; None means
+    # the request never went through the router (no-router path /
+    # pass-through), which we record as such rather than fabricating
+    # an effective mode.
+    effective_routing_mode = _effective_routing_mode_context.get()
     entry = UsageLogEntry(
         ts_start=ts_start,
         ts_end=ts_end,
@@ -2471,10 +2637,54 @@ def _log_attempt(
         recommender_raw_output=recommender_raw_output,
         recommender_source=recommender_source,
                 prompt_embedding=prompt_embedding,
+        effective_routing_mode=effective_routing_mode,
     )
     request_id = usage_log.record(entry)
     # Store request_id in context for response handlers to access
     _request_id_context.set(request_id)
+    # Failure observation: if this row represents a failed request,
+    # write a structured record so the dev loop and operator
+    # dashboards can detect regressions empirically. Best-effort —
+    # registry write failures are swallowed inside `record()`.
+    _fr = _FAILURE_REGISTRY
+    if _fr is not None and (
+        (isinstance(status, int) and status >= 500) or error is not None
+    ):
+        from callosum.canary import FailureObservation
+        # Symptom: distinguish the well-known classes; everything
+        # else is `http_5xx` as a catch-all that an operator can
+        # refine later by annotating the row. `sym` is intentionally
+        # typed `str` rather than `BackendErrorClassification` because
+        # the symptom taxonomy is open-ended and grows over time —
+        # see failure_registry module docstring.
+        sym: str
+        if error is not None:
+            sym = error.classification or "http_5xx"
+        elif status == 408 or status == 504:
+            sym = "timeout"
+        else:
+            sym = "http_5xx"
+        # Responsible-layer attribution: simple kind-based heuristic.
+        # Local backend serving a 5xx is `callosum-local`; remote
+        # backend serving a 5xx is `upstream-remote` (Codex /
+        # OpenAI incident is the most likely cause, callosum bug is
+        # less likely). The dev loop filters out `upstream-remote`
+        # rows when comparing local-side regressions.
+        backend_kind = getattr(backend, "kind", "")
+        if backend_kind == "litellm_gateway":
+            resp_layer = "callosum-local"
+        elif backend_kind == "codex_auth_vault":
+            resp_layer = "upstream-remote"
+        else:
+            resp_layer = "unknown"
+        _fr.record(FailureObservation(
+            ts=ts_end,
+            effective_mode=effective_routing_mode or "pass-through",
+            symptom=sym,
+            responsible_layer=resp_layer,
+            request_id=request_id,
+            detail=(error.message[:300] if error and error.message else None),
+        ))
 
 
 class _Tokens:

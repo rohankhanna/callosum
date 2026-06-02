@@ -176,6 +176,22 @@ END""",
     # a "duplicate column" error is silently ignored.
     "ALTER TABLE requests ADD COLUMN prompt_embedding BLOB",
     "ALTER TABLE requests ADD COLUMN response_embedding BLOB",
+    # Per-request effective routing mode. Distinct from `routing_mode`
+    # which records recommender provenance (`pass-through` /
+    # `auto-learning` / `auto`); `effective_routing_mode` captures
+    # which routing-mode lens this individual request was processed
+    # under — most importantly whether it was redirected to the
+    # remote-only path as part of the canary baseline. Values:
+    # `auto` (normal auto-mode), `canary_redirect` (operator was in
+    # auto, this request was selected for the canary), `forced_remote`
+    # / `forced_local` / `forced_offline` (operator explicitly chose
+    # that mode), `pass-through` (recommender did not fire).
+    # The dev loop and operator dashboards compare success rates
+    # bucketed by this column to detect local-side regressions
+    # against the remote-only baseline.
+    "ALTER TABLE requests ADD COLUMN effective_routing_mode TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_requests_effective_routing_mode"
+    " ON requests(effective_routing_mode)",
 ]
 
 
@@ -215,6 +231,12 @@ class UsageLogEntry:
     requested_model: str | None = None
     requested_reasoning_effort: str | None = None
     routing_mode: str | None = None
+    # Per-request effective mode — see _MIGRATIONS column comment.
+    # Populated by the request handler from the canary scheduler's
+    # decision plus the operator state's mode. NULL on rows recorded
+    # before this field landed; treat NULL as "auto" for analytical
+    # purposes (most pre-existing traffic is auto-mode).
+    effective_routing_mode: str | None = None
     # Complexity classification from embedded instruction in auto-learning requests.
     # 1, 2, or 3; NULL = not classified (non-auto-learning or marker not found).
     prompt_complexity_class: int | None = None
@@ -373,6 +395,7 @@ class UsageLog:
             entry.recommender_raw_output,
             entry.recommender_source,
             entry.prompt_embedding,
+            entry.effective_routing_mode,
         )
         with self._lock:
             cursor = self._conn.execute(
@@ -395,12 +418,14 @@ class UsageLog:
                     requested_model, requested_reasoning_effort, routing_mode,
                     prompt_complexity_class, prompt_text, response_text,
                     recommender_classifier_cell, recommender_raw_output,
-                    recommender_source, prompt_embedding
+                    recommender_source, prompt_embedding,
+                    effective_routing_mode
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?
                 )
                 """,
                 row,
@@ -504,6 +529,40 @@ class UsageLog:
                 " WHERE id = ?",
                 (score, method, request_id),
             )
+
+    def per_mode_stats_since(
+        self, *, since_ts: float
+    ) -> dict[str, dict[str, int]]:
+        """Aggregate per-effective_routing_mode counts since `since_ts`.
+
+        Returns a dict keyed by mode → {total, success, failure},
+        where success = status < 500 and failure = status >= 500.
+        The result powers /status's rolling comparison between
+        auto-mode and canary-redirect rows so operators (and the
+        dev loop) can see at a glance whether local code is keeping
+        up with the remote baseline.
+
+        Modes encountered in the log but absent from this dict's
+        keys had zero rows in the window. Callers should treat a
+        missing key as zero, not as missing data."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT effective_routing_mode,"
+                "       COUNT(*) AS total,"
+                "       SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END) AS failures "
+                "FROM requests "
+                "WHERE ts_start >= ? AND effective_routing_mode IS NOT NULL "
+                "GROUP BY effective_routing_mode",
+                (since_ts,),
+            ).fetchall()
+        return {
+            row[0]: {
+                "total": int(row[1]),
+                "failure": int(row[2] or 0),
+                "success": int(row[1]) - int(row[2] or 0),
+            }
+            for row in rows
+        }
 
     def close(self) -> None:
         with self._lock:
