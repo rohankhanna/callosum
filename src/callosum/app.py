@@ -108,6 +108,13 @@ _FAILURE_REGISTRY: Any = None
 # requests is fine. Tests can monkey-patch this attribute.
 _CANARY_SCHEDULER: Any = None
 
+# Transform registry holder. Set by create_app to a TransformRegistry
+# instance. Consulted by `_dispatch_route` after cell selection to
+# apply per-cell request transforms. Default state is an empty
+# registry — apply_request on empty is a no-op — so this introduces
+# zero behavior change until concrete transforms are registered.
+_TRANSFORM_REGISTRY: Any = None
+
 # Complexity classification instruction appended to auto-learning requests.
 # The model outputs {{{1}}}, {{{2}}}, or {{{3}}} at the start of its response.
 _COMPLEXITY_CLASSIFIER_INSTRUCTION = (
@@ -264,13 +271,21 @@ def create_app(
     failure_registry: FailureRegistry | None = (
         FailureRegistry(usage_log.path) if usage_log is not None else None
     )
+    # Transform substrate: empty by default. Concrete transforms get
+    # registered here as they're authored (initially by humans
+    # responding to harness findings, later potentially by the
+    # callosum-in-the-loop dev agent). An empty registry is a no-op
+    # in the request path; this line introduces no behavior change.
+    from callosum.transforms import build_default_registry
+    transform_registry = build_default_registry()
     # Publish to module-level holders so module-level functions
     # (`_dispatch_route`, `_log_attempt`) can reach them without
     # per-call-site plumbing. The previous holders are overwritten
     # — tests that build multiple apps see the most-recent ones.
-    global _FAILURE_REGISTRY, _CANARY_SCHEDULER
+    global _FAILURE_REGISTRY, _CANARY_SCHEDULER, _TRANSFORM_REGISTRY
     _FAILURE_REGISTRY = failure_registry
     _CANARY_SCHEDULER = canary_scheduler
+    _TRANSFORM_REGISTRY = transform_registry
 
     # Extract state_store from the first CodexAuthVaultBackend (for model release tracking)
     state_store: StateStore | None = None
@@ -1242,6 +1257,47 @@ async def _dispatch_internal(
         chosen = decision.cell
         body["model"] = chosen.model
         body.setdefault("reasoning", {})["effort"] = chosen.reasoning_effort
+        # Per-cell request transforms. Empty registry → no-op. Each
+        # registered transform's `applies_to(ctx)` decides whether it
+        # fires for this cell. Errors inside a transform are isolated:
+        # the registry logs and skips. Response-side transforms are
+        # not yet wired — they'll come when a concrete transform
+        # needs them, at which point the streaming + non-streaming
+        # paths get the corresponding hook.
+        _tr = _TRANSFORM_REGISTRY
+        if _tr is not None and len(_tr) > 0:
+            from callosum.capability.profile import (
+                load_profile as _load_profile,
+            )
+            from callosum.capability.profile import (
+                profile_path as _profile_path,
+            )
+            from callosum.transforms import TransformContext
+            # Build the transform context once per request. Loading
+            # the profile from disk is cheap (small JSON), so we
+            # accept it on the hot path; if it ever shows up in
+            # profiling we can cache by cell name with mtime
+            # invalidation like the gating reader.
+            _profile = None
+            try:
+                _path = _profile_path(chosen.model)
+                if _path.exists():
+                    _profile = _load_profile(
+                        chosen.model, profile_dir=_path.parent
+                    )
+            except Exception:
+                logger.exception(
+                    "transform context: failed to load profile for %s",
+                    chosen.model,
+                )
+            _ctx = TransformContext(
+                cell=chosen,
+                weight_identity=(
+                    _profile.weight_identity if _profile is not None else None
+                ),
+                capability_profile=_profile,
+            )
+            body = _tr.apply_request(body, _ctx)
         # Provenance for the request log — predictor_id distinguishes
         # cold-start (uniform) from learned (knn / gbm / ...) decisions
         # so downstream analysis can weight them differently. The
