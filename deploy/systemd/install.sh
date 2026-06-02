@@ -28,7 +28,12 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 repo_root_default="$(cd "${here}/../.." && pwd -P)"
 
 REPO_ROOT="${REPO_ROOT:-${repo_root_default}}"
-AGENT_COMMAND="${AGENT_COMMAND:-codex exec --file {PROMPT_FILE}}"
+# Default agent is codex exec reading from stdin. The dispatcher
+# pipes the prompt file content to the agent's stdin, so codex exec
+# (which reads stdin when no positional prompt is given) just works.
+# Operators using agents that take a file argument should override
+# this with something like 'my-agent --file {PROMPT_FILE}'.
+AGENT_COMMAND="${AGENT_COMMAND:-codex exec}"
 
 # Auto-detect the mise node bin dir if PATH_PREPEND wasn't given.
 # This is the path that fixes the cron gotcha — the codex Node shim
