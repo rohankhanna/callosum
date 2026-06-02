@@ -28,6 +28,7 @@ from callosum.capability.profile import (
     load_profile,
     save_profile,
 )
+from callosum.capability.weight_identity import WeightIdentityProvider
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,7 @@ async def run_dimensions(
     call_responses: CallResponsesFn,
     ttl_s: float = DEFAULT_DIMENSION_TTL_S,
     now: float | None = None,
+    weight_identity_provider: WeightIdentityProvider | None = None,
 ) -> dict[str, DimensionFinding]:
     """Run every registered dimension probe against `cell`. Returns the
     set of findings that were actually produced this invocation (skips
@@ -59,11 +61,37 @@ async def run_dimensions(
     /admin/cell-call. The background scheduler passes a function that
     invokes the backend's responses() method directly. The runner
     doesn't care.
+
+    `weight_identity_provider`, when supplied, is consulted once per
+    sweep to stamp `profile.weight_identity`. This lets a downstream
+    consumer detect "two cells share weights but produced divergent
+    findings" — divergence is then information about the transport,
+    not the model. The provider is a protocol so callers can mix in
+    any concrete provider list. None disables stamping; any
+    previously-persisted identity remains in place.
     """
     now = now or time.time()
     profile = load_profile(cell)
     if backend_id is not None:
         profile.backend_id = backend_id
+    # Stamp identity BEFORE the dimension loop so even a partial-
+    # results profile (interrupted sweep) carries the cross-cell
+    # grouping signal. A provider that returns None or raises leaves
+    # any previously-persisted identity in place — we never clobber a
+    # known identity to None on a transient provider outage.
+    identity_changed = False
+    if weight_identity_provider is not None:
+        try:
+            new_identity = weight_identity_provider.identify(cell)
+        except Exception:
+            logger.exception(
+                "probe %s: weight-identity provider raised; "
+                "leaving existing identity in place", cell,
+            )
+            new_identity = None
+        if new_identity is not None and new_identity != profile.weight_identity:
+            profile.weight_identity = new_identity
+            identity_changed = True
 
     fresh_results: dict[str, DimensionFinding] = {}
     for name, probe_fn in DIMENSIONS:
@@ -105,4 +133,10 @@ async def run_dimensions(
             "probe %s/%s: %s — %s",
             cell, name, finding.status, finding.summary,
         )
+    # If every dimension was TTL-fresh, the dimension loop did no
+    # work and didn't persist. But a freshly-stamped identity still
+    # needs to land on disk; otherwise the next process restart would
+    # see the cached profile without the identity it had in-memory.
+    if identity_changed and not fresh_results:
+        save_profile(profile)
     return fresh_results

@@ -23,6 +23,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from callosum.capability.weight_identity import WeightIdentity
+
 # The repo root's logs directory. Profiles live alongside the prior-
 # art gate logs since both are durable operator state about what the
 # system has learned about models. Path resolution walks up from this
@@ -85,6 +87,13 @@ class CapabilityProfile:
     harness_version: int = 1
     last_updated: float = field(default_factory=lambda: time.time())
     findings: dict[str, DimensionFinding] = field(default_factory=dict)
+    # Stable identity for the underlying weights this cell serves.
+    # Populated by a `WeightIdentityProvider` at harness time. None
+    # for cells whose weight identity is unknowable from any
+    # configured provider — older profiles persisted before the
+    # weight-identity feature landed also load as None and remain
+    # routable until the next harness sweep stamps them.
+    weight_identity: WeightIdentity | None = None
 
     def upsert(self, finding: DimensionFinding) -> None:
         """Write a finding for one dimension, overwriting any previous
@@ -120,12 +129,33 @@ class CapabilityProfile:
                     )
                 except (TypeError, ValueError):
                     continue
+        # Weight identity is a nested dict; rehydrate or skip on
+        # malformed input. Older profiles persisted before this field
+        # existed will simply have no entry; new sweeps backfill it.
+        weight_identity: WeightIdentity | None = None
+        raw_wi = data.get("weight_identity")
+        if isinstance(raw_wi, dict):
+            try:
+                source = raw_wi.get("source")
+                runtime = raw_wi.get("runtime")
+                if isinstance(source, str) and isinstance(runtime, str):
+                    weight_identity = WeightIdentity(
+                        source=source,
+                        runtime=runtime,
+                        quantization=raw_wi.get("quantization")
+                        if isinstance(raw_wi.get("quantization"), str) else None,
+                        family=raw_wi.get("family")
+                        if isinstance(raw_wi.get("family"), str) else None,
+                    )
+            except (TypeError, ValueError):
+                weight_identity = None
         return cls(
             model_id=str(data.get("model_id", "")),
             backend_id=data.get("backend_id"),
             harness_version=int(data.get("harness_version", 1)),
             last_updated=float(data.get("last_updated", time.time())),
             findings=findings,
+            weight_identity=weight_identity,
         )
 
 

@@ -37,6 +37,7 @@ from callosum.capability.runner import (
     DEFAULT_DIMENSION_TTL_S,
     run_dimensions,
 )
+from callosum.capability.weight_identity import WeightIdentityProvider
 
 if TYPE_CHECKING:
     from callosum.operator_state import OperatorState
@@ -113,6 +114,7 @@ async def run_harness_sweep(
     *,
     backends: list[Any],
     ttl_s: float = DEFAULT_DIMENSION_TTL_S,
+    weight_identity_provider: WeightIdentityProvider | None = None,
 ) -> int:
     """Run the thorough harness across every local cell. Returns the
     total number of dimensions actually executed (those whose
@@ -122,6 +124,10 @@ async def run_harness_sweep(
 
     Harnesses run serially across cells to avoid GPU contention —
     two 31B-class harnesses in parallel would OOM most workstations.
+
+    `weight_identity_provider` is forwarded to `run_dimensions` so each
+    cell's profile gets stamped with stable identity for its underlying
+    weights. None disables stamping (older callers, tests).
     """
     todo = _cells_to_harness(backends)
     if not todo:
@@ -147,6 +153,7 @@ async def run_harness_sweep(
                 backend_id=backend_id,
                 call_responses=_call,
                 ttl_s=ttl_s,
+                weight_identity_provider=weight_identity_provider,
             )
             total_dimensions_run += len(fresh)
         except Exception:
@@ -169,6 +176,7 @@ def schedule_background_harness(
     backends: list[Any],
     operator_state: OperatorState | None = None,
     ttl_s: float = DEFAULT_DIMENSION_TTL_S,
+    weight_identity_provider: WeightIdentityProvider | None = None,
 ) -> asyncio.Task[int]:
     """Fire-and-forget version suitable for callosum's lifespan
     startup. Returns the asyncio Task so callers can join it during
@@ -181,6 +189,10 @@ def schedule_background_harness(
     symmetric with `schedule_background_sweep` so adding harness
     metadata into operator_state later is a one-line change.
 
+    `weight_identity_provider`, when supplied, is forwarded to
+    `run_harness_sweep` so profiles get stamped with the underlying-
+    weights identity (see capability/weight_identity.py).
+
     Exception swallowing inside `_runner` is the same pattern as
     the light-probe scheduler: probe sweeps must NEVER crash startup
     and must NEVER block request serving.
@@ -189,7 +201,11 @@ def schedule_background_harness(
 
     async def _runner() -> int:
         try:
-            return await run_harness_sweep(backends=backends, ttl_s=ttl_s)
+            return await run_harness_sweep(
+                backends=backends,
+                ttl_s=ttl_s,
+                weight_identity_provider=weight_identity_provider,
+            )
         except Exception:
             logger.exception("capability harness sweep: unexpected failure")
             return 0
@@ -230,6 +246,7 @@ class PeriodicHarnessSweep:
         interval_s: float | None = None,
         ttl_s: float = DEFAULT_DIMENSION_TTL_S,
         operator_state: OperatorState | None = None,
+        weight_identity_provider: WeightIdentityProvider | None = None,
     ) -> None:
         self._backends = backends
         self._interval_s = (
@@ -237,6 +254,7 @@ class PeriodicHarnessSweep:
         )
         self._ttl_s = ttl_s
         self._operator_state = operator_state
+        self._weight_identity_provider = weight_identity_provider
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
 
@@ -288,7 +306,9 @@ class PeriodicHarnessSweep:
                 return
             try:
                 await run_harness_sweep(
-                    backends=self._backends, ttl_s=self._ttl_s
+                    backends=self._backends,
+                    ttl_s=self._ttl_s,
+                    weight_identity_provider=self._weight_identity_provider,
                 )
             except Exception:
                 logger.exception("periodic harness sweep: tick failed")

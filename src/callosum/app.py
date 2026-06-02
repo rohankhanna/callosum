@@ -385,10 +385,20 @@ def create_app(
     # The hourly smoke tester (above) keeps each backend's
     # advertised_models fresh, so by the time this sweeper next ticks,
     # the cell grid already reflects newly-pulled models.
+    #
+    # The weight-identity provider here is a composite — code depends
+    # on the abstraction (WeightIdentityProvider protocol), not on any
+    # one source. The default composite tries the local-llm CLI first,
+    # falls back to naming-pattern heuristics, then a null backstop.
+    # Adding a new concrete source is one new class + one item in
+    # `build_default_provider()`; no caller in app.py changes.
     from callosum.capability.scheduler import PeriodicHarnessSweep
+    from callosum.capability.weight_identity import build_default_provider
+    weight_identity_provider = build_default_provider()
     periodic_harness = PeriodicHarnessSweep(
         backends=backends_list,
         operator_state=operator_state,
+        weight_identity_provider=weight_identity_provider,
     )
 
     @asynccontextmanager
@@ -483,6 +493,7 @@ def create_app(
             schedule_background_harness(
                 backends=backends_list,
                 operator_state=operator_state,
+                weight_identity_provider=weight_identity_provider,
             )
             periodic_harness.start()
         try:

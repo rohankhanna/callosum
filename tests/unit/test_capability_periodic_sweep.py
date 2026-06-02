@@ -42,7 +42,7 @@ async def test_periodic_sweeper_ticks_after_interval(monkeypatch) -> None:
     that the loop is alive."""
     calls: list[float] = []
 
-    async def fake_sweep(*, backends, ttl_s):
+    async def fake_sweep(*, backends, ttl_s, weight_identity_provider=None):
         calls.append(asyncio.get_event_loop().time())
         return 0
 
@@ -69,7 +69,7 @@ async def test_disabled_when_no_backends(monkeypatch) -> None:
     nothing."""
     called = False
 
-    async def fake_sweep(*, backends, ttl_s):
+    async def fake_sweep(*, backends, ttl_s, weight_identity_provider=None):
         nonlocal called
         called = True
         return 0
@@ -93,7 +93,7 @@ async def test_disabled_when_interval_is_zero(monkeypatch) -> None:
     startup pass. Verify zero interval honors that intent."""
     called = False
 
-    async def fake_sweep(*, backends, ttl_s):
+    async def fake_sweep(*, backends, ttl_s, weight_identity_provider=None):
         nonlocal called
         called = True
         return 0
@@ -116,7 +116,7 @@ async def test_stop_is_idempotent(monkeypatch) -> None:
     FastAPI's lifespan teardown can run finally-blocks in surprising
     orders during cancellation; the sweeper has to tolerate that."""
 
-    async def fake_sweep(*, backends, ttl_s):
+    async def fake_sweep(*, backends, ttl_s, weight_identity_provider=None):
         return 0
 
     monkeypatch.setattr(scheduler, "run_harness_sweep", fake_sweep)
@@ -137,7 +137,7 @@ async def test_sweep_exception_does_not_break_loop(monkeypatch) -> None:
     raising on the first call and counting subsequent successful calls."""
     call_count = 0
 
-    async def flaky_sweep(*, backends, ttl_s):
+    async def flaky_sweep(*, backends, ttl_s, weight_identity_provider=None):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
