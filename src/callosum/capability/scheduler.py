@@ -28,7 +28,9 @@ adapter authors and  reason about.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+import os
 from typing import TYPE_CHECKING, Any
 
 from callosum.capability.runner import (
@@ -41,6 +43,36 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+
+# How often the periodic harness sweeper wakes up to re-check the cell
+# grid. 6 hours by default: short enough that a model 
+# pulls in the middle of the night is probed within hours (not days),
+# long enough that re-checks don't spam logs when nothing has changed.
+# Steady-state work per sweep is near-zero because the runner's per-
+# dimension TTL (1 week) short-circuits cells whose every dimension is
+# still fresh.
+#
+# Override via env (CALLOSUM_HARNESS_SWEEP_INTERVAL_SECONDS) for testing
+# or when an operator wants more aggressive re-probing — for example
+# right after teaching the harness a new dimension that they want
+# back-filled across all cells faster than the default cadence.
+def _default_sweep_interval_s() -> float:
+    raw = os.environ.get("CALLOSUM_HARNESS_SWEEP_INTERVAL_SECONDS")
+    if raw is None:
+        return 6 * 3600.0
+    try:
+        v = float(raw)
+    except ValueError:
+        logger.warning(
+            "ignoring non-numeric CALLOSUM_HARNESS_SWEEP_INTERVAL_SECONDS=%r",
+            raw,
+        )
+        return 6 * 3600.0
+    # Floor to 60s so a typo doesn't pin a GPU forever. No upper cap —
+    # operators may genuinely want infrequent sweeps if cell churn is
+    # rare in their environment.
+    return max(60.0, v)
 
 
 # Mirror probe_scheduler._LOCAL_BACKEND_KINDS so both schedulers
@@ -163,3 +195,100 @@ def schedule_background_harness(
             return 0
 
     return asyncio.create_task(_runner())
+
+
+class PeriodicHarnessSweep:
+    """Run the capability harness on a recurring cadence.
+
+    Closes the "callosum in the loop on a regular basis" requirement:
+    fires the harness once on startup, then re-fires every
+    `interval_s` seconds for the lifetime of the proxy. Steady-state
+    cost is near zero because `run_dimensions` short-circuits cells
+    whose every dimension is still within the per-dimension TTL — so
+    the work that actually happens each tick is:
+
+      * cells advertised since the previous tick (new arrivals from
+         between sweeps), AND
+      * cells whose cached findings have aged past the TTL.
+
+    The existing `_PeriodicSmokeTester` in app.py refreshes each
+    backend's `advertised_models` hourly, so newly-pulled local models
+    appear in the cell grid without needing a callosum restart. This
+    sweeper then picks them up on its next tick.
+
+    Lifecycle mirrors `_PeriodicSmokeTester` and `_PeriodicCooldownProber`
+    in app.py: start() spawns the loop task; stop() signals it to exit
+    and awaits the task. The class is intentionally not an
+    asynccontextmanager so callers can drive start/stop from FastAPI's
+    lifespan generator without nesting.
+    """
+
+    def __init__(
+        self,
+        *,
+        backends: list[Any],
+        interval_s: float | None = None,
+        ttl_s: float = DEFAULT_DIMENSION_TTL_S,
+        operator_state: OperatorState | None = None,
+    ) -> None:
+        self._backends = backends
+        self._interval_s = (
+            interval_s if interval_s is not None else _default_sweep_interval_s()
+        )
+        self._ttl_s = ttl_s
+        self._operator_state = operator_state
+        self._stop = asyncio.Event()
+        self._task: asyncio.Task[None] | None = None
+
+    @property
+    def enabled(self) -> bool:
+        """Disabled when no backends OR a non-positive interval was set
+        (operator can set CALLOSUM_HARNESS_SWEEP_INTERVAL_SECONDS=0 to
+        turn the periodic sweeper off entirely while keeping the
+        one-shot startup sweep). Floor-of-60 in _default_sweep_interval_s
+        only applies to env-provided values; programmatic callers
+        passing 0 explicitly are honored."""
+        return self._interval_s > 0 and bool(self._backends)
+
+    def start(self) -> None:
+        if not self.enabled:
+            return
+        if self._task is not None:
+            return
+        self._task = asyncio.create_task(
+            self._run(), name="periodic-harness-sweep"
+        )
+
+    async def stop(self) -> None:
+        self._stop.set()
+        if self._task is not None:
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
+            self._task = None
+
+    async def _run(self) -> None:
+        """Sleep-then-sweep loop. Sleep first because the one-shot
+        startup task fired by `schedule_background_harness` already
+        ran the initial pass — re-running it back-to-back here would
+        just discover everything still TTL-fresh."""
+        logger.info(
+            "periodic harness sweep: interval=%.0fs (one-shot startup pass "
+            "already kicked off; next periodic tick in %.0fs)",
+            self._interval_s, self._interval_s,
+        )
+        while not self._stop.is_set():
+            try:
+                await asyncio.wait_for(
+                    self._stop.wait(), timeout=self._interval_s
+                )
+            except TimeoutError:
+                pass
+            else:
+                # stop() called during the sleep — exit cleanly.
+                return
+            try:
+                await run_harness_sweep(
+                    backends=self._backends, ttl_s=self._ttl_s
+                )
+            except Exception:
+                logger.exception("periodic harness sweep: tick failed")

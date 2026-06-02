@@ -378,6 +378,18 @@ def create_app(
         backends=backends_list,
         interval_s=auto_cfg.cooldown_probe_interval_seconds,
     )
+    # Periodic capability-harness sweeper. Re-runs the multi-dimensional
+    # harness on a slow cadence (default 6h, env-overridable) so models
+    #  pulls between sweeps land in routable findings
+    # within hours rather than only after the next callosum restart.
+    # The hourly smoke tester (above) keeps each backend's
+    # advertised_models fresh, so by the time this sweeper next ticks,
+    # the cell grid already reflects newly-pulled models.
+    from callosum.capability.scheduler import PeriodicHarnessSweep
+    periodic_harness = PeriodicHarnessSweep(
+        backends=backends_list,
+        operator_state=operator_state,
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -466,13 +478,17 @@ def create_app(
             from callosum.capability.scheduler import (
                 schedule_background_harness,
             )
+            # One-shot pass on startup for the initial fill, then the
+            # periodic sweeper takes over for the lifetime of the proxy.
             schedule_background_harness(
                 backends=backends_list,
                 operator_state=operator_state,
             )
+            periodic_harness.start()
         try:
             yield
         finally:
+            await periodic_harness.stop()
             await cooldown_prober.stop()
             await smoke_tester.stop()
             for backend in backends_list:
