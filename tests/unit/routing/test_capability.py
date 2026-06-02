@@ -90,3 +90,86 @@ def test_filter_returns_empty_only_on_modality_or_tool_mismatch() -> None:
         _features(tokens=1_000_000, modalities=("text", "image")),
     )
     assert out == []
+
+
+# ---------- at-scale gate (consumes capability harness findings) -----------
+
+
+def _at_scale_features(*, chars: int, needs_tools: bool = True) -> PromptFeatures:
+    """Build a PromptFeatures with `chars` characters of body text — the
+    at-scale gate keys on raw `len(features.text)` because the chars/3
+    token estimate is too noisy at this granularity."""
+    return PromptFeatures(
+        text="x" * chars,
+        tokens=chars // 3,
+        modalities=frozenset({"text"}),
+        needs_tools=needs_tools,
+    )
+
+
+def test_at_scale_gate_excludes_failing_cell_above_threshold() -> None:
+    """Cell with a failing tool_call_at_scale finding is dropped when
+    the request exceeds the at-scale character threshold AND tools are
+    needed. This is the routing-side consumer of the harness — the
+    finding produced on disk causes a real change in cell selection."""
+    failing = Cell(model="fails-at-scale", reasoning_effort="default")
+    healthy = Cell(model="works-at-scale", reasoning_effort="default")
+    caps = {failing: _caps(tools=True), healthy: _caps(tools=True)}
+    f = CapabilityFilter(
+        capabilities_of=caps.__getitem__,
+        at_scale_fails_for=lambda m: m == "fails-at-scale",
+        at_scale_chars_threshold=10_000,
+    )
+    out = f.filter(
+        [failing, healthy], _at_scale_features(chars=20_000)
+    )
+    assert healthy in out
+    assert failing not in out
+
+
+def test_at_scale_gate_keeps_failing_cell_below_threshold() -> None:
+    """Small-context requests stay routable on the failing cell — the
+    harness finding describes context-size-dependent breakage, not a
+    blanket loss of tool support. Preserves the cell's small-context
+    utility instead of nuking it from tool routing entirely."""
+    failing = Cell(model="fails-at-scale", reasoning_effort="default")
+    caps = {failing: _caps(tools=True)}
+    f = CapabilityFilter(
+        capabilities_of=caps.__getitem__,
+        at_scale_fails_for=lambda m: m == "fails-at-scale",
+        at_scale_chars_threshold=10_000,
+    )
+    out = f.filter([failing], _at_scale_features(chars=2_000))
+    assert failing in out
+
+
+def test_at_scale_gate_inert_when_tools_not_needed() -> None:
+    """A request that doesn't need tools can land on the failing cell
+    regardless of size — the gate is specifically about tool-call
+    integrity at scale, not about general output quality."""
+    failing = Cell(model="fails-at-scale", reasoning_effort="default")
+    caps = {failing: _caps(tools=False)}
+    f = CapabilityFilter(
+        capabilities_of=caps.__getitem__,
+        at_scale_fails_for=lambda m: m == "fails-at-scale",
+        at_scale_chars_threshold=10_000,
+    )
+    out = f.filter(
+        [failing], _at_scale_features(chars=100_000, needs_tools=False)
+    )
+    assert failing in out
+
+
+def test_at_scale_gate_disabled_when_callable_is_none() -> None:
+    """Passing None for at_scale_fails_for restores pre-harness
+    behavior — the filter ignores at-scale findings entirely. Lets
+    callers opt out at construction without changing the threshold."""
+    failing = Cell(model="fails-at-scale", reasoning_effort="default")
+    caps = {failing: _caps(tools=True)}
+    f = CapabilityFilter(
+        capabilities_of=caps.__getitem__,
+        at_scale_fails_for=None,
+        at_scale_chars_threshold=10_000,
+    )
+    out = f.filter([failing], _at_scale_features(chars=100_000))
+    assert failing in out
