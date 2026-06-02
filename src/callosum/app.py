@@ -457,6 +457,19 @@ def create_app(
                 backends=backends_list,
                 operator_state=operator_state,
             )
+        # Thorough capability harness — runs alongside (and after) the
+        # light probe. Produces multi-dimensional findings + adapter
+        # hints on disk under logs/capability_profiles/, consumed by
+        # adapter authors and . Self-skips cells
+        # whose every dimension is still within its TTL window.
+        if backends_list:
+            from callosum.capability.scheduler import (
+                schedule_background_harness,
+            )
+            schedule_background_harness(
+                backends=backends_list,
+                operator_state=operator_state,
+            )
         try:
             yield
         finally:
