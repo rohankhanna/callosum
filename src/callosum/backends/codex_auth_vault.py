@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 import httpx
 
-from callosum.auth_vault import AuthVault
+from callosum.auth_vault import AuthVault, _default_headers
 from callosum.backend import BackendKind, CallHandle, HealthStatus, UsageSnapshot
 from callosum.backends._http import DEFAULT_COOLDOWN_S, error_from_response
 from callosum.codex_quota import parse_codex_headers
@@ -118,7 +118,11 @@ class CodexAuthVaultBackend:
             self._client = client
             self._owns_client = False
         else:
-            self._client = httpx.AsyncClient(transport=transport, timeout=timeout_s)
+            self._client = httpx.AsyncClient(
+                transport=transport,
+                timeout=timeout_s,
+                headers=_default_headers(),
+            )
             self._owns_client = True
         self._state_store = state_store
         loaded = state_store.load_usage(id) if state_store is not None else None

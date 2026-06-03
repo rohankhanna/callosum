@@ -23,6 +23,49 @@ REFRESH_CLIENT_ID_ENV = "CODEX_REFRESH_CLIENT_ID_OVERRIDE"
 REFRESH_SAFETY_WINDOW_S = 5 * 60
 
 
+def _user_agent() -> str:
+    """User-Agent for callosum's outbound calls to OpenAI endpoints.
+
+    Identifies callosum honestly (name + version) plus the codex flow
+    context this request is part of (codex client version, python
+    runtime). NOT impersonating codex CLI — the leading token is
+    `callosum/<ver>` so the request's origin is clearly named.
+
+    Why this matters: httpx's default UA is `python-httpx/X.Y.Z`,
+    which is a strong "automation / scripting" signal to upstream
+    anti-abuse systems. Replacing it with a UA that accurately
+    identifies the application reduces that signal without
+    pretending to be something the request isn't.
+
+    The codex client version comes from the codex CLI install (via
+    `_resolve_codex_client_version` in codex_auth_vault) — kept
+    here as a lazy import to avoid the circular dep. Falls back to
+    a hardcoded version if the helper isn't reachable.
+    """
+    from callosum import __version__ as _callosum_version
+
+    try:
+        from callosum.backends.codex_auth_vault import (
+            _resolve_codex_client_version,
+        )
+        codex_ver = _resolve_codex_client_version()
+    except ImportError:
+        codex_ver = "unknown"
+    import platform
+    py_ver = platform.python_version()
+    return (
+        f"callosum/{_callosum_version} codex-flow "
+        f"(codex_cli_rs/{codex_ver}; python/{py_ver})"
+    )
+
+
+def _default_headers() -> dict[str, str]:
+    """Default headers for httpx clients in the codex auth flow.
+    Currently just sets User-Agent; centralized here so both
+    AuthVault and CodexAuthVaultBackend stay in sync."""
+    return {"User-Agent": _user_agent()}
+
+
 @dataclass(frozen=True, slots=True)
 class AuthTokens:
     access_token: str
@@ -55,7 +98,11 @@ class AuthVault:
             self._client = client
             self._owns_client = False
         else:
-            self._client = httpx.AsyncClient(transport=transport, timeout=timeout_s)
+            self._client = httpx.AsyncClient(
+                transport=transport,
+                timeout=timeout_s,
+                headers=_default_headers(),
+            )
             self._owns_client = True
         self._refresh_url = refresh_url or os.environ.get(REFRESH_URL_ENV) or DEFAULT_REFRESH_URL
         self._client_id = client_id or os.environ.get(REFRESH_CLIENT_ID_ENV) or DEFAULT_CLIENT_ID
