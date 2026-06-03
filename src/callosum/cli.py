@@ -279,6 +279,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_probe.set_defaults(func=cmd_probe_tools)
 
+    # Auth-rotate wizard. Wired here so the help surface lists it
+    # alongside the other operator commands.
+    from callosum.auth_rotate import add_subparser as _add_auth_rotate
+    _add_auth_rotate(sub)
+
     return parser
 
 
