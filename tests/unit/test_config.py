@@ -117,11 +117,17 @@ def test_backend_config_requires_vault_path() -> None:
         BackendConfig(id="p", models=["model-a0d0"])  # type: ignore[call-arg]
 
 
-def test_build_backend_errors_without_models(tmp_path: Path) -> None:
+def test_build_backend_accepts_missing_models(tmp_path: Path) -> None:
+    """`models` in TOML is an OPTIONAL cold-start hint. Both backend
+    kinds discover their catalog dynamically via
+    refresh_advertised_models. Hard-coding a static list in config
+    defeated dynamic routing and forced operator churn each time
+    OpenAI shipped a model. build_backend used to reject empty
+    `models`; this test pins the relaxation."""
     vault = _write_vault(tmp_path)
     bc = BackendConfig(id="p", vault_path=vault)
-    with pytest.raises(ValueError, match="models"):
-        build_backend(bc)
+    backend = build_backend(bc)
+    assert backend.advertised_models == frozenset()
 
 
 async def test_build_backend_constructs_codex_auth_vault(tmp_path: Path) -> None:

@@ -548,17 +548,25 @@ async def test_responses_stream_passes_upstream_sse_through_byte_for_byte(tmp_pa
         await backend.aclose()
 
 
-async def test_construction_rejects_empty_advertised_models(tmp_path: Path) -> None:
+async def test_construction_accepts_empty_advertised_models(tmp_path: Path) -> None:
+    """Empty advertised_models is LEGAL — the backend discovers its
+    catalog dynamically via refresh_advertised_models. Hard-coding a
+    static list in config defeated dynamic routing and forced operator
+    churn each time OpenAI shipped a model. The constructor used to
+    reject empty; this test pins the relaxation. Until discovery
+    succeeds the backend's advertised set is empty and the router
+    skips it — correct behavior for a backend whose served models
+    aren't yet known."""
     auth_path = tmp_path / "auth.json"
     _write_auth_json(auth_path)
     vault = _make_vault(auth_path)
     try:
-        with pytest.raises(ValueError, match="advertised_models"):
-            CodexAuthVaultBackend(
-                id="vault-a",
-                vault=vault,
-                advertised_models=frozenset(),
-            )
+        backend = CodexAuthVaultBackend(
+            id="vault-a",
+            vault=vault,
+            advertised_models=frozenset(),
+        )
+        assert backend.advertised_models == frozenset()
     finally:
         await vault.aclose()
 

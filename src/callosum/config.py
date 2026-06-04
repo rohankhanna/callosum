@@ -195,8 +195,14 @@ def build_backend(
     *,
     state_store: StateStore | None = None,
 ) -> Backend:
-    if not cfg.models:
-        raise ValueError(f"backend {cfg.id!r}: models is required")
+    # `models` is an OPTIONAL cold-start hint, not a contract. Both
+    # backend kinds discover their model catalog dynamically via
+    # `refresh_advertised_models` at startup. Operator-provided lists
+    # in config are useful only as a fallback when discovery hasn't
+    # run yet or has failed — and even then, the smoke test will report
+    # "no advertised_models" cleanly rather than crash. Hard-coding
+    # current model names into config would defeat dynamic routing
+    # and create maintenance churn each time OpenAI ships a new model.
     if cfg.type == "credential_proxy":
         from callosum.backends.credential_proxy import CredentialProxyBackend
 

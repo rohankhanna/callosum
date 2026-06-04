@@ -1,3 +1,18 @@
+"""REDUNDANT-CODE: see docs/architecture/redundant_code.md
+
+This backend is no longer exercised by the default production config —
+the active path is `callosum.backends.credential_proxy`, which routes
+OAuth refresh through the credential proxy service. This module is kept
+deliberately as a fallback the operator can activate without code
+changes if credential proxy is unreachable: flip a backend's `type` in
+config.toml from `credential_proxy` to `codex_auth_vault`, point
+`vault_path` at a fresh auth.json, restart.
+
+The tests in `tests/unit/test_codex_auth_vault_backend.py` continue
+to run on every CI sweep so the fallback stays working. Behavior
+changes that affect this backend require updating those tests, same
+as for any active backend.
+"""
 from __future__ import annotations
 
 import json
@@ -88,7 +103,7 @@ class CodexAuthVaultBackend:
         *,
         id: str,
         vault: AuthVault,
-        advertised_models: frozenset[str],
+        advertised_models: frozenset[str] = frozenset(),
         base_url: str = DEFAULT_BASE_URL,
         client: httpx.AsyncClient | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
@@ -96,8 +111,10 @@ class CodexAuthVaultBackend:
         state_store: StateStore | None = None,
         models_refresh_s: float = DEFAULT_MODELS_REFRESH_S,
     ) -> None:
-        if not advertised_models:
-            raise ValueError(f"backend {id!r}: advertised_models cannot be empty")
+        # `advertised_models` is OPTIONAL — see CredentialProxyBackend
+        # for the rationale. Dynamic discovery via
+        # refresh_advertised_models is the source of truth; the static
+        # set is just a cold-start fallback. Empty is legal.
         self.id = id
         # `_static_advertised_models` is the operator's TOML override / cold-
         # start fallback. `_dynamic_advertised_models` is what we last fetched
