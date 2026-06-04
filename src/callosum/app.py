@@ -320,7 +320,14 @@ def create_app(
         # populated fields (fewer "Unknown" defaults).
         merged_metadata: dict[str, ModelMetadata] = {}
         for b in backends_list:
-            if b.kind not in ("codex_auth_vault", "litellm_gateway"):
+            # `credential_proxy` now also surfaces model_metadata (via
+            # refresh_advertised_models → /codex/models through credential proxy).
+            # Excluding it from the cell-grid builder produced an empty
+            # grid when both production backends were credential_proxy —
+            # router rejected every request with "no cell can serve."
+            if b.kind not in (
+                "codex_auth_vault", "credential_proxy", "litellm_gateway",
+            ):
                 continue
             backend_meta = getattr(b, "model_metadata", None) or {}
             for slug, m in backend_meta.items():
@@ -357,7 +364,14 @@ def create_app(
         # enumeration so the router still operates.
         pool: set[str] = set()
         for b in backends_list:
-            if b.kind != "codex_auth_vault":
+            # Fallback pool collects advertised_models from every backend
+            # whose model_metadata wasn't populated above (cold start, or
+            # discovery RPC failed). Both ChatGPT-Codex paths participate:
+            # codex_auth_vault (direct OAuth) and credential_proxy
+            # (credential proxy-mediated). litellm_gateway is excluded here
+            # because the metadata path above already handles its local
+            # models.
+            if b.kind not in ("codex_auth_vault", "credential_proxy"):
                 continue
             pool.update(b.advertised_models)
         models = live_completion_models(frozenset(pool))
