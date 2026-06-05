@@ -244,6 +244,21 @@ def cmd_retention_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_self_assessment_history(args: argparse.Namespace) -> int:
+    _print(_request("GET", "/admin/self-assessment/history"))
+    return 0
+
+
+def cmd_self_assessment_preview(args: argparse.Namespace) -> int:
+    _print(_request("POST", "/admin/self-assessment/preview", {}, timeout=60.0))
+    return 0
+
+
+def cmd_self_assessment_run(args: argparse.Namespace) -> int:
+    _print(_request("POST", "/admin/self-assessment/run", {}, timeout=60.0))
+    return 0
+
+
 def cmd_probe_tools(args: argparse.Namespace) -> int:
     """Run the tool-call verification probe and print per-cell results.
 
@@ -393,6 +408,30 @@ def build_parser() -> argparse.ArgumentParser:
              "under the archive dir, then delete them from the live "
              "table. Intended to be invoked weekly from cron.",
     ).set_defaults(func=cmd_retention_run)
+
+    p_sa = sub.add_parser(
+        "self-assessment",
+        help="Tier C automation agent self-assessment: weekly metrics over "
+             "the autonomy audit log + usage log; auto-demotes on "
+             "bad signals, suggests promotion on clean.",
+    )
+    ps = p_sa.add_subparsers(dest="subcommand", required=True)
+    ps.add_parser(
+        "history",
+        help="Past assessments (most recent first).",
+    ).set_defaults(func=cmd_self_assessment_history)
+    ps.add_parser(
+        "preview",
+        help="Dry-run: compute metrics + decision without persisting "
+             "or firing demote. Safe to run idly to inspect what the "
+             "next real cycle would do.",
+    ).set_defaults(func=cmd_self_assessment_preview)
+    ps.add_parser(
+        "run",
+        help="Execute one self-assessment cycle. Persists a row, may "
+             "auto-demote, writes a feedback artifact. Intended to be "
+             "invoked weekly from cron.",
+    ).set_defaults(func=cmd_self_assessment_run)
 
     p_probe = sub.add_parser(
         "probe-tools",

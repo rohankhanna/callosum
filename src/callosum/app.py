@@ -255,6 +255,7 @@ def create_app(
     operator_state: Any = None,
     autonomy_store: Any = None,
     retention_runner: Any = None,
+    self_assessment_runner: Any = None,
 ) -> FastAPI:
     from callosum.canary import CanaryScheduler, FailureRegistry
     from callosum.state import StateStore
@@ -618,6 +619,7 @@ def create_app(
             backends=backends_list,
             autonomy_store=autonomy_store,
             retention_runner=retention_runner,
+            self_assessment_runner=self_assessment_runner,
         )
 
     # Bearer middleware for /v1/* and /diagnose/* — only enforced when an

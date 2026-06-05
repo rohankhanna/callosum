@@ -36,6 +36,7 @@ from fastapi import APIRouter, FastAPI, HTTPException, Request, status
 from callosum.autonomy import AutonomyLevel, AutonomyStore, PromotionNotReady
 from callosum.operator_state import VALID_OPERATOR_MODES, OperatorState
 from callosum.retention import RetentionRunner, result_to_dict
+from callosum.self_assessment import SelfAssessmentRunner
 
 
 def _admin_token_path() -> Path:
@@ -68,6 +69,7 @@ def install_admin_routes(
     backends: list[Any] | None = None,
     autonomy_store: AutonomyStore | None = None,
     retention_runner: RetentionRunner | None = None,
+    self_assessment_runner: SelfAssessmentRunner | None = None,
 ) -> None:
     """Mount the /admin/* endpoints on `app`, gated by the admin token.
 
@@ -517,4 +519,71 @@ def install_admin_routes(
         _check(request)
         return [result_to_dict(r) for r in _require_retention().run()]
 
+    # ---------- self-assessment (Tier C) ---------------------------------
+
+    def _require_self_assessment() -> SelfAssessmentRunner:
+        if self_assessment_runner is None:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "self-assessment runner not configured",
+            )
+        return self_assessment_runner
+
+    @router.get("/self-assessment/history")
+    async def admin_self_assessment_history(
+        request: Request,
+    ) -> list[dict[str, Any]]:
+        _check(request)
+        store = _require_autonomy()
+        return [
+            {
+                "id": r.id,
+                "ts": r.ts,
+                "window_start_ts": r.window_start_ts,
+                "window_end_ts": r.window_end_ts,
+                "metrics": r.metrics,
+                "decision": r.decision,
+                "notes": r.notes,
+            }
+            for r in store.list_self_assessments(limit=200)
+        ]
+
+    @router.post("/self-assessment/preview")
+    async def admin_self_assessment_preview(
+        request: Request,
+    ) -> dict[str, Any]:
+        """Dry-run: compute metrics + decision without persisting or
+        firing demote. Useful for the operator to inspect what the
+        next real run would do."""
+        _check(request)
+        runner = _require_self_assessment()
+        metrics, decision = runner.run(dry_run=True)
+        return {
+            "metrics": _dataclass_to_dict(metrics),
+            "decision": _dataclass_to_dict(decision),
+        }
+
+    @router.post("/self-assessment/run")
+    async def admin_self_assessment_run(request: Request) -> dict[str, Any]:
+        """Execute one self-assessment cycle: persist row, demote on
+        bad signal, emit feedback artifact. Returns the metrics +
+        decision so the cron wrapper logs them."""
+        _check(request)
+        runner = _require_self_assessment()
+        metrics, decision = runner.run(dry_run=False)
+        return {
+            "metrics": _dataclass_to_dict(metrics),
+            "decision": _dataclass_to_dict(decision),
+        }
+
     app.include_router(router)
+
+
+def _dataclass_to_dict(obj: Any) -> dict[str, Any]:
+    """Lightweight dataclass-to-dict that's safe for JSON serialization
+    of the AssessmentMetrics / AssessmentDecision types (which contain
+    only JSON-friendly primitives)."""
+    from dataclasses import asdict, is_dataclass
+    if is_dataclass(obj):
+        return asdict(obj)
+    return dict(obj)

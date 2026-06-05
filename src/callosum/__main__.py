@@ -85,6 +85,21 @@ def main() -> None:
         ),
         archive_dir=DEFAULT_ARCHIVE_DIR,
     )
+    # Self-assessment runner (Tier C) — weekly metacognition. Reuses
+    # the same autonomy store + usage log so its reads are coherent
+    # with what the operator sees in /admin/autonomy/audit. Feedback
+    # root is the project repo so artifacts land under feedback/
+    # decisions/ where future agents can read them.
+    from callosum.self_assessment import SelfAssessmentRunner
+    self_assessment_runner = SelfAssessmentRunner(
+        autonomy_store=autonomy_store,
+        usage_log_path=cfg.usage_log.path,
+        feedback_root=(
+            repo_root_for_retention
+            if repo_root_for_retention is not None
+            else None
+        ),
+    )
     backends = build_backends(cfg)
     # Auto-register a LiteLLM gateway backend when the operator points us at
     # one. Gateway is provided by `local LLM gateway` and exposes local models
@@ -159,6 +174,7 @@ def main() -> None:
             operator_state=operator_state,
             autonomy_store=autonomy_store,
             retention_runner=retention_runner,
+            self_assessment_runner=self_assessment_runner,
         ),
         host=host,
         port=port,
