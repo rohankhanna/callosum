@@ -185,6 +185,42 @@ def cmd_mode_set(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_autonomy_show(args: argparse.Namespace) -> int:
+    _print(_request("GET", "/admin/autonomy"))
+    return 0
+
+
+def cmd_autonomy_promote(args: argparse.Namespace) -> int:
+    _print(_request("POST", "/admin/autonomy/promote", {}))
+    return 0
+
+
+def cmd_autonomy_demote(args: argparse.Namespace) -> int:
+    body: dict[str, Any] = {}
+    if args.reason:
+        body["reason"] = args.reason
+    _print(_request("POST", "/admin/autonomy/demote", body))
+    return 0
+
+
+def cmd_autonomy_set(args: argparse.Namespace) -> int:
+    body: dict[str, Any] = {"level": int(args.level)}
+    if args.reason:
+        body["reason"] = args.reason
+    _print(_request("POST", "/admin/autonomy/set", body))
+    return 0
+
+
+def cmd_autonomy_history(args: argparse.Namespace) -> int:
+    _print(_request("GET", "/admin/autonomy/history"))
+    return 0
+
+
+def cmd_autonomy_audit(args: argparse.Namespace) -> int:
+    _print(_request("GET", "/admin/autonomy/audit"))
+    return 0
+
+
 def cmd_probe_tools(args: argparse.Namespace) -> int:
     """Run the tool-call verification probe and print per-cell results.
 
@@ -266,6 +302,48 @@ def build_parser() -> argparse.ArgumentParser:
     sm = pm.add_parser("set", help="Set the mode.")
     sm.add_argument("mode", choices=["auto", "offline", "local-only", "remote-only"])
     sm.set_defaults(func=cmd_mode_set)
+
+    p_auto = sub.add_parser(
+        "autonomy",
+        help="Earned-autonomy ladder for the dev-loop pipeline (L1..L5).",
+    )
+    pa = p_auto.add_subparsers(dest="subcommand", required=True)
+    pa.add_parser(
+        "show",
+        help="Current level, streak, and promotion eligibility.",
+    ).set_defaults(func=cmd_autonomy_show)
+    pa.add_parser(
+        "promote",
+        help="Advance one rung if clean_streak meets threshold; "
+             "errors with the missing condition otherwise.",
+    ).set_defaults(func=cmd_autonomy_promote)
+    ad = pa.add_parser(
+        "demote",
+        help="Drop one rung immediately. Floor-clamped at L1.",
+    )
+    ad.add_argument("--reason", help="Free-form note recorded in history.")
+    ad.set_defaults(func=cmd_autonomy_demote)
+    aset = pa.add_parser(
+        "set",
+        help="Force-set the level (e.g. for emergency reset to L1=1). "
+             "Resets streak and ops counters at the new level.",
+    )
+    aset.add_argument(
+        "level", type=int, choices=[1, 2, 3, 4, 5],
+        help="1=manual, 2=auto-invoke, 3=auto-merge+soak, "
+             "4=sunset, 5=architecture",
+    )
+    aset.add_argument("--reason", help="Free-form note recorded in history.")
+    aset.set_defaults(func=cmd_autonomy_set)
+    pa.add_parser(
+        "history",
+        help="Recent level transitions (most recent first).",
+    ).set_defaults(func=cmd_autonomy_history)
+    pa.add_parser(
+        "audit",
+        help="Recent dev-loop actions: invoke / merge / soak outcomes. "
+             "This is what Tier C's weekly self-assessment reads.",
+    ).set_defaults(func=cmd_autonomy_audit)
 
     p_probe = sub.add_parser(
         "probe-tools",

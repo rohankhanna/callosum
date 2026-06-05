@@ -253,6 +253,7 @@ def create_app(
     startup_smoke_test: bool = False,
     smoke_test_interval_seconds: int = 0,
     operator_state: Any = None,
+    autonomy_store: Any = None,
 ) -> FastAPI:
     from callosum.canary import CanaryScheduler, FailureRegistry
     from callosum.state import StateStore
@@ -610,7 +611,12 @@ def create_app(
     # restarting the proxy.
     if operator_state is not None:
         from callosum.admin import install_admin_routes
-        install_admin_routes(app, operator_state, backends=backends_list)
+        install_admin_routes(
+            app,
+            operator_state,
+            backends=backends_list,
+            autonomy_store=autonomy_store,
+        )
 
     # Bearer middleware for /v1/* and /diagnose/* — only enforced when an
     # auth service is configured. In single-operator mode (no auth db) those

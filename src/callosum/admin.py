@@ -33,6 +33,7 @@ from typing import Any
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request, status
 
+from callosum.autonomy import AutonomyLevel, AutonomyStore, PromotionNotReady
 from callosum.operator_state import VALID_OPERATOR_MODES, OperatorState
 
 
@@ -64,6 +65,7 @@ def install_admin_routes(
     operator_state: OperatorState,
     *,
     backends: list[Any] | None = None,
+    autonomy_store: AutonomyStore | None = None,
 ) -> None:
     """Mount the /admin/* endpoints on `app`, gated by the admin token.
 
@@ -72,6 +74,11 @@ def install_admin_routes(
     the verification probe against each cell. When None, that endpoint
     returns an empty result (callosum was started without any backends
     or the wiring isn't passing them through yet).
+
+    `autonomy_store` is the earned-autonomy ladder backing
+    /admin/autonomy/*. When None, those endpoints return 503; the proxy
+    can still operate at effective L1_MANUAL (manual everything) which
+    is the safe default behavior when state isn't configured.
     """
     token = ensure_admin_token()
     router = APIRouter(prefix="/admin", tags=["admin"])
@@ -346,5 +353,122 @@ def install_admin_routes(
                 "response": None,
                 "error": f"{type(exc).__name__}: {exc}",
             }
+
+    # ---------- autonomy ladder (Tier A) ---------------------------------
+
+    def _autonomy_state_dict(store: AutonomyStore) -> dict[str, Any]:
+        state = store.get_state()
+        eligible, why = state.is_eligible_for_promotion()
+        return {
+            "current_level": int(state.current_level),
+            "current_level_name": state.current_level.name,
+            "last_changed_at": state.last_changed_at,
+            "last_changed_reason": state.last_changed_reason,
+            "ops_at_current_level": state.ops_at_current_level,
+            "clean_streak": state.clean_streak,
+            "promotion_threshold_k": state.promotion_threshold_k,
+            "promotion_eligible": eligible,
+            "promotion_eligibility_reason": why,
+        }
+
+    def _require_autonomy() -> AutonomyStore:
+        if autonomy_store is None:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "autonomy store not configured; effective L1_MANUAL",
+            )
+        return autonomy_store
+
+    @router.get("/autonomy")
+    async def admin_autonomy_show(request: Request) -> dict[str, Any]:
+        _check(request)
+        return _autonomy_state_dict(_require_autonomy())
+
+    @router.post("/autonomy/promote")
+    async def admin_autonomy_promote(request: Request) -> dict[str, Any]:
+        _check(request)
+        store = _require_autonomy()
+        try:
+            store.promote(actor="user")
+        except PromotionNotReady as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return _autonomy_state_dict(store)
+
+    @router.post("/autonomy/demote")
+    async def admin_autonomy_demote(request: Request) -> dict[str, Any]:
+        _check(request)
+        store = _require_autonomy()
+        body: dict[str, Any] = {}
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        reason = body.get("reason") if isinstance(body, dict) else None
+        reason_str = (
+            str(reason) if isinstance(reason, str) and reason
+            else "operator demote"
+        )
+        store.demote(reason=reason_str, actor="user")
+        return _autonomy_state_dict(store)
+
+    @router.post("/autonomy/set")
+    async def admin_autonomy_set(request: Request) -> dict[str, Any]:
+        _check(request)
+        store = _require_autonomy()
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(400, "expected JSON object")
+        level_raw = body.get("level")
+        if not isinstance(level_raw, int):
+            raise HTTPException(
+                400, "level required: integer 1..5"
+            )
+        try:
+            level = AutonomyLevel(level_raw)
+        except ValueError as exc:
+            raise HTTPException(
+                400, f"invalid level {level_raw}: {exc}"
+            ) from exc
+        reason = body.get("reason")
+        reason_str = (
+            str(reason) if isinstance(reason, str) and reason
+            else "operator set"
+        )
+        store.set_level(level, reason=reason_str, actor="user")
+        return _autonomy_state_dict(store)
+
+    @router.get("/autonomy/history")
+    async def admin_autonomy_history(request: Request) -> list[dict[str, Any]]:
+        _check(request)
+        store = _require_autonomy()
+        return [
+            {
+                "ts": t.ts,
+                "from_level": int(t.from_level),
+                "from_level_name": t.from_level.name,
+                "to_level": int(t.to_level),
+                "to_level_name": t.to_level.name,
+                "reason": t.reason,
+                "actor": t.actor,
+            }
+            for t in store.history(limit=200)
+        ]
+
+    @router.get("/autonomy/audit")
+    async def admin_autonomy_audit(request: Request) -> list[dict[str, Any]]:
+        _check(request)
+        store = _require_autonomy()
+        return [
+            {
+                "ts": e.ts,
+                "action": e.action,
+                "level_at_time": int(e.level_at_time),
+                "level_name": e.level_at_time.name,
+                "outcome": e.outcome,
+                "signal": e.signal,
+                "details": e.details,
+            }
+            for e in store.audit_log(limit=200)
+        ]
 
     app.include_router(router)

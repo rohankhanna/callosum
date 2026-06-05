@@ -57,6 +57,11 @@ def main() -> None:
     if cfg.state.dir is None:
         parser.error("config.state.dir must be set")
     operator_state = OperatorState(cfg.state.dir / "operator_state.sqlite")
+    # Earned-autonomy ladder (Tier A). First-run seeds at L1_MANUAL;
+    # subsequent runs reuse the persisted level. Lives alongside
+    # operator_state.sqlite under state.dir.
+    from callosum.autonomy import AutonomyStore
+    autonomy_store = AutonomyStore(cfg.state.dir / "autonomy.sqlite")
     backends = build_backends(cfg)
     # Auto-register a LiteLLM gateway backend when the operator points us at
     # one. Gateway is provided by `local LLM gateway` and exposes local models
@@ -129,6 +134,7 @@ def main() -> None:
             startup_smoke_test=cfg.server.startup_smoke_test,
             smoke_test_interval_seconds=cfg.server.smoke_test_interval_seconds,
             operator_state=operator_state,
+            autonomy_store=autonomy_store,
         ),
         host=host,
         port=port,
