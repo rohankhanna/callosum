@@ -221,6 +221,29 @@ def cmd_autonomy_audit(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_retention_show(args: argparse.Namespace) -> int:
+    _print(_request("GET", "/admin/retention"))
+    return 0
+
+
+def cmd_retention_status(args: argparse.Namespace) -> int:
+    _print(_request("GET", "/admin/retention/status"))
+    return 0
+
+
+def cmd_retention_preview(args: argparse.Namespace) -> int:
+    # Retention is invoked synchronously, so the run could take seconds
+    # on a large requests table. The status/preview is faster — but
+    # share the same generous timeout to keep one ceiling for both.
+    _print(_request("POST", "/admin/retention/preview", {}, timeout=300.0))
+    return 0
+
+
+def cmd_retention_run(args: argparse.Namespace) -> int:
+    _print(_request("POST", "/admin/retention/run", {}, timeout=600.0))
+    return 0
+
+
 def cmd_probe_tools(args: argparse.Namespace) -> int:
     """Run the tool-call verification probe and print per-cell results.
 
@@ -344,6 +367,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Recent dev-loop actions: invoke / merge / soak outcomes. "
              "This is what Tier C's weekly self-assessment reads.",
     ).set_defaults(func=cmd_autonomy_audit)
+
+    p_ret = sub.add_parser(
+        "retention",
+        help="Tier G state retention: archive-and-delete old rows / "
+             "branches / files per policy.",
+    )
+    pr = p_ret.add_subparsers(dest="subcommand", required=True)
+    pr.add_parser(
+        "show",
+        help="List the configured retention policies and archive dir.",
+    ).set_defaults(func=cmd_retention_show)
+    pr.add_parser(
+        "status",
+        help="Per-policy current state (row counts, oldest entry, etc.).",
+    ).set_defaults(func=cmd_retention_status)
+    pr.add_parser(
+        "preview",
+        help="Dry-run: report what would be archived/deleted without "
+             "modifying anything.",
+    ).set_defaults(func=cmd_retention_preview)
+    pr.add_parser(
+        "run",
+        help="Execute retention: archive matching rows to a tarball "
+             "under the archive dir, then delete them from the live "
+             "table. Intended to be invoked weekly from cron.",
+    ).set_defaults(func=cmd_retention_run)
 
     p_probe = sub.add_parser(
         "probe-tools",

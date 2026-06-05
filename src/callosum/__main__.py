@@ -62,6 +62,29 @@ def main() -> None:
     # operator_state.sqlite under state.dir.
     from callosum.autonomy import AutonomyStore
     autonomy_store = AutonomyStore(cfg.state.dir / "autonomy.sqlite")
+    # Retention runner (Tier G) — owns the v1 policy list bound to the
+    # actual db / repo / filesystem locations on this host. Wired to
+    # the same usage_log / autonomy db paths the proxy uses, so
+    # archives + deletes operate on the same data.
+    from callosum.retention import DEFAULT_ARCHIVE_DIR, RetentionRunner
+    repo_root_for_retention: Path | None = None
+    callosum_pkg = Path(__file__).resolve().parent
+    candidate_root = callosum_pkg.parents[1]
+    if (candidate_root / ".git").exists():
+        repo_root_for_retention = candidate_root
+    research_runner_runs_dir = (
+        Path.home() / ".local" / "state" / "research_runner"
+        / "model-research" / "runs"
+    )
+    retention_runner = RetentionRunner(
+        usage_log_path=cfg.usage_log.path,
+        autonomy_db_path=cfg.state.dir / "autonomy.sqlite",
+        repo_root=repo_root_for_retention,
+        research_runner_runs_dir=(
+            research_runner_runs_dir if research_runner_runs_dir.exists() else None
+        ),
+        archive_dir=DEFAULT_ARCHIVE_DIR,
+    )
     backends = build_backends(cfg)
     # Auto-register a LiteLLM gateway backend when the operator points us at
     # one. Gateway is provided by `local LLM gateway` and exposes local models
@@ -135,6 +158,7 @@ def main() -> None:
             smoke_test_interval_seconds=cfg.server.smoke_test_interval_seconds,
             operator_state=operator_state,
             autonomy_store=autonomy_store,
+            retention_runner=retention_runner,
         ),
         host=host,
         port=port,

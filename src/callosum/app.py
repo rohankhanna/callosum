@@ -254,6 +254,7 @@ def create_app(
     smoke_test_interval_seconds: int = 0,
     operator_state: Any = None,
     autonomy_store: Any = None,
+    retention_runner: Any = None,
 ) -> FastAPI:
     from callosum.canary import CanaryScheduler, FailureRegistry
     from callosum.state import StateStore
@@ -616,6 +617,7 @@ def create_app(
             operator_state,
             backends=backends_list,
             autonomy_store=autonomy_store,
+            retention_runner=retention_runner,
         )
 
     # Bearer middleware for /v1/* and /diagnose/* — only enforced when an

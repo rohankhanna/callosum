@@ -35,6 +35,7 @@ from fastapi import APIRouter, FastAPI, HTTPException, Request, status
 
 from callosum.autonomy import AutonomyLevel, AutonomyStore, PromotionNotReady
 from callosum.operator_state import VALID_OPERATOR_MODES, OperatorState
+from callosum.retention import RetentionRunner, result_to_dict
 
 
 def _admin_token_path() -> Path:
@@ -66,6 +67,7 @@ def install_admin_routes(
     *,
     backends: list[Any] | None = None,
     autonomy_store: AutonomyStore | None = None,
+    retention_runner: RetentionRunner | None = None,
 ) -> None:
     """Mount the /admin/* endpoints on `app`, gated by the admin token.
 
@@ -470,5 +472,49 @@ def install_admin_routes(
             }
             for e in store.audit_log(limit=200)
         ]
+
+    # ---------- retention (Tier G) ---------------------------------------
+
+    def _require_retention() -> RetentionRunner:
+        if retention_runner is None:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "retention runner not configured",
+            )
+        return retention_runner
+
+    @router.get("/retention")
+    async def admin_retention_show(request: Request) -> dict[str, Any]:
+        _check(request)
+        runner = _require_retention()
+        return {
+            "archive_dir": str(runner.archive_dir),
+            "policies": [
+                {
+                    "name": p.name,
+                    "description": p.description,
+                    "kind": p.kind.value,
+                    "delete_after_days": p.delete_after_days,
+                    "archive_on_delete": p.archive_on_delete,
+                    "params": p.params,
+                }
+                for p in runner.policies()
+            ],
+        }
+
+    @router.get("/retention/status")
+    async def admin_retention_status(request: Request) -> list[dict[str, Any]]:
+        _check(request)
+        return _require_retention().status()
+
+    @router.post("/retention/preview")
+    async def admin_retention_preview(request: Request) -> list[dict[str, Any]]:
+        _check(request)
+        return [result_to_dict(r) for r in _require_retention().preview()]
+
+    @router.post("/retention/run")
+    async def admin_retention_run(request: Request) -> list[dict[str, Any]]:
+        _check(request)
+        return [result_to_dict(r) for r in _require_retention().run()]
 
     app.include_router(router)
