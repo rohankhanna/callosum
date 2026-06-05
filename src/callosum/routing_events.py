@@ -17,7 +17,7 @@ consume without poking at the SQLite schema:
       "prompt_tokens": int | null,
       "completion_tokens": int | null,
       "retry_count": int,             # cell-retries (0 if primary succeeded)
-      "mode": str                     # "auto" | "remote-only" | etc.
+      "routing": str                  # "auto" | "remote-only" | etc.
     }
 
 Subscribers receive events starting from when they connect; there is no
@@ -193,8 +193,8 @@ class _RoutingEventBroadcaster:
             except Exception:
                 pass
 
-        mode = (
-            self._operator_state.get_mode()
+        routing = (
+            self._operator_state.get_routing()
             if self._operator_state is not None
             else "auto"
         )
@@ -217,7 +217,7 @@ class _RoutingEventBroadcaster:
                 else None
             ),
             "retry_count": retry_count,
-            "mode": mode,
+            "routing": routing,
         }
 
 

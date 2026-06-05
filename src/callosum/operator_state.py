@@ -91,7 +91,14 @@ _SCHEMA = [
 #   * local-only:  same as offline but explicit semantics
 #   * remote-only: ignore local backends (e.g. while debugging a local
 #                  serving stack)
-VALID_OPERATOR_MODES = frozenset({"auto", "offline", "local-only", "remote-only"})
+#
+# The CONCEPT was originally called "operator mode" — the name is
+# preserved on the internal SQLite table because renaming requires
+# a migration. The user-facing surface (CLI subcommand, admin endpoint,
+# Python API) is now "routing" to disambiguate from the unrelated
+# `callosum-ctl autonomy` ladder. See the project memory
+# `the project notes` for the rename rationale.
+VALID_ROUTING_MODES = frozenset({"auto", "offline", "local-only", "remote-only"})
 
 
 class OperatorState:
@@ -207,24 +214,29 @@ class OperatorState:
             ).fetchone()
         return row is not None
 
-    # ---------- operator mode --------------------------------------------
+    # ---------- routing mode ---------------------------------------------
 
-    def get_mode(self) -> str:
-        """Return current operator mode. Defaults to 'auto' if never set."""
+    def get_routing(self) -> str:
+        """Return current routing mode (auto / offline / local-only /
+        remote-only). Defaults to 'auto' if never set. The SQLite
+        column is still named `mode` for backward compat with existing
+        DBs; only the Python API and user-facing surfaces use the
+        clearer 'routing' name."""
         with self._lock:
             row = self._conn.execute(
                 "SELECT mode FROM operator_mode WHERE id = 1"
             ).fetchone()
         if row is None:
             return "auto"
-        mode = str(row[0])
-        return mode if mode in VALID_OPERATOR_MODES else "auto"
+        routing = str(row[0])
+        return routing if routing in VALID_ROUTING_MODES else "auto"
 
-    def set_mode(self, mode: str) -> None:
-        """Set the operator mode. Raises ValueError on unknown mode."""
-        if mode not in VALID_OPERATOR_MODES:
+    def set_routing(self, routing: str) -> None:
+        """Set the routing mode. Raises ValueError on unknown value."""
+        if routing not in VALID_ROUTING_MODES:
             raise ValueError(
-                f"unknown mode {mode!r}; valid: {sorted(VALID_OPERATOR_MODES)}"
+                f"unknown routing {routing!r}; "
+                f"valid: {sorted(VALID_ROUTING_MODES)}"
             )
         with self._lock:
             self._conn.execute(
@@ -232,7 +244,7 @@ class OperatorState:
                 "VALUES (1, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET "
                 "mode=excluded.mode, updated_at=excluded.updated_at",
-                (mode, time.time()),
+                (routing, time.time()),
             )
             self._conn.commit()
 

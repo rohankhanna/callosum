@@ -10,7 +10,7 @@ Subcommands:
     callosum status
     callosum params {get|set|clear|list} ...
     callosum denylist {add|remove|list} ...
-    callosum mode {get|set} ...
+    callosum routing {get|set} ...
     callosum reload
 
 All output is JSON unless --pretty is given (default: pretty for
@@ -175,13 +175,16 @@ def cmd_denylist_remove(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_mode_get(args: argparse.Namespace) -> int:
-    _print(_request("GET", "/admin/mode"))
+def cmd_routing_get(args: argparse.Namespace) -> int:
+    _print(_request("GET", "/admin/routing"))
     return 0
 
 
-def cmd_mode_set(args: argparse.Namespace) -> int:
-    _print(_request("POST", "/admin/mode", {"mode": args.mode}), pretty=False)
+def cmd_routing_set(args: argparse.Namespace) -> int:
+    _print(
+        _request("POST", "/admin/routing", {"routing": args.routing}),
+        pretty=False,
+    )
     return 0
 
 
@@ -334,12 +337,22 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("model")
     r.set_defaults(func=cmd_denylist_remove)
 
-    p_mode = sub.add_parser("mode", help="Operator routing mode (auto / offline / local-only / remote-only).")
-    pm = p_mode.add_subparsers(dest="subcommand", required=True)
-    pm.add_parser("get", help="Print the current mode.").set_defaults(func=cmd_mode_get)
-    sm = pm.add_parser("set", help="Set the mode.")
-    sm.add_argument("mode", choices=["auto", "offline", "local-only", "remote-only"])
-    sm.set_defaults(func=cmd_mode_set)
+    p_routing = sub.add_parser(
+        "routing",
+        help="Backend routing mode (auto / offline / local-only / "
+             "remote-only). Distinct from `callosum-ctl autonomy` "
+             "which governs dev-loop pipeline autonomy.",
+    )
+    pr = p_routing.add_subparsers(dest="subcommand", required=True)
+    pr.add_parser(
+        "get", help="Print the current routing mode.",
+    ).set_defaults(func=cmd_routing_get)
+    sr = pr.add_parser("set", help="Set the routing mode.")
+    sr.add_argument(
+        "routing",
+        choices=["auto", "offline", "local-only", "remote-only"],
+    )
+    sr.set_defaults(func=cmd_routing_set)
 
     p_auto = sub.add_parser(
         "autonomy",

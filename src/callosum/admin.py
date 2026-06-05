@@ -15,8 +15,8 @@ Endpoints (all under /admin):
   POST /admin/params           → set/clear inference override for one model
   GET  /admin/denylist         → list denied cells
   POST /admin/denylist         → add/remove a denied cell
-  GET  /admin/mode             → current mode
-  POST /admin/mode             → set mode
+  GET  /admin/routing          → current routing mode
+  POST /admin/routing          → set routing mode
   POST /admin/probe-tools      → run tool-call probe against advertised cells
 
 Designed for the CLI; not intended for browser / human consumption.
@@ -34,7 +34,7 @@ from typing import Any
 from fastapi import APIRouter, FastAPI, HTTPException, Request, status
 
 from callosum.autonomy import AutonomyLevel, AutonomyStore, PromotionNotReady
-from callosum.operator_state import VALID_OPERATOR_MODES, OperatorState
+from callosum.operator_state import VALID_ROUTING_MODES, OperatorState
 from callosum.retention import RetentionRunner, result_to_dict
 from callosum.self_assessment import SelfAssessmentRunner
 
@@ -100,7 +100,7 @@ def install_admin_routes(
     async def admin_status(request: Request) -> dict[str, Any]:
         _check(request)
         return {
-            "mode": operator_state.get_mode(),
+            "routing": operator_state.get_routing(),
             "inference_overrides": [
                 {"model": m, "params": p, "force": f}
                 for m, p, f in operator_state.list_inference_overrides()
@@ -170,25 +170,25 @@ def install_admin_routes(
             return {"status": "removed"}
         raise HTTPException(400, f"unknown action {action!r}")
 
-    @router.get("/mode")
-    async def admin_mode_get(request: Request) -> dict[str, str]:
+    @router.get("/routing")
+    async def admin_routing_get(request: Request) -> dict[str, str]:
         _check(request)
-        return {"mode": operator_state.get_mode()}
+        return {"routing": operator_state.get_routing()}
 
-    @router.post("/mode")
-    async def admin_mode_set(request: Request) -> dict[str, str]:
+    @router.post("/routing")
+    async def admin_routing_set(request: Request) -> dict[str, str]:
         _check(request)
         body = await request.json()
         if not isinstance(body, dict):
             raise HTTPException(400, "expected JSON object")
-        mode = body.get("mode")
-        if not isinstance(mode, str) or mode not in VALID_OPERATOR_MODES:
+        routing = body.get("routing")
+        if not isinstance(routing, str) or routing not in VALID_ROUTING_MODES:
             raise HTTPException(
                 400,
-                f"mode must be one of {sorted(VALID_OPERATOR_MODES)}",
+                f"routing must be one of {sorted(VALID_ROUTING_MODES)}",
             )
-        operator_state.set_mode(mode)
-        return {"status": "set", "mode": mode}
+        operator_state.set_routing(routing)
+        return {"status": "set", "routing": routing}
 
     @router.post("/probe-tools")
     async def admin_probe_tools(request: Request) -> dict[str, Any]:

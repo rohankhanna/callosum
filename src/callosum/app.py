@@ -1206,11 +1206,13 @@ async def _dispatch_internal(
         # code change (transform, router tweak, harness adapter)
         # cannot affect this request's outcome.
         if operator_state is not None:
-            _mode = operator_state.get_mode()
-            # Map operator mode to effective_routing_mode for the log.
+            _routing = operator_state.get_routing()
+            # Map routing mode to effective_routing_mode for the log.
             # Default mapping: 'auto' → 'auto', everything else → forced_*.
             _effective_mode = (
-                _mode if _mode == "auto" else f"forced_{_mode.replace('-only', '')}"
+                _routing
+                if _routing == "auto"
+                else f"forced_{_routing.replace('-only', '')}"
             )
             # Quota for the canary scheduler. Walk codex_auth_vault
             # backends, take the highest weekly_used_percent (the
@@ -1232,18 +1234,18 @@ async def _dispatch_internal(
             _sched = _CANARY_SCHEDULER
             if _sched is not None:
                 _canary = _sched.decide(
-                    operator_mode=_mode, quota_used_percent=_quota_pct,
+                    routing=_routing, quota_used_percent=_quota_pct,
                 )
             else:
                 _canary = CanaryDecision.NORMAL
             if _canary == CanaryDecision.REDIRECT_REMOTE:
-                # Override _mode for THIS request only; operator state
-                # stays untouched. effective_mode reflects the
+                # Override _routing for THIS request only; operator
+                # state stays untouched. effective_mode reflects the
                 # redirect so the row lands in the canary bucket.
-                _mode = "remote-only"
+                _routing = "remote-only"
                 _effective_mode = "canary_redirect"
             _effective_routing_mode_context.set(_effective_mode)
-            if _mode in ("offline", "local-only"):
+            if _routing in ("offline", "local-only"):
                 cells_now = [
                     c for c in cells_now
                     if any(
@@ -1252,7 +1254,7 @@ async def _dispatch_internal(
                         for b in backends_list
                     )
                 ]
-            elif _mode == "remote-only":
+            elif _routing == "remote-only":
                 cells_now = [
                     c for c in cells_now
                     if any(

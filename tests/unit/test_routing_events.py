@@ -34,11 +34,11 @@ class _FakeUsageLog:
 
 
 class _FakeOperatorState:
-    def __init__(self, mode: str = "auto") -> None:
-        self._mode = mode
+    def __init__(self, routing: str = "auto") -> None:
+        self._routing = routing
 
-    def get_mode(self) -> str:
-        return self._mode
+    def get_routing(self) -> str:
+        return self._routing
 
 
 def _make_db(tmp_path: Path, *, session_id: str | None = "sess-abc123") -> Path:
@@ -119,7 +119,7 @@ def test_builds_payload_with_all_fields(tmp_path: Path) -> None:
     assert payload["prompt_tokens"] == 8421
     assert payload["completion_tokens"] == 270
     assert payload["retry_count"] == 0
-    assert payload["mode"] == "auto"
+    assert payload["routing"] == "auto"
 
 
 def test_filter_forwards_only_matching_session(tmp_path: Path) -> None:
@@ -239,7 +239,7 @@ def test_missing_operator_state_defaults_to_auto(tmp_path: Path) -> None:
     )
     payload = bcast._build_payload(42)
     assert payload is not None
-    assert payload["mode"] == "auto"
+    assert payload["routing"] == "auto"
 
 
 def test_notify_swallows_exceptions(tmp_path: Path) -> None:
