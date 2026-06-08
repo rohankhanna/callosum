@@ -48,8 +48,12 @@ class TransformContext:
     cell's underlying-weights identity (None when no provider knew
     about it). `capability_profile` is the cell's on-disk profile
     with all known findings (None when no harness sweep has produced
-    one yet — a brand-new cell hasn't been probed). Transforms can
-    inspect any of these to decide whether to fire and what to do.
+    one yet — a brand-new cell hasn't been probed). `endpoint`
+    identifies which entry-point the request arrived on (e.g.
+    "codex" for POST /codex; None or "generic" for the legacy
+    /v1/* endpoints) so a transform can scope itself to a specific
+    CLI's contract. Transforms can inspect any of these to decide
+    whether to fire and what to do.
 
     Construction is the caller's responsibility — the request handler
     builds one per request, passes it to every applicable transform.
@@ -60,6 +64,7 @@ class TransformContext:
     cell: Cell
     weight_identity: WeightIdentity | None
     capability_profile: CapabilityProfile | None
+    endpoint: str | None = None
 
 
 class Transform(Protocol):

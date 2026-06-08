@@ -256,6 +256,7 @@ def create_app(
     autonomy_store: Any = None,
     retention_runner: Any = None,
     self_assessment_runner: Any = None,
+    transform_registry: Any = None,
 ) -> FastAPI:
     from callosum.canary import CanaryScheduler, FailureRegistry
     from callosum.state import StateStore
@@ -279,8 +280,10 @@ def create_app(
     # responding to harness findings, later potentially by the
     # callosum-in-the-loop dev agent). An empty registry is a no-op
     # in the request path; this line introduces no behavior change.
-    from callosum.transforms import build_default_registry
-    transform_registry = build_default_registry()
+    # Tests may inject a pre-populated registry via the keyword arg.
+    if transform_registry is None:
+        from callosum.transforms import build_default_registry
+        transform_registry = build_default_registry()
     # Publish to module-level holders so module-level functions
     # (`_dispatch_route`, `_log_attempt`) can reach them without
     # per-call-site plumbing. The previous holders are overwritten
@@ -1001,6 +1004,50 @@ def create_app(
             return StreamingResponse(result, media_type="text/event-stream", headers=headers)
         return result
 
+    @app.post("/codex")
+    async def codex_endpoint(request: Request, body: dict[str, Any]) -> Any:
+        """Codex CLI's dedicated endpoint. Accepts the Responses-API
+        request body codex sends, returns the SSE stream codex parses.
+        Same dispatch core as /v1/responses, but tagged with
+        client_endpoint="codex" so codex-specific response transforms
+        can scope themselves to this endpoint.
+
+        Generic OpenAI clients should keep using /v1/responses (no
+        client-specific transforms applied)."""
+        _request_id_context.set(None)
+        _extract_complexity_context.set(False)
+        _complexity_class_context.set(None)
+        result = await _dispatch_route(
+            body,
+            request=request,
+            route_name="responses",
+            backends_list=backends_list,
+            pin_state=pin_state,
+            session_registry=session_registry,
+            usage_log=usage_log,
+            nonstream=lambda b, p, h: b.responses(p, h),
+            stream=lambda b, p, h: b.responses_stream(p, h),
+            router_context_safety_margin=auto_cfg.router_context_safety_margin,
+            state_store=state_store,
+            auto_cfg=auto_cfg,
+            router=router,
+            operator_state=operator_state,
+            live_cells_fn=_live_cells,
+            client_endpoint="codex",
+        )
+        request_id = _request_id_context.get()
+        if request_id is not None:
+            headers = {"X-Proxy-Request-ID": str(request_id)}
+            if isinstance(result, dict):
+                return JSONResponse(result, headers=headers)
+            if isinstance(result, StreamingResponse):
+                result.headers.update(headers)
+                return result
+            return StreamingResponse(
+                result, media_type="text/event-stream", headers=headers
+            )
+        return result
+
     @app.post("/v1/responses")
     async def responses(request: Request, body: dict[str, Any]) -> Any:
         _request_id_context.set(None)  # Reset context for this request
@@ -1103,9 +1150,15 @@ async def _dispatch_route(
     router: Router | None = None,
     operator_state: Any = None,
     live_cells_fn: Callable[[], list[Cell]] | None = None,
+    client_endpoint: str | None = None,
 ) -> Any:
     """HTTP entry-point. Pulls session_id + api_key off the Request, then
     hands off to _dispatch_internal for the rewrite + dispatch logic.
+
+    `client_endpoint` identifies which entry-point the request arrived on
+    (e.g. "codex" for POST /codex; None for the generic /v1/* endpoints).
+    Threaded through to the transform context so per-CLI transforms can
+    scope themselves to the CLI they were written for.
     """
     pinned_now = pin_state.get()
     session_id = _session_id_from_request(request, pinned=pinned_now)
@@ -1130,6 +1183,7 @@ async def _dispatch_route(
         router=router,
             operator_state=operator_state,
         live_cells_fn=live_cells_fn,
+        client_endpoint=client_endpoint,
     )
 
 
@@ -1153,6 +1207,7 @@ async def _dispatch_internal(
     router: Router | None = None,
     operator_state: Any = None,
     live_cells_fn: Callable[[], list[Cell]] | None = None,
+    client_endpoint: str | None = None,
 ) -> Any:
     if auto_cfg is None:
         auto_cfg = AutoRouterConfig()
@@ -1334,14 +1389,16 @@ async def _dispatch_internal(
         chosen = decision.cell
         body["model"] = chosen.model
         body.setdefault("reasoning", {})["effort"] = chosen.reasoning_effort
-        # Per-cell request transforms. Empty registry → no-op. Each
-        # registered transform's `applies_to(ctx)` decides whether it
-        # fires for this cell. Errors inside a transform are isolated:
-        # the registry logs and skips. Response-side transforms are
-        # not yet wired — they'll come when a concrete transform
-        # needs them, at which point the streaming + non-streaming
-        # paths get the corresponding hook.
+        # Per-cell transforms. Empty registry → no-op. Each registered
+        # transform's `applies_to(ctx)` decides whether it fires for
+        # this cell+endpoint combination. Errors inside a transform are
+        # isolated: the registry logs and skips. Streaming response
+        # transforms are deferred — translating SSE events on the fly
+        # requires careful design (chunk boundaries, partial events);
+        # for v1, response transforms apply ONLY on the non-stream path
+        # (which buffers the full response before returning).
         _tr = _TRANSFORM_REGISTRY
+        _transform_ctx: Any = None
         if _tr is not None and len(_tr) > 0:
             from callosum.capability.profile import (
                 load_profile as _load_profile,
@@ -1367,14 +1424,15 @@ async def _dispatch_internal(
                     "transform context: failed to load profile for %s",
                     chosen.model,
                 )
-            _ctx = TransformContext(
+            _transform_ctx = TransformContext(
                 cell=chosen,
                 weight_identity=(
                     _profile.weight_identity if _profile is not None else None
                 ),
                 capability_profile=_profile,
+                endpoint=client_endpoint,
             )
-            body = _tr.apply_request(body, _ctx)
+            body = _tr.apply_request(body, _transform_ctx)
         # Provenance for the request log — predictor_id distinguishes
         # cold-start (uniform) from learned (knn / gbm / ...) decisions
         # so downstream analysis can weight them differently. The
@@ -1428,7 +1486,7 @@ async def _dispatch_internal(
             recommender_source=recommender_source,
                 prompt_embedding=prompt_embedding,
         )
-    return await _dispatch_nonstream_with_cell_retry(
+    result = await _dispatch_nonstream_with_cell_retry(
         body,
         candidates=cell_candidates,
         model=model,
@@ -1449,6 +1507,16 @@ async def _dispatch_internal(
         recommender_source=recommender_source,
                 prompt_embedding=prompt_embedding,
     )
+    # Response-side transforms (non-stream only — see comment above on
+    # the request transform for why streaming is deferred). Empty
+    # registry or no-applicable-transforms is a clean no-op.
+    if (
+        _transform_ctx is not None
+        and _tr is not None
+        and isinstance(result, dict)
+    ):
+        result = _tr.apply_response(result, _transform_ctx)
+    return result
 
 
 def _require_model(body: dict[str, Any]) -> str:
