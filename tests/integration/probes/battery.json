@@ -1,0 +1,187 @@
+{
+  "version": 1,
+  "description": "Black-box probing battery for local models served via callosum. Each scenario is run against every model behind the gateway; outputs are captured verbatim and used to build per-model output profiles. Profiles drive transform design.",
+  "generic": [
+    {
+      "id": "G1-terminate-smoke",
+      "description": "Does the model terminate cleanly on a tiny request? Failure mode: keeps generating past the explicit instruction.",
+      "request": {
+        "messages": [
+          {"role": "user", "content": "Reply with exactly the two characters: OK"}
+        ],
+        "max_tokens": 50,
+        "temperature": 0
+      },
+      "expectations": ["terminates within max_tokens", "finish_reason in {'stop', 'eos_token'}", "content matches /^OK\\.?\\s*$/i"]
+    },
+    {
+      "id": "G2-bounded-long",
+      "description": "Multi-hundred-token generation that must self-terminate after the listed items, not pad with filler.",
+      "request": {
+        "messages": [
+          {"role": "user", "content": "List exactly 20 different fruits, one per line, no numbering, no commentary. After the 20th, stop."}
+        ],
+        "max_tokens": 500,
+        "temperature": 0
+      },
+      "expectations": ["finish_reason == 'stop'", "exactly 20 non-empty lines", "no preamble or postamble"]
+    },
+    {
+      "id": "G3-open-ended-loop-risk",
+      "description": "Open-ended prompt with no explicit stop; tests whether the model knows to stop on its own. THIS IS THE LOOP-LIKELIHOOD PROBE — failure is the local-repetition bug.",
+      "request": {
+        "messages": [
+          {"role": "user", "content": "Continue this list: A, B, C, D,"}
+        ],
+        "max_tokens": 1024,
+        "temperature": 0
+      },
+      "expectations": ["finish_reason == 'stop' (preferred) or 'length'", "completion is a finite letter list, not repeating tokens"]
+    },
+    {
+      "id": "G4-multi-turn",
+      "description": "Two-turn dialogue; tests chat-template handling.",
+      "request": {
+        "messages": [
+          {"role": "user", "content": "Hello."},
+          {"role": "assistant", "content": "Hi! How can I help?"},
+          {"role": "user", "content": "What is 2 + 2? Answer with one number only."}
+        ],
+        "max_tokens": 20,
+        "temperature": 0
+      },
+      "expectations": ["finish_reason == 'stop'", "content is '4' or contains '4' with minimal extras"]
+    },
+    {
+      "id": "G5-system-prompt-honored",
+      "description": "Explicit constraint via system prompt; tests whether the model respects it.",
+      "request": {
+        "messages": [
+          {"role": "system", "content": "You answer in exactly three English words. Never more, never less."},
+          {"role": "user", "content": "What is the sky?"}
+        ],
+        "max_tokens": 50,
+        "temperature": 0
+      },
+      "expectations": ["finish_reason == 'stop'", "response is a 3-word phrase"]
+    },
+    {
+      "id": "G6-empty-content",
+      "description": "Edge case: empty user content. The model should respond gracefully (ask a clarifying question, return an error, return empty) not loop or crash.",
+      "request": {
+        "messages": [
+          {"role": "user", "content": ""}
+        ],
+        "max_tokens": 100,
+        "temperature": 0
+      },
+      "expectations": ["request returns a response within max_tokens", "no crash, no infinite loop"]
+    }
+  ],
+  "codex": [
+    {
+      "id": "C1-tools-defined-not-needed",
+      "description": "Tools are defined but the request doesn't require them. Model should answer in text WITHOUT emitting a spurious tool_call.",
+      "request": {
+        "messages": [
+          {"role": "user", "content": "What's the capital of France? Answer in one word."}
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "read_file",
+              "description": "Read a file from the filesystem.",
+              "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+            }
+          }
+        ],
+        "max_tokens": 30,
+        "temperature": 0
+      },
+      "expectations": ["finish_reason == 'stop' (not 'tool_calls')", "content is 'Paris' or similar"]
+    },
+    {
+      "id": "C2-tool-call-required",
+      "description": "Tools are defined and the request needs one. Tests whether the model emits a structurally correct tool_calls field per OpenAI spec.",
+      "request": {
+        "messages": [
+          {"role": "user", "content": "Please read the file /tmp/example.txt to show me its contents."}
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "read_file",
+              "description": "Read a file from the filesystem.",
+              "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+            }
+          }
+        ],
+        "max_tokens": 200,
+        "temperature": 0
+      },
+      "expectations": ["finish_reason == 'tool_calls'", "tool_calls[0].function.name == 'read_file'", "tool_calls[0].function.arguments parses to {'path': '/tmp/example.txt'}"]
+    },
+    {
+      "id": "C3-reasoning-style",
+      "description": "Multi-step reasoning prompt; tests whether the model emits chain-of-thought as plain content (problematic for codex) or as separate reasoning_summary events.",
+      "request": {
+        "messages": [
+          {"role": "user", "content": "If a train leaves station A at 2pm going 60mph and station B at 3pm going 80mph in the opposite direction, and they are 200 miles apart, at what time do they meet? Show your work."}
+        ],
+        "max_tokens": 800,
+        "temperature": 0
+      },
+      "expectations": ["finish_reason == 'stop'", "OBSERVATION: where does the chain-of-thought appear? Plain content? <thinking>...</thinking>? <task>...</task>? Other wrappers?"]
+    },
+    {
+      "id": "C4-codex-style-task-framing",
+      "description": "Mimics codex CLI's actual prompting style — system prompt with task-framing wrappers. Tests whether the model echoes the framing or responds to it. THIS IS THE TAG-WRAPPING PROBE — the user reported `<task>...</task>` style responses.",
+      "request": {
+        "messages": [
+          {"role": "system", "content": "You are a coding assistant. The user will give you tasks to perform on their codebase. Respond with code edits when appropriate."},
+          {"role": "user", "content": "<task>Refactor the function `parse_args` in /tmp/cli.py to use argparse instead of sys.argv.</task>"}
+        ],
+        "max_tokens": 1000,
+        "temperature": 0
+      },
+      "expectations": ["OBSERVATION: does the response echo <task>...</task>, emit its own wrapper tags, or respond in plain text?"]
+    },
+    {
+      "id": "C5-tool-result-roundtrip",
+      "description": "Multi-message conversation that includes a prior tool call and its result. Tests whether the model continues coherently after seeing a tool result.",
+      "request": {
+        "messages": [
+          {"role": "user", "content": "List files in /tmp."},
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "call_001",
+                "type": "function",
+                "function": {"name": "list_files", "arguments": "{\"path\": \"/tmp\"}"}
+              }
+            ]
+          },
+          {"role": "tool", "tool_call_id": "call_001", "content": "file1.txt\nfile2.log\nexample.txt"},
+          {"role": "user", "content": "Now tell me how many files there are."}
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "list_files",
+              "description": "List files in a directory.",
+              "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}
+            }
+          }
+        ],
+        "max_tokens": 100,
+        "temperature": 0
+      },
+      "expectations": ["finish_reason == 'stop'", "content mentions 3 files"]
+    }
+  ]
+}
