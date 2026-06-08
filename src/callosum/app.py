@@ -1268,11 +1268,62 @@ async def _dispatch_internal(
         # (Codex weekly-exhausted, on cooldown, gateway down). The Router's
         # capability filter further drops cells whose physical capabilities
         # can't serve THIS request.
+        #
+        # The filter is UNCONDITIONAL. An earlier version of this block
+        # gated the filter behind `if _routable:` and `if _filtered:` —
+        # the intent was "don't shrink to empty," but the effect was
+        # "leave dead cells in the grid when everything is exhausted."
+        # The router then accepted a dead cell, dispatch failed, the
+        # error surfaced as 400 to the client, codex CLI retried, and
+        # the cycle repeated until manual interruption. Documented in
+        # docs/investigations/2026-06-08-routing-symptoms.md (Finding A).
+        #
+        # The correct behavior: filter unconditionally, then distinguish
+        # the empty-cells causes so the response code matches the actual
+        # reason (transient unavailability → 503 with Retry-After, vs.
+        # fundamental capability mismatch → 400).
         _routable = await _routable_backends(backends_list)
-        if _routable:
-            _filtered = _filter_cells_to_routable(cells_now, _routable)
-            if _filtered:
-                cells_now = _filtered
+        # Intersect routable backends with the active routing mode at the
+        # backend level. Without this intersection, a remote-only mode
+        # request could survive when only local backends are routable
+        # (the cell-level mode filter ABOVE keeps cells served by a
+        # remote-kind backend; the routability filter BELOW then keeps
+        # cells served by ANY routable backend, including local — net
+        # effect: mode-violating dispatch). Intersection here makes
+        # routable = "satisfies both routability AND the operator's
+        # current mode choice."
+        if operator_state is not None:
+            if _routing in ("offline", "local-only"):
+                _routable = [
+                    b for b in _routable
+                    if getattr(b, "kind", "") == "litellm_gateway"
+                ]
+            elif _routing == "remote-only":
+                _routable = [
+                    b for b in _routable
+                    if getattr(b, "kind", "") != "litellm_gateway"
+                ]
+        cells_now = _filter_cells_to_routable(cells_now, _routable)
+        if not cells_now:
+            if not _routable:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        f"no backend is routable under routing mode "
+                        f"{_routing!r} "
+                        "(all eligible backends on cooldown, "
+                        "quota-exhausted, or excluded by mode)"
+                    ),
+                    headers={"Retry-After": "60"},
+                )
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"current routing mode {_routing!r} excludes all "
+                    "currently-routable backends"
+                ),
+                headers={"Retry-After": "60"},
+            )
         try:
             decision = await router.route(body, cells_now)
         except NoCompatibleCellError as exc:
