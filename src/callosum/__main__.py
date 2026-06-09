@@ -135,6 +135,14 @@ def main() -> None:
     # gateway's chat-completions which hangs for *-responses-proxy
     # entries (see docs/investigations/2026-06-09-b3-multimodal-routing-
     # concurrency.md).
+    #
+    # Historical note: LiteLLMGatewayBackend (97bd67a) predates
+    # LocalModelRegistryBackend (2c8b073) by ~4 days. The latter was introduced
+    # as a REPLACEMENT, not an additive option, when the operator's
+    # local-llm CLI became the source of truth instead of litellm.yaml.
+    # The fallback-not-coexistence semantics are intentional and audited
+    # 2026-06-09 (docs/decisions/...-keep-litellmgatewaybackend-as-
+    # fallback-do-not-retire-or-unify).
     if (
         os.environ.get("CALLOSUM_LITELLM_GATEWAY_ENABLED") == "1"
         and not local_added
