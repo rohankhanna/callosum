@@ -255,6 +255,48 @@ class LocalModelRegistryBackend:
         self, body: dict[str, Any], handle: CallHandle | None = None
     ) -> dict[str, Any]:
         entry, out_body = self._outbound(body, stream=False)
+        # Native-responses runtimes (e.g. responses_proxy) advertise
+        # api_surfaces=("responses","chat") because the LiteLLM gateway
+        # *can* translate chat→responses for them — but the proxy
+        # process itself does NOT implement /v1/chat/completions. A
+        # blind POST hangs until the client timeout. Mirror the
+        # translation pattern responses() already uses for chat-only
+        # cells: when the entry advertises "responses", translate the
+        # chat body into Responses shape, POST to /v1/responses, and
+        # translate the payload back into a chat.completion. See
+        # docs/investigations/2026-06-09-b3-multimodal-routing-concurrency.md
+        # "Root-cause confirmation" for the upstream-vs-callosum split.
+        if "responses" in entry.api_surfaces:
+            from callosum.backends.codex_auth_vault import (
+                _chat_to_responses_request,
+                _responses_to_chat_response,
+            )
+            responses_body = _chat_to_responses_request(out_body, stream=False)
+            # _chat_to_responses_request reads body["model"] for the
+            # outgoing payload; out_body already has runtime_model
+            # applied by _outbound, so this carries through correctly.
+            try:
+                response = await self._client.post(
+                    f"{entry.endpoint.rstrip('/')}/v1/responses",
+                    json=responses_body,
+                )
+            except httpx.HTTPError as exc:
+                self._healthy = False
+                self._last_health_reason = "network"
+                raise BackendError(
+                    classification="transient", message=str(exc)
+                ) from exc
+            if handle is not None:
+                handle.upstream_status = response.status_code
+                handle.upstream_headers = dict(response.headers)
+            if response.status_code >= 400:
+                raise error_from_response(response)
+            payload = cast(dict[str, Any], response.json())
+            # Preserve the public model id (what the client asked for)
+            # in the chat.completion `model` field rather than the
+            # runtime alias. Matches LiteLLMGatewayBackend's behavior.
+            client_model = str(body.get("model", entry.runtime_model))
+            return _responses_to_chat_response(payload, model=client_model)
         try:
             response = await self._client.post(
                 f"{entry.endpoint.rstrip('/')}/v1/chat/completions",
@@ -275,6 +317,25 @@ class LocalModelRegistryBackend:
         self, body: dict[str, Any], handle: CallHandle | None = None
     ) -> AsyncIterator[bytes]:
         entry, out_body = self._outbound(body, stream=True)
+        if "responses" in entry.api_surfaces:
+            # Same upstream constraint as chat_completions: the runtime
+            # doesn't natively serve chat-completions streaming for
+            # responses-proxy entries. Translating SSE on the fly (chat
+            # delta events ↔ responses output_item events) is a
+            # heavier refactor; until that lands, surface a clear
+            # BackendError so dispatch retries onto the next cell
+            # rather than hanging until timeout. Mirrors how
+            # responses_stream handles chat-only cells.
+            raise BackendError(
+                classification="transient",
+                message=(
+                    f"streaming chat-completions for {entry.id!r} requires "
+                    "chat→responses SSE translation; not yet wired in "
+                    "LocalModelRegistryBackend. Use non-stream chat_completions, "
+                    "call responses_stream directly, or route via the "
+                    "LiteLLM gateway translator."
+                ),
+            )
         try:
             async with self._client.stream(
                 "POST",

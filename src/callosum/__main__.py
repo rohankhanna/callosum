@@ -109,6 +109,7 @@ def main() -> None:
     # Prefer local LLM gateway as the source of truth when its CLI is on
     # PATH. Falls back to LiteLLMGatewayBackend (litellm.yaml-driven)
     # when the operator doesn't have local LLM gateway installed.
+    local_added = False
     if (
         os.environ.get("CALLOSUM_LOCAL_DISABLED") != "1"
         and LocalModelRegistrySource.is_available()
@@ -121,10 +122,23 @@ def main() -> None:
                 operator_state=operator_state,
             )
         )
+        local_added = True
     litellm_url = os.environ.get(
         "CALLOSUM_LITELLM_GATEWAY_URL", LITELLM_GATEWAY_DEFAULT_BASE_URL
     )
-    if os.environ.get("CALLOSUM_LITELLM_GATEWAY_ENABLED") == "1":
+    # The two local-cell sources are mutually exclusive per the docstring
+    # above. The LiteLLM gateway backend is the FALLBACK — only register
+    # it when LocalModelRegistryBackend wasn't available. Otherwise both end up
+    # advertising the same models with the same backend id, and the
+    # router can pick either: LocalModelRegistryBackend routes around the gateway
+    # via per-model endpoints, LiteLLMGatewayBackend POSTs into the
+    # gateway's chat-completions which hangs for *-responses-proxy
+    # entries (see docs/investigations/2026-06-09-b3-multimodal-routing-
+    # concurrency.md).
+    if (
+        os.environ.get("CALLOSUM_LITELLM_GATEWAY_ENABLED") == "1"
+        and not local_added
+    ):
         # CALLOSUM_LITELLM_TIMEOUT_S overrides the per-call timeout for the
         # local backend. Default is generous (300s) to absorb cold-load
         # latency on large local models; lower it on fast hardware or when
