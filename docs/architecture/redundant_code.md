@@ -62,3 +62,40 @@ refactors with an explicit reason.
     `tests/unit/test_codex_auth_vault_backend.py` continues to run in
     CI. Behavior changes that affect this backend require updating
     those tests, the same as for any active backend.
+
+### `callosum.backends.litellm_gateway.LiteLLMGatewayBackend`
+
+  * **Active alternative**: `callosum.backends.local_direct.LocalModelRegistryBackend`,
+    which discovers local models via the `local-llm` CLI and
+    dispatches directly to per-model endpoints (responses-proxy
+    lanes on dedicated ports, ollama, vllm).
+  * **What this fallback provides**: routing local-cell traffic
+    through a LiteLLM gateway (a single OpenAI-compatible endpoint
+    that brokers across runtimes via its own config). The catalog
+    comes from the gateway's `/v1/models` rather than from the
+    `local-llm` registry, so this backend works without the
+    `local-llm` CLI on the operator's PATH.
+  * **When you'd activate it**: the `local-llm` CLI isn't
+    installed, or `LocalModelRegistrySource.is_available()` returns False
+    for any other reason (e.g., the CLI is broken, the registry is
+    corrupted). Activation is automatic — `__main__.py` registers
+    this backend whenever `LocalModelRegistryBackend` couldn't be
+    registered AND `CALLOSUM_LITELLM_GATEWAY_ENABLED=1` is set in
+    env. A startup `logger.warning` line surfaces the activation
+    so the operator knows the fallback is live.
+  * **Why it stays redundant rather than active**: the gateway has
+    a known limitation around chat-completions for upstream
+    runtimes that only natively serve `/v1/responses`
+    (`*-responses-proxy` model rows) — its chat-completions handler
+    hangs at the client timeout for those. `LocalModelRegistryBackend`
+    routes around the gateway entirely via per-model endpoints, so
+    it doesn't inherit the limitation. See
+    `docs/decisions/...-keep-litellmgatewaybackend-as-fallback...`
+    for the historical decision to keep the fallback rather than
+    retire it.
+  * **Maintenance contract**: every test in
+    `tests/unit/test_litellm_gateway.py` continues to run in CI.
+    The inline docstring in `LiteLLMGatewayBackend.chat_completions`
+    documents the known chat-completions hang for responses-only
+    runtimes; future operators who re-activate this backend will see
+    both the docstring and the startup warning.
