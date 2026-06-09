@@ -31,6 +31,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import time
 from typing import TYPE_CHECKING, Any
 
 from callosum.capability.runner import (
@@ -110,6 +111,28 @@ def _cells_to_harness(backends: list[Any]) -> list[tuple[Any, str]]:
     return out
 
 
+async def _backend_routable_now(backend: Any) -> bool:
+    """Mirror of app._routable_backends' per-backend check, scoped to the
+    harness's needs: return False when the backend is currently in
+    cooldown or weekly-exhausted, so we don't pile probes onto an
+    upstream that's already signaled it can't serve. Falls open
+    (returns True) on any read failure so a missing usage_snapshot
+    doesn't silently disable the harness."""
+    snapshot_fn = getattr(backend, "usage_snapshot", None)
+    if snapshot_fn is None:
+        return True
+    try:
+        snap = await snapshot_fn()
+    except Exception:
+        return True
+    if getattr(snap, "weekly_exhausted", False):
+        return False
+    cooldown_until = getattr(snap, "cooldown_until_ts", None)
+    if cooldown_until is not None and cooldown_until > time.time():
+        return False
+    return True
+
+
 async def run_harness_sweep(
     *,
     backends: list[Any],
@@ -125,6 +148,15 @@ async def run_harness_sweep(
     Harnesses run serially across cells to avoid GPU contention —
     two 31B-class harnesses in parallel would OOM most workstations.
 
+    Backends in cooldown are skipped on a per-sweep basis: when an
+    upstream lane is cold-loading or in transient failure, hammering
+    it with probes during the moment it's most fragile contributes
+    to the very degradation the harness is supposed to characterize.
+    The sweep will pick those cells back up on its next tick once the
+    backend stops reporting cooldown. (Observed 2026-06-09: a startup
+    sweep against unwarmed responses-proxy lanes contributed to a
+    1h+ block on B3.2 verification.)
+
     `weight_identity_provider` is forwarded to `run_dimensions` so each
     cell's profile gets stamped with stable identity for its underlying
     weights. None disables stamping (older callers, tests).
@@ -132,14 +164,33 @@ async def run_harness_sweep(
     todo = _cells_to_harness(backends)
     if not todo:
         return 0
+    # Cache per-backend routability so we don't re-snapshot for every
+    # cell on the same backend.
+    backend_routable: dict[str, bool] = {}
+    for backend, _cell in todo:
+        bid = getattr(backend, "id", "?")
+        if bid in backend_routable:
+            continue
+        backend_routable[bid] = await _backend_routable_now(backend)
+    skipped_cooldown = sum(
+        1 for backend, _ in todo
+        if not backend_routable.get(getattr(backend, "id", "?"), True)
+    )
+    if skipped_cooldown:
+        logger.info(
+            "capability harness sweep: %d cell(s) skipped — backend in cooldown",
+            skipped_cooldown,
+        )
     logger.info(
         "capability harness sweep: %d cell(s) eligible (per-dim TTL=%.0fs)",
-        len(todo),
+        len(todo) - skipped_cooldown,
         ttl_s,
     )
     total_dimensions_run = 0
     for backend, cell in todo:
         backend_id = getattr(backend, "id", "?")
+        if not backend_routable.get(backend_id, True):
+            continue
 
         async def _call(
             body: dict[str, Any], _backend: Any = backend
