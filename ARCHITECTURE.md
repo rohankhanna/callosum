@@ -23,16 +23,27 @@ For the product's purpose and intended outcome, see `The Project Documentation`.
         ┌─────────────────┼─────────────────────────┐
         ▼                 ▼                         ▼
   codex_auth_vault  LocalModelRegistryBackend       LiteLLMGatewayBackend
-   (remote: Codex)    (local: per-model         (local: LiteLLM
-    Plus/Pro vaults     endpoints via              gateway via
-    rotated by health,  local-llm CLI              local LLM gateway)
-    quota, cooldown)     discovery)
+   (remote: Codex)    (local, PREFERRED:        (local, FALLBACK:
+    Plus/Pro vaults     per-model endpoints       LiteLLM gateway —
+    rotated by health,  via local-llm CLI         registered only when
+    quota, cooldown)     discovery)               LocalModelRegistryBackend
+                                                  is NOT available)
         │                 │                         │
         ▼                 ▼                         ▼
    chatgpt.com       ollama / vllm / etc       LiteLLM proxy
    /backend-api      per-model endpoints       /v1/chat/completions
    /codex/responses
 ```
+
+The two local-cell backends (`LocalModelRegistryBackend`,
+`LiteLLMGatewayBackend`) are MUTUALLY EXCLUSIVE at registration
+time — they cannot both run in the same process. The preferred
+backend (`LocalModelRegistryBackend`) is registered whenever the
+`local-llm` CLI is on PATH; the gateway backend is registered as a
+fallback only when the CLI isn't installed. See
+`src/callosum/__main__.py` for the gating and
+`docs/decisions/...-keep-litellmgatewaybackend-as-fallback...`
+for the historical rationale.
 
 callosum runs loopback-only on a single operator's machine. It is
 not multi-tenant. Each request enters the proxy on
@@ -59,11 +70,15 @@ All paths are under `src/callosum/`.
   `callosum-ctl probe-tools`.
 - `backends/` — one module per backend kind. `codex_auth_vault.py`
   rotates Codex Plus/Pro `auth.json` vaults by health and quota.
-  `local_direct.py` (`LocalModelRegistryBackend`) discovers local models
-  via the `local-llm` CLI and dispatches per-model. `litellm_gateway.py`
-  (`LiteLLMGatewayBackend`) talks to a LiteLLM gateway as an
-  intermediate hop. `credential_proxy.py` is a thin adapter for the
-  legacy credential-proxy shape.
+  `local_direct.py` (`LocalModelRegistryBackend`) is the PREFERRED local
+  backend: discovers local models via the `local-llm` CLI and
+  dispatches to per-model endpoints (responses-proxy lanes, ollama
+  direct, vllm direct). `litellm_gateway.py` (`LiteLLMGatewayBackend`)
+  is the FALLBACK local backend, used only when the `local-llm` CLI
+  isn't on PATH; it talks to a LiteLLM gateway as an intermediate
+  hop. The two local backends are mutually exclusive at registration
+  time (see `__main__.py`). `credential_proxy.py` is a thin adapter
+  for the legacy credential-proxy shape.
 - `cell_grid.py` — the (model, reasoning_effort) cell taxonomy and
   the merger that produces the live cell pool from backend
   `advertised_models` and per-backend `model_metadata`.
