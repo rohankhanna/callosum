@@ -30,7 +30,7 @@ def _scenario_category_map() -> dict[str, str]:
         return {}
     battery = json.loads(BATTERY_PATH.read_text())
     out: dict[str, str] = {}
-    for cat in ("generic", "codex", "noteapp", "format", "stress"):
+    for cat in ("generic", "codex", "noteapp", "format", "stress", "multimodal"):
         for s in battery.get(cat, []):
             out[s["id"]] = cat
     return out
@@ -146,7 +146,7 @@ def render_markdown(
         lines.append(f"### `{model}`\n")
         lines.append("| Category | pass | incomplete | fail | error | skipped |")
         lines.append("|---|---:|---:|---:|---:|---:|")
-        for cat in ("generic", "codex", "noteapp", "format", "stress"):
+        for cat in ("generic", "codex", "noteapp", "format", "stress", "multimodal"):
             row = aggregates[model].get(cat, {})
             if not row:
                 continue

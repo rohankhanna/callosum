@@ -7,14 +7,21 @@ captures verbatim wire data plus a structured fitness summary.
 
 PATHS
 -----
-gateway          POST to the litellm gateway at $CALLOSUM_LITELLM_GATEWAY_URL
-                 (chat-completions; only works for gateway-served models)
-proxy-direct     POST to the per-model dedicated proxy endpoint resolved
-                 from local LLM gateway's registry (responses-API; works for
-                 *-responses-proxy models)
-callosum-v1      POST to callosum's /v1/chat/completions or /v1/responses
-                 (path picked by the scenario's request_shape)
-callosum-codex   POST to callosum's /codex (responses-only)
+gateway                    POST to the litellm gateway at $CALLOSUM_LITELLM_GATEWAY_URL
+                           (chat-completions; only works for gateway-served models)
+proxy-direct               POST to the per-model dedicated proxy endpoint resolved
+                           from local LLM gateway's registry (responses-API; works for
+                           *-responses-proxy models)
+callosum-v1                POST to callosum's /v1/chat/completions or /v1/responses
+                           (path picked by the scenario's request_shape)
+callosum-codex             POST to callosum's /codex (responses-only)
+callosum-admin-cell-call   POST to callosum's /admin/cell-call targeting one cell
+                           explicitly. Bypasses the router (mode filter, denylist,
+                           capability filter) AND the response-transform pipeline.
+                           Verifies cell reachability + backend-level wiring
+                           through callosum's process WITHOUT requiring the
+                           operator to flip routing mode. Admin-token-gated.
+                           Non-stream only (admin endpoint doesn't stream).
 
 MODES
 -----
@@ -61,9 +68,35 @@ CALLOSUM_URL = os.environ.get(
 )
 ADMIN_TOKEN_PATH = Path("~/.config/callosum/admin_token").expanduser()
 
-PATHS = ("gateway", "proxy-direct", "callosum-v1", "callosum-codex")
+PATHS = (
+    "gateway",
+    "proxy-direct",
+    "callosum-v1",
+    "callosum-codex",
+    "callosum-admin-cell-call",
+)
 MODES = ("non_stream", "stream")
 TIMEOUT_S = 240.0
+
+# Per-capability model lists. Add a model slug here once it's verified to
+# support the capability — the runner consults this to gate
+# requires_capability-tagged scenarios. Empty default means the multimodal
+# (M) battery scenarios skip cleanly against the current routable pool
+# while staying ready for the day a vision-capable local model is
+# registered.
+MODEL_CAPABILITIES: dict[str, frozenset[str]] = {
+    # "<model-slug>": frozenset({"vision", "audio", ...}),
+}
+
+
+def _model_supports(model: str, capability: str) -> bool:
+    caps = MODEL_CAPABILITIES.get(model)
+    return bool(caps and capability in caps)
+
+
+# Override toggled by --ignore-capability-gate. When True, the gate inside
+# run_probe is bypassed and requires_capability scenarios run anyway.
+_FORCE_RUN_CAPABILITY_SCENARIOS: bool = False
 
 
 def _slugify(s: str) -> str:
@@ -265,6 +298,29 @@ def build_request_for_path(
         url = f"{CALLOSUM_URL}/codex"
         return url, body, headers
 
+    if path == "callosum-admin-cell-call":
+        # /admin/cell-call accepts {"model": ..., "body": <responses-API>} and
+        # targets one cell explicitly, bypassing the router AND the response-
+        # transform pipeline. Useful for verifying cell reachability through
+        # callosum's process without requiring an operator routing-mode flip.
+        admin_token = _admin_token()
+        if not admin_token:
+            raise RuntimeError(
+                "no admin token found at ~/.config/callosum/admin_token; "
+                "cannot drive /admin/cell-call"
+            )
+        headers["Authorization"] = f"Bearer {admin_token}"
+        # /admin/cell-call only speaks Responses; convert chat scenarios.
+        inner = body
+        if shape == "chat":
+            inner = _convert_chat_to_responses(body)
+        # Drop "model" from the inner body — the admin endpoint forces it
+        # to match the wrapper's `model` field.
+        inner = {k: v for k, v in inner.items() if k != "model"}
+        cell_body = {"model": model, "body": inner}
+        url = f"{CALLOSUM_URL}/admin/cell-call"
+        return url, cell_body, headers
+
     raise ValueError(f"unknown path: {path}")
 
 
@@ -277,6 +333,41 @@ def run_probe(
         OUTPUT_ROOT / _slugify(model) / scenario["id"] / f"{path}__{mode}"
     )
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # /admin/cell-call is non-stream only — the admin endpoint awaits the
+    # full response. Skip stream-mode rows for this path so the fitness
+    # analyzer doesn't count them as failures.
+    if path == "callosum-admin-cell-call" and mode == "stream":
+        meta = {
+            "scenario_id": scenario["id"],
+            "model": model,
+            "path": path,
+            "mode": mode,
+            "skipped_reason": "callosum-admin-cell-call is non-stream only",
+        }
+        (output_dir / "metadata.json").write_text(json.dumps(meta, indent=2))
+        return meta
+
+    # Capability gating: if the scenario declares a required capability
+    # (e.g. "vision") and the target model doesn't advertise it via
+    # MODEL_CAPABILITIES, mark the row skipped with a clean reason rather
+    # than attempting the request and producing a noisy failure. The
+    # scenarios stay defined and ready for the day a capable model is
+    # registered. Override with --ignore-capability-gate to force.
+    req_cap = scenario.get("requires_capability")
+    if req_cap and not _model_supports(model, req_cap) and not _FORCE_RUN_CAPABILITY_SCENARIOS:
+        meta = {
+            "scenario_id": scenario["id"],
+            "model": model,
+            "path": path,
+            "mode": mode,
+            "skipped_reason": (
+                f"model does not advertise {req_cap!r} capability "
+                f"(register in MODEL_CAPABILITIES to enable)"
+            ),
+        }
+        (output_dir / "metadata.json").write_text(json.dumps(meta, indent=2))
+        return meta
 
     try:
         url, body, headers = build_request_for_path(scenario, model, path)
@@ -355,6 +446,20 @@ def run_probe(
         except json.JSONDecodeError:
             parsed = None
 
+        # /admin/cell-call returns a wrapper:
+        #   {"status": "ok|error", "served_by": ..., "response": <upstream>, "error": ...}
+        # Unwrap it so the existing finish_reason / tool_calls extraction
+        # operates on the same shape it does for the other paths. Persist
+        # the wrapper metadata (served_by, wrapper_error) onto the row.
+        admin_served_by: str | None = None
+        admin_wrapper_error: str | None = None
+        if path == "callosum-admin-cell-call" and isinstance(parsed, dict):
+            admin_served_by = parsed.get("served_by")
+            admin_wrapper_error = parsed.get("error")
+            inner = parsed.get("response")
+            if isinstance(inner, dict):
+                parsed = inner
+
         finish_reason = None
         tool_calls_present = False
         content_preview = None
@@ -389,6 +494,9 @@ def run_probe(
             "tool_calls_present": tool_calls_present,
             "content_preview": content_preview,
         }
+        if path == "callosum-admin-cell-call":
+            meta_extra["admin_served_by"] = admin_served_by
+            meta_extra["admin_wrapper_error"] = admin_wrapper_error
 
     latency_ms = int((time.time() - t0) * 1000)
     meta = {
@@ -427,7 +535,28 @@ def main() -> int:
     )
     p.add_argument(
         "--category", default=None,
-        help="Filter by battery category (generic|codex|noteapp|format|stress)",
+        help="Filter by battery category (generic|codex|noteapp|format|stress|multimodal)",
+    )
+    p.add_argument(
+        "--ignore-capability-gate", action="store_true",
+        help=(
+            "Run requires_capability scenarios even against models that "
+            "don't advertise the capability (instead of marking skipped). "
+            "Useful for confirming the runner emits the right wire shape "
+            "even when no model can answer."
+        ),
+    )
+    p.add_argument(
+        "--flip-routing-to", default=None,
+        choices=["auto", "offline", "local-only", "remote-only"],
+        help=(
+            "Briefly flip callosum's routing mode to the given value for "
+            "the duration of this run, then restore the original on exit. "
+            "Required when probing local models via /v1/responses or /codex "
+            "while the operator's standing mode is remote-only. The restore "
+            "fires from a try/finally so it runs even if the probes raise. "
+            "Reads the admin token from ~/.config/callosum/admin_token."
+        ),
     )
     p.add_argument(
         "--list", action="store_true",
@@ -435,10 +564,13 @@ def main() -> int:
     )
     args = p.parse_args()
 
+    global _FORCE_RUN_CAPABILITY_SCENARIOS
+    _FORCE_RUN_CAPABILITY_SCENARIOS = bool(args.ignore_capability_gate)
+
     if not BATTERY_PATH.exists():
         sys.exit(f"battery not found at {BATTERY_PATH}")
     battery = json.loads(BATTERY_PATH.read_text())
-    categories = ("generic", "codex", "noteapp", "format", "stress")
+    categories = ("generic", "codex", "noteapp", "format", "stress", "multimodal")
     scenarios: list[dict] = []
     for cat in categories:
         if args.category and cat != args.category:
@@ -472,42 +604,95 @@ def main() -> int:
         return 0
 
     print(f"Probing models={len(models)} scenarios={len(scenarios)} paths={paths} mode={args.mode}")
+
+    # Routing-mode flip wrapper. Records current state up-front; restores
+    # in finally so an exception, KeyboardInterrupt, or normal exit all
+    # end with routing back to its original value.
+    original_routing: str | None = None
+    if args.flip_routing_to is not None:
+        admin_token = _admin_token()
+        if not admin_token:
+            sys.exit(
+                "no admin token at ~/.config/callosum/admin_token; cannot "
+                "perform --flip-routing-to"
+            )
+        headers = {"Authorization": f"Bearer {admin_token}"}
+        status, body, _ = _http_request(
+            "GET", f"{CALLOSUM_URL}/admin/routing", headers=headers,
+        )
+        if status != 200:
+            sys.exit(f"failed to GET /admin/routing: {status} {body[:200]!r}")
+        original_routing = json.loads(body).get("routing")
+        if not original_routing:
+            sys.exit(f"could not parse current routing from /admin/routing")
+        print(
+            f"Routing flip: current={original_routing!r}, "
+            f"flipping to {args.flip_routing_to!r}; will restore on exit"
+        )
+        status, body, _ = _http_request(
+            "POST", f"{CALLOSUM_URL}/admin/routing",
+            body={"routing": args.flip_routing_to}, headers=headers,
+        )
+        if status != 200:
+            sys.exit(
+                f"failed to flip routing to {args.flip_routing_to!r}: "
+                f"{status} {body[:200]!r}"
+            )
+
     summary: list[dict] = []
-    for model in models:
-        for scenario in scenarios:
-            # Pick modes
-            if args.mode == "scenario":
-                modes = scenario.get("modes", ["non_stream"])
-            elif args.mode == "all":
-                modes = list(MODES)
+    try:
+        for model in models:
+            for scenario in scenarios:
+                # Pick modes
+                if args.mode == "scenario":
+                    modes = scenario.get("modes", ["non_stream"])
+                elif args.mode == "all":
+                    modes = list(MODES)
+                else:
+                    modes = [args.mode]
+                for path in paths:
+                    for mode in modes:
+                        print(
+                            f"  {model[:40]:40s} :: {scenario['id']:35s} "
+                            f"path={path:14s} mode={mode:11s} ",
+                            end="", flush=True,
+                        )
+                        try:
+                            meta = run_probe(scenario, model, path=path, mode=mode)
+                            summary.append(meta)
+                            if "skipped_reason" in meta:
+                                print(f"SKIP: {meta['skipped_reason'][:80]}")
+                            else:
+                                tc = "tc" if meta.get("tool_calls_present") else ""
+                                print(
+                                    f"http={meta.get('http_status'):<3} "
+                                    f"finish={str(meta.get('finish_reason'))[:8]:8s} "
+                                    f"{meta.get('latency_ms'):>6}ms {tc}"
+                                )
+                        except Exception as exc:
+                            print(f"ERROR: {type(exc).__name__}: {str(exc)[:80]}")
+                            summary.append({
+                                "scenario_id": scenario["id"], "model": model,
+                                "path": path, "mode": mode,
+                                "error": f"{type(exc).__name__}: {exc}",
+                            })
+    finally:
+        if original_routing is not None:
+            admin_token = _admin_token()
+            headers = {"Authorization": f"Bearer {admin_token}"} if admin_token else {}
+            status, body, _ = _http_request(
+                "POST", f"{CALLOSUM_URL}/admin/routing",
+                body={"routing": original_routing}, headers=headers,
+            )
+            if status != 200:
+                print(
+                    f"\n!!! WARNING: failed to restore routing to "
+                    f"{original_routing!r}: {status} {body[:200]!r}. "
+                    f"Manually run: callosum-ctl routing set {original_routing}",
+                    file=sys.stderr,
+                )
             else:
-                modes = [args.mode]
-            for path in paths:
-                for mode in modes:
-                    print(
-                        f"  {model[:40]:40s} :: {scenario['id']:35s} "
-                        f"path={path:14s} mode={mode:11s} ",
-                        end="", flush=True,
-                    )
-                    try:
-                        meta = run_probe(scenario, model, path=path, mode=mode)
-                        summary.append(meta)
-                        if "skipped_reason" in meta:
-                            print(f"SKIP: {meta['skipped_reason'][:80]}")
-                        else:
-                            tc = "tc" if meta.get("tool_calls_present") else ""
-                            print(
-                                f"http={meta.get('http_status'):<3} "
-                                f"finish={str(meta.get('finish_reason'))[:8]:8s} "
-                                f"{meta.get('latency_ms'):>6}ms {tc}"
-                            )
-                    except Exception as exc:
-                        print(f"ERROR: {type(exc).__name__}: {str(exc)[:80]}")
-                        summary.append({
-                            "scenario_id": scenario["id"], "model": model,
-                            "path": path, "mode": mode,
-                            "error": f"{type(exc).__name__}: {exc}",
-                        })
+                print(f"Routing restored to {original_routing!r}")
 
     summary_path = OUTPUT_ROOT / "summary.json"
     summary_path.write_text(json.dumps(summary, indent=2))

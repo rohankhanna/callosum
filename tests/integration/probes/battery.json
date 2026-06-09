@@ -1,11 +1,13 @@
 {
-  "version": 2,
-  "description": "Black-box probing battery (B2 expansion). Each scenario is run against every routable local model; outputs are captured verbatim and used to build per-model fitness profiles. Categories cover model fundamentals (G), codex-specific patterns (C), a toy CLI app at various stages of construction (N), format-specific tests (F), and stress / size variations (S). Each scenario declares request_shape (chat or responses) and modes (which dispatch paths to exercise: non_stream, stream, or both).",
+  "version": 3,
+  "description": "Black-box probing battery (B3 expansion). Each scenario is run against every routable local model; outputs are captured verbatim and used to build per-model fitness profiles. Categories cover model fundamentals (G), codex-specific patterns (C), a toy CLI app at various stages of construction (N), format-specific tests (F), stress / size variations (S), and multimodal vision (M). Each scenario declares request_shape (chat or responses) and modes (which dispatch paths to exercise: non_stream, stream, or both). Scenarios may also declare requires_capability (e.g. \"vision\") so the runner can mark them skipped against models that don't advertise the required capability instead of attempting and producing noisy failures.",
   "shape_notes": {
     "chat": "OpenAI chat-completions shape: messages=[{role,content}], max_tokens. Hits /v1/chat/completions on the gateway.",
-    "responses": "OpenAI Responses-API shape: input=[{type:message,role,content:[{type:input_text,text}]}], max_output_tokens. Hits /v1/responses on per-model proxies and on callosum."
+    "responses": "OpenAI Responses-API shape: input=[{type:message,role,content:[{type:input_text,text}]}], max_output_tokens. Hits /v1/responses on per-model proxies and on callosum.",
+    "responses-with-image": "Same as responses but content items may include {type:input_image, image_url:'data:image/png;base64,...'} alongside {type:input_text, text:...} entries."
   },
   "noteapp_context": "Hypothetical personal note-taking CLI. Used to anchor codex-style prompts in something that feels like real dev work without needing captured user traffic. Scenarios reference parse_args, list/add/delete subcommands, JSON output, tests, debugging, etc.",
+  "multimodal_context": "Multimodal scenarios (M-category) test the Responses-API image-input path. Images are tiny 16x16 PNGs encoded inline as base64 data URLs so the scenarios are self-contained and reproducible. Every M-scenario declares requires_capability: vision so the runner can skip them against models that don't advertise vision. The scenarios are deliberately written to be useful even when ALL routable models lack vision support — they verify the request-side wire format end-to-end and remain ready for the day a vision-capable local model is registered.",
   "generic": [
     {
       "id": "G1-terminate-smoke",
@@ -1236,6 +1238,239 @@
         "temperature": 0
       },
       "expectations": ["many delta events", "[DONE] terminator"]
+    }
+  ],
+  "multimodal": [
+    {
+      "id": "M1-color-red",
+      "description": "Single-color image (red 16x16). Most basic vision check: identify the dominant color.",
+      "request_shape": "responses",
+      "modes": ["non_stream"],
+      "requires_capability": "vision",
+      "request": {
+        "input": [
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {"type": "input_text", "text": "What color is this image? Answer with one word."},
+              {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAF0lEQVR4nGP4z8BAEiJN9aiGUQ1DSgMAkPn/Afnh+ngAAAAASUVORK5CYII="}
+            ]
+          }
+        ],
+        "max_output_tokens": 30,
+        "temperature": 0
+      },
+      "expectations": ["content matches /red/i", "finish_reason in {stop, completed}"]
+    },
+    {
+      "id": "M2-color-green",
+      "description": "Single-color image (green 16x16). Color-identification consistency check.",
+      "request_shape": "responses",
+      "modes": ["non_stream"],
+      "requires_capability": "vision",
+      "request": {
+        "input": [
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {"type": "input_text", "text": "What color is this image? Answer with one word."},
+              {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFUlEQVR4nGNgOMFAGhrVMKph+GoAAFT+yAEpVwiXAAAAAElFTkSuQmCC"}
+            ]
+          }
+        ],
+        "max_output_tokens": 30,
+        "temperature": 0
+      },
+      "expectations": ["content matches /green/i", "finish_reason in {stop, completed}"]
+    },
+    {
+      "id": "M3-color-blue",
+      "description": "Single-color image (blue 16x16). Color-identification consistency check.",
+      "request_shape": "responses",
+      "modes": ["non_stream"],
+      "requires_capability": "vision",
+      "request": {
+        "input": [
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {"type": "input_text", "text": "What color is this image? Answer with one word."},
+              {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFUlEQVR4nGNgYPhPIhrVMKph2GoAAJLb/wFh5Z4RAAAAAElFTkSuQmCC"}
+            ]
+          }
+        ],
+        "max_output_tokens": 30,
+        "temperature": 0
+      },
+      "expectations": ["content matches /blue/i", "finish_reason in {stop, completed}"]
+    },
+    {
+      "id": "M4-color-white",
+      "description": "White image — tests handling of low-information visual input.",
+      "request_shape": "responses",
+      "modes": ["non_stream"],
+      "requires_capability": "vision",
+      "request": {
+        "input": [
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {"type": "input_text", "text": "What color is this image? Answer with one word."},
+              {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFElEQVR4nGP4TyJgGNUwqmH4agAAr639H708R/EAAAAASUVORK5CYII="}
+            ]
+          }
+        ],
+        "max_output_tokens": 30,
+        "temperature": 0
+      },
+      "expectations": ["content matches /white/i", "finish_reason in {stop, completed}"]
+    },
+    {
+      "id": "M5-color-black",
+      "description": "Black image — symmetric low-information check vs M4.",
+      "request_shape": "responses",
+      "modes": ["non_stream"],
+      "requires_capability": "vision",
+      "request": {
+        "input": [
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {"type": "input_text", "text": "What color is this image? Answer with one word."},
+              {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAEElEQVR4nGNgGAWjYBTAAAADEAABPywr7AAAAABJRU5ErkJggg=="}
+            ]
+          }
+        ],
+        "max_output_tokens": 30,
+        "temperature": 0
+      },
+      "expectations": ["content matches /black/i", "finish_reason in {stop, completed}"]
+    },
+    {
+      "id": "M6-bi-color-arrangement",
+      "description": "Two-color image: red on top, blue on bottom. Tests spatial reasoning over a small image.",
+      "request_shape": "responses",
+      "modes": ["non_stream"],
+      "requires_capability": "vision",
+      "request": {
+        "input": [
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {"type": "input_text", "text": "Describe the colors and their arrangement in this image. Keep it to one sentence."},
+              {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAGklEQVR4nGP4z8BAEiJN9agGYjUMSkeNPA0Aker/AYCSZqUAAAAASUVORK5CYII="}
+            ]
+          }
+        ],
+        "max_output_tokens": 100,
+        "temperature": 0
+      },
+      "expectations": ["content mentions red AND blue", "finish_reason in {stop, completed}"]
+    },
+    {
+      "id": "M7-vision-open-ended",
+      "description": "Open-ended description prompt; tests whether the model produces SOMETHING on the vision path without restrictive output constraints.",
+      "request_shape": "responses",
+      "modes": ["non_stream"],
+      "requires_capability": "vision",
+      "request": {
+        "input": [
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {"type": "input_text", "text": "Describe this image in 1-2 sentences."},
+              {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAF0lEQVR4nGP4z8BAEiJN9aiGUQ1DSgMAkPn/Afnh+ngAAAAASUVORK5CYII="}
+            ]
+          }
+        ],
+        "max_output_tokens": 100,
+        "temperature": 0
+      },
+      "expectations": ["non-empty content", "finish_reason in {stop, completed}"]
+    },
+    {
+      "id": "M8-vision-structured-output",
+      "description": "Forces a JSON-shape response with a color field; tests vision + structured output together.",
+      "request_shape": "responses",
+      "modes": ["non_stream"],
+      "requires_capability": "vision",
+      "request": {
+        "input": [
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {"type": "input_text", "text": "Respond with a JSON object only: {\"color\": \"<the color you see>\"}. No prose."},
+              {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFUlEQVR4nGNgOMFAGhrVMKph+GoAAFT+yAEpVwiXAAAAAElFTkSuQmCC"}
+            ]
+          }
+        ],
+        "max_output_tokens": 50,
+        "temperature": 0
+      },
+      "expectations": ["content parses as JSON", "JSON contains color field"]
+    },
+    {
+      "id": "M9-vision-two-images",
+      "description": "Two image inputs in one message. Tests multi-image handling.",
+      "request_shape": "responses",
+      "modes": ["non_stream"],
+      "requires_capability": "vision",
+      "request": {
+        "input": [
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {"type": "input_text", "text": "What colors do you see in these two images? Answer with two words separated by a comma."},
+              {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAF0lEQVR4nGP4z8BAEiJN9aiGUQ1DSgMAkPn/Afnh+ngAAAAASUVORK5CYII="},
+              {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFUlEQVR4nGNgYPhPIhrVMKph2GoAAJLb/wFh5Z4RAAAAAElFTkSuQmCC"}
+            ]
+          }
+        ],
+        "max_output_tokens": 30,
+        "temperature": 0
+      },
+      "expectations": ["content mentions both red AND blue", "finish_reason in {stop, completed}"]
+    },
+    {
+      "id": "M10-vision-multi-turn",
+      "description": "Three-message dialogue with an image in the first user message. Tests that vision context is preserved across turns.",
+      "request_shape": "responses",
+      "modes": ["non_stream"],
+      "requires_capability": "vision",
+      "request": {
+        "input": [
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {"type": "input_text", "text": "I'm going to show you an image."},
+              {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAEElEQVR4nGNgGAWjYBTAAAADEAABPywr7AAAAABJRU5ErkJggg=="}
+            ]
+          },
+          {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "OK, I see the image."}]
+          },
+          {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "What color was the image I just showed you? One word."}]
+          }
+        ],
+        "max_output_tokens": 30,
+        "temperature": 0
+      },
+      "expectations": ["content matches /black/i", "finish_reason in {stop, completed}"]
     }
   ]
 }
