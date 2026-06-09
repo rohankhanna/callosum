@@ -67,7 +67,7 @@ All paths are under `src/callosum/`.
   picks one cell from the predicted-and-scored candidate set
   (cost-weighted today). `router.py` orchestrates the pipeline.
   `probe.py` provides a tool-call verification probe used by
-  `callosum-ctl probe-tools`.
+  `callosum probe-tools` (or the legacy `callosum-ctl probe-tools` alias).
 - `backends/` — one module per backend kind. `codex_auth_vault.py`
   rotates Codex Plus/Pro `auth.json` vaults by health and quota.
   `local_direct.py` (`LocalModelRegistryBackend`) is the PREFERRED local
@@ -86,11 +86,18 @@ All paths are under `src/callosum/`.
   decisions: per-cell inference-param overrides, cell denylist,
   routing mode (`auto` / `offline` / `local-only` / `remote-only`).
 - `admin.py` — `/admin/*` HTTP surface, gated by an admin token under
-  `~/.config/callosum/admin_token`. The `callosum-ctl` CLI talks to
-  these endpoints to read and modify operator state without
-  restarting the proxy.
-- `cli.py` — `callosum-ctl` itself: a thin client over the admin
-  endpoints (status, params, denylist, mode, probe-tools).
+  `~/.config/callosum/admin_token`. The unified `callosum` CLI's
+  admin subcommands (`callosum status`, `callosum routing get|set`,
+  etc.) call these endpoints to read and modify operator state
+  without restarting the proxy.
+- `cli.py` — the unified `callosum` CLI entry point. Hosts both
+  `callosum serve` (which delegates to `__main__.serve_with_args`
+  to start the daemon) and the admin subcommands (status, params,
+  denylist, routing, autonomy, retention, self-assessment,
+  probe-tools, auth-rotate). Bare `callosum` and missing-subcommand
+  invocations print the relevant `--help` to stderr and exit 2.
+  `callosum-ctl` is preserved as a backwards-compatible alias
+  pointing at the same `main()` function.
 - `usage_log.py` — SQLite request log. Every request lands here as
   a row in the `requests` table with request and response payloads,
   status, latency, and tokens.
