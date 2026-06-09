@@ -128,9 +128,7 @@ async def _backend_routable_now(backend: Any) -> bool:
     if getattr(snap, "weekly_exhausted", False):
         return False
     cooldown_until = getattr(snap, "cooldown_until_ts", None)
-    if cooldown_until is not None and cooldown_until > time.time():
-        return False
-    return True
+    return cooldown_until is None or cooldown_until <= time.time()
 
 
 async def run_harness_sweep(

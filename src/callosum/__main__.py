@@ -175,7 +175,7 @@ def main() -> None:
         # known limitation before debugging mysterious 240s hangs. See
         # the LiteLLMGatewayBackend.chat_completions docstring for the
         # detailed mechanism.
-        logger.warning(
+        logging.getLogger("callosum.startup").warning(
             "LiteLLMGatewayBackend registered as local-llm fallback. "
             "Known limitation: chat-completions hangs for any model whose "
             "upstream runtime is a responses-only proxy (-responses-proxy "
