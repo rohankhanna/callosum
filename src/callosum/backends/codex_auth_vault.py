@@ -788,6 +788,39 @@ def _content_as_text(content: Any) -> str:
     return ""
 
 
+def _responses_to_chat_finish_reason(payload: dict[str, Any]) -> str:
+    """Map a Responses-API payload's `status` (+ incomplete_details.reason)
+    into the chat-completions `finish_reason` field. Without this mapping
+    the chat shell silently reports 'stop' for truncated responses,
+    masking budget-eaten generations as natural completions —
+    misleading for clients that distinguish 'stop' from 'length'
+    (Codex CLI, fitness analyzers, anything counting completed-vs-
+    cut-off rates).
+
+    Mapping:
+      status == 'completed'                          -> 'stop'
+      status == 'incomplete' + max_output_tokens     -> 'length'
+      status == 'incomplete' + content_filter        -> 'content_filter'
+      status == 'incomplete' + (other or missing)    -> 'length'
+      status == 'failed' / anything unexpected       -> 'stop'
+
+    'stop' is the safest unknown-case default because Codex CLI's
+    retry behavior on it is benign; mapping unknowns to 'length' would
+    cause spurious "truncated" framing in client UIs.
+    """
+    status = payload.get("status")
+    if status == "incomplete":
+        details = payload.get("incomplete_details") or {}
+        reason = details.get("reason") if isinstance(details, dict) else None
+        if reason == "content_filter":
+            return "content_filter"
+        # max_output_tokens or any other / missing reason: budget truncation
+        return "length"
+    if status == "completed":
+        return "stop"
+    return "stop"
+
+
 def _responses_to_chat_response(payload: dict[str, Any], *, model: str) -> dict[str, Any]:
     text_parts: list[str] = []
     output = payload.get("output")
@@ -816,7 +849,7 @@ def _responses_to_chat_response(payload: dict[str, Any], *, model: str) -> dict[
             {
                 "index": 0,
                 "message": {"role": "assistant", "content": content},
-                "finish_reason": "stop",
+                "finish_reason": _responses_to_chat_finish_reason(payload),
             }
         ],
     }

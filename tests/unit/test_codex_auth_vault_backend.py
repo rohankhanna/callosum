@@ -12,6 +12,8 @@ from callosum.backends.codex_auth_vault import (
     _DEFAULT_CLIENT_VERSION,
     CodexAuthVaultBackend,
     _resolve_codex_client_version,
+    _responses_to_chat_finish_reason,
+    _responses_to_chat_response,
 )
 from callosum.codex_quota import CodexQuotaSnapshot
 from callosum.errors import BackendError
@@ -1124,3 +1126,85 @@ async def test_cell_capabilities_falls_back_to_codex_defaults(tmp_path: Path) ->
         assert caps.cost_rank == 10
     finally:
         await backend.aclose()
+
+
+# ---------- finish_reason translation ----------------------------------
+
+
+def test_responses_to_chat_finish_reason_completed_maps_to_stop() -> None:
+    assert _responses_to_chat_finish_reason({"status": "completed"}) == "stop"
+
+
+def test_responses_to_chat_finish_reason_incomplete_max_tokens_maps_to_length() -> None:
+    payload = {
+        "status": "incomplete",
+        "incomplete_details": {"reason": "max_output_tokens"},
+    }
+    assert _responses_to_chat_finish_reason(payload) == "length"
+
+
+def test_responses_to_chat_finish_reason_incomplete_content_filter() -> None:
+    payload = {
+        "status": "incomplete",
+        "incomplete_details": {"reason": "content_filter"},
+    }
+    assert _responses_to_chat_finish_reason(payload) == "content_filter"
+
+
+def test_responses_to_chat_finish_reason_incomplete_without_details_maps_to_length() -> None:
+    """Truncation occurred but the upstream didn't say why. Safer to
+    surface 'length' than to silently report 'stop' — clients use the
+    distinction to decide whether the response is reliable."""
+    assert _responses_to_chat_finish_reason({"status": "incomplete"}) == "length"
+
+
+def test_responses_to_chat_finish_reason_unknown_status_falls_back_to_stop() -> None:
+    """Unknown/missing status: 'stop' is the safest default. Mapping
+    unknowns to 'length' would cause spurious 'truncated' framing in
+    client UIs."""
+    assert _responses_to_chat_finish_reason({}) == "stop"
+    assert _responses_to_chat_finish_reason({"status": "failed"}) == "stop"
+
+
+def test_responses_to_chat_response_propagates_length_finish_reason() -> None:
+    """The bug this fix addresses: a budget-eaten response (status
+    incomplete + max_output_tokens) was reported with finish_reason
+    'stop' in the chat-completions translation, masking the
+    truncation. Verifies the helper now plumbs the right value
+    end-to-end."""
+    payload = {
+        "id": "resp_abc",
+        "model": "model-a0a6",
+        "status": "incomplete",
+        "incomplete_details": {"reason": "max_output_tokens"},
+        "output": [
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": "partial"}],
+            }
+        ],
+        "usage": {
+            "input_tokens": 10,
+            "output_tokens": 100,
+            "total_tokens": 110,
+        },
+    }
+    chat = _responses_to_chat_response(payload, model="model-a0a6")
+    assert chat["choices"][0]["finish_reason"] == "length"
+    assert chat["choices"][0]["message"]["content"] == "partial"
+
+
+def test_responses_to_chat_response_preserves_completed_as_stop() -> None:
+    payload = {
+        "id": "resp_xyz",
+        "model": "model-a0e8",
+        "status": "completed",
+        "output": [
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": "done."}],
+            }
+        ],
+    }
+    chat = _responses_to_chat_response(payload, model="model-a0e8")
+    assert chat["choices"][0]["finish_reason"] == "stop"
