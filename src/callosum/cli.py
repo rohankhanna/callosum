@@ -293,12 +293,81 @@ def cmd_probe_tools(args: argparse.Namespace) -> int:
 # ---------- parser -----------------------------------------------------
 
 
+class _HelpOnErrorParser(argparse.ArgumentParser):
+    """ArgumentParser variant that prints --help BEFORE emitting the
+    error message and exiting non-zero.
+
+    Default argparse behavior on a missing subcommand or an unknown
+    argument is to print the usage one-liner + the error and exit. That
+    leaves operators staring at "argument command: required" with no
+    indication of what valid subcommands exist. This subclass prints the
+    full help text on every error path so the recovery hint is always
+    present alongside the error.
+
+    The `add_subparsers` override propagates the class to nested
+    subparsers automatically — without it, only the top-level parser
+    would inherit the behavior and inner `routing` / `denylist` /
+    `autonomy` / etc. would revert to argparse defaults.
+    """
+
+    def error(self, message: str) -> None:  # type: ignore[override]
+        self.print_help(sys.stderr)
+        sys.stderr.write(f"\nerror: {message}\n")
+        sys.exit(2)
+
+    def add_subparsers(self, **kwargs: Any) -> Any:
+        kwargs.setdefault("parser_class", _HelpOnErrorParser)
+        return super().add_subparsers(**kwargs)
+
+
+def _cmd_serve(args: argparse.Namespace) -> int:
+    """Dispatch the `callosum serve` subcommand: start the proxy
+    daemon. Delegates to the server-startup function in __main__.py.
+    The systemd unit that runs the daemon should call this as
+    `callosum serve`; bare `callosum` is now reserved for the unified
+    help surface.
+    """
+    from callosum.__main__ import serve_with_args
+    serve_with_args(args)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _HelpOnErrorParser(
         prog="callosum",
-        description="Operator commands for a running callosum proxy.",
+        description=(
+            "Callosum proxy CLI. `callosum serve` starts the daemon; "
+            "the other subcommands administer a running instance "
+            "(status, routing mode, denylist, autonomy ladder, "
+            "retention, self-assessment, capability probing, "
+            "auth-vault rotation)."
+        ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
+
+    p_serve = sub.add_parser(
+        "serve",
+        help="Start the callosum proxy daemon (FastAPI + uvicorn). "
+             "Loads config, opens backends, binds the configured port.",
+        description=(
+            "Start the callosum proxy daemon (FastAPI + uvicorn). "
+            "Loads config from ~/.config/callosum/config.toml (or "
+            "--config), wires backends, and serves /v1/responses, "
+            "/v1/chat/completions, /codex, /admin/*, /events/routing "
+            "on the configured host:port. The systemd unit that runs "
+            "the daemon should invoke `callosum serve`."
+        ),
+    )
+    from pathlib import Path as _Path
+    p_serve.add_argument(
+        "--config",
+        type=_Path,
+        default=None,
+        help="Path to config.toml (default: ~/.config/callosum/config.toml).",
+    )
+    p_serve.add_argument("--host", default=None, help="Override [server].host from config.")
+    p_serve.add_argument("--port", type=int, default=None, help="Override [server].port from config.")
+    p_serve.set_defaults(func=_cmd_serve)
 
     sub.add_parser("status", help="Print a consolidated operator-state snapshot.").set_defaults(func=cmd_status)
 

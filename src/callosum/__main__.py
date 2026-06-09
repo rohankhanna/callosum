@@ -26,10 +26,10 @@ def _default_config_path() -> Path:
     return Path("~/.config/callosum/config.toml").expanduser()
 
 
-def main() -> None:
-    # Ensure our `callosum.startup` logger emits INFO + WARNING to stdout.
-    # Without this, the root logger defaults to WARNING and the smoke-test
-    # OK/SKIPPED lines get silently dropped — operator only sees FAILED.
+def _configure_logging() -> None:
+    """Wire the startup logger and UTC-timestamped root logger. Called
+    by both the legacy `main()` entry and the new `serve_with_args()`
+    helper so log formatting stays consistent across both code paths."""
     logging.getLogger("callosum.startup").setLevel(logging.INFO)
     if not logging.getLogger().handlers:
         # Use UTC timestamps in ISO 8601 format per control plane compliance
@@ -41,6 +41,38 @@ def main() -> None:
         # Convert to UTC
         logging.Formatter.converter = lambda *args: datetime.now(UTC).timetuple()
 
+
+def serve_with_args(args: argparse.Namespace) -> None:
+    """Start the proxy daemon using pre-parsed CLI args.
+
+    This is the public entry the unified `callosum serve` subcommand
+    in `callosum.cli` calls into. The arg shape expected:
+        args.config: Path | None  (None → use _default_config_path())
+        args.host:   str  | None
+        args.port:   int  | None
+
+    Kept distinct from main() so the cli.py subcommand doesn't have to
+    duplicate argparse setup — it parses its own args and hands the
+    Namespace to this function.
+    """
+    _configure_logging()
+    config_path = args.config if args.config is not None else _default_config_path()
+    if not config_path.exists():
+        # Mirror argparse.error's behavior — write to stderr and exit non-zero.
+        import sys as _sys
+        _sys.stderr.write(f"error: config not found: {config_path}\n")
+        _sys.exit(2)
+    _run_server(config_path, args.host, args.port)
+
+
+def main() -> None:
+    """Legacy entry: bare `callosum` once started the daemon directly.
+    Preserved so `python -m callosum` continues to work as a server
+    invocation. The unified `callosum` CLI entry point now lives in
+    `callosum.cli:main` — see that module's docstring.
+    """
+    _configure_logging()
+
     parser = argparse.ArgumentParser(prog="callosum")
     parser.add_argument("--config", type=Path, default=_default_config_path())
     parser.add_argument("--host", default=None)
@@ -49,13 +81,22 @@ def main() -> None:
 
     if not args.config.exists():
         parser.error(f"config not found: {args.config}")
+    _run_server(args.config, args.host, args.port)
 
-    cfg = load_config(args.config)
+
+def _run_server(config_path: Path, host: str | None, port: int | None) -> None:
+    """Core server startup. Extracted from main() so both the legacy
+    entry and the new `serve_with_args()` helper share one
+    implementation."""
+
+    cfg = load_config(config_path)
     # Operator-state DB: persistent runtime knobs the CLI manages
     # (inference-param overrides today; denylist + mode + priority in
     # later steps). Lives alongside auth.sqlite under state.dir.
     if cfg.state.dir is None:
-        parser.error("config.state.dir must be set")
+        import sys as _sys
+        _sys.stderr.write("error: config.state.dir must be set\n")
+        _sys.exit(2)
     operator_state = OperatorState(cfg.state.dir / "operator_state.sqlite")
     # Earned-autonomy ladder (Tier A). First-run seeds at L1_MANUAL;
     # subsequent runs reuse the persisted level. Lives alongside
@@ -193,8 +234,8 @@ def main() -> None:
             AuthDB(cfg.auth.db),
             session_ttl_seconds=cfg.auth.session_ttl_seconds,
         )
-    host = args.host if args.host is not None else cfg.server.host
-    port = args.port if args.port is not None else cfg.server.port
+    host = host if host is not None else cfg.server.host
+    port = port if port is not None else cfg.server.port
 
     # Use uvicorn's signal handling configuration and explicitly set to allow shutdown
     uvicorn.run(

@@ -23,7 +23,15 @@ embeddings = [
 ]
 
 [project.scripts]
-callosum = "callosum.__main__:main"
+# Unified `callosum` CLI: server + admin in one entry point.
+# `callosum serve` starts the proxy daemon; `callosum status` / routing /
+# denylist / autonomy / etc. administer a running instance. Bare
+# `callosum` prints the full help surface and exits non-zero.
+callosum = "callosum.cli:main"
+# `callosum-ctl` retained as a backwards-compat alias for the same
+# unified CLI. The cron wrappers and operator muscle memory built
+# around `callosum-ctl <subcommand>` continue to work; remove the
+# alias once those callers have migrated.
 callosum-ctl = "callosum.cli:main"
 callosum-dev-loop = "callosum.dev_loop.cli:main"
 callosum-embed-backfill = "callosum.jobs.embed_backfill:main"
