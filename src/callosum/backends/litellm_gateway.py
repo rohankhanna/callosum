@@ -199,6 +199,26 @@ class LiteLLMGatewayBackend:
         out_body = self._apply_inference_params(
             _strip_codex_only_fields({**body, "stream": False})
         )
+        # KNOWN LIMITATION (2026-06-09): the LiteLLM gateway's chat-
+        # completions hangs indefinitely for certain advertised models
+        # whose upstream runtime is a responses-only proxy (model entries
+        # with `-responses-proxy` suffix). The gateway's catalog reports
+        # them via /v1/models but its chat-completions handler has no
+        # working translation for them, so the POST below sits open until
+        # the httpx client timeout fires. LocalModelRegistryBackend works around
+        # this by translating chat→responses in-process; this backend
+        # cannot do the same locally because it doesn't know which gateway
+        # path actually serves each model.
+        #
+        # In the current deployment topology this is dead code:
+        # __main__.py registers LiteLLMGatewayBackend ONLY when
+        # LocalModelRegistryBackend is unavailable. If a future config re-enables
+        # this backend alongside or instead of LocalModelRegistryBackend, the
+        # symptom will be chat requests that hang at client timeout for
+        # any `-responses-proxy` model. Fix shape (deferred): translate
+        # chat→responses in-process when the model name patterns
+        # responses-only, or probe each cataloged model at registration
+        # and drop the ones whose chat path doesn't respond.
         try:
             response = await self._client.post(
                 f"{self._base_url}/v1/chat/completions",

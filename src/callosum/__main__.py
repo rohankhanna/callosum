@@ -162,6 +162,18 @@ def main() -> None:
         if litellm_timeout is not None:
             backend_kwargs["timeout_s"] = litellm_timeout
         backends.append(LiteLLMGatewayBackend(**backend_kwargs))  # type: ignore[arg-type]
+        # Surfacing a startup warning so a future operator who re-enables
+        # this fallback (e.g. by disabling LocalModelRegistryBackend) sees the
+        # known limitation before debugging mysterious 240s hangs. See
+        # the LiteLLMGatewayBackend.chat_completions docstring for the
+        # detailed mechanism.
+        logger.warning(
+            "LiteLLMGatewayBackend registered as local-llm fallback. "
+            "Known limitation: chat-completions hangs for any model whose "
+            "upstream runtime is a responses-only proxy (-responses-proxy "
+            "entries). Prefer LocalModelRegistryBackend (auto-registered when the "
+            "`local-llm` CLI is on PATH) for production use."
+        )
     usage_log = (
         UsageLog(cfg.usage_log.path, capture_bodies=cfg.usage_log.capture_bodies)
         if cfg.usage_log.path is not None
