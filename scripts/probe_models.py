@@ -47,8 +47,10 @@ idempotent — re-running overwrites prior captures for that
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -521,6 +523,65 @@ def run_probe(
     return meta
 
 
+# Routing-restore guards. When --flip-routing-to is in effect, these
+# module-level pieces ensure that the original routing mode is restored
+# from EVERY exit path: normal completion (try/finally), an exception
+# (try/finally), a SystemExit raised by code (atexit), Ctrl-C (signal
+# handler converts SIGINT to SystemExit), and external SIGTERM (signal
+# handler does the same). Without this, a SIGTERM mid-run leaves the
+# operator's routing on whatever value we flipped to.
+_RESTORE_TARGET: str | None = None
+_RESTORE_DONE: bool = False
+
+
+def _restore_routing() -> None:
+    """Idempotent restore. Safe to call multiple times — the flag
+    prevents double-restore even if atexit + try/finally + signal
+    handler all fire on the same exit path."""
+    global _RESTORE_DONE
+    if _RESTORE_DONE or _RESTORE_TARGET is None:
+        return
+    _RESTORE_DONE = True
+    admin_token = _admin_token()
+    headers = {"Authorization": f"Bearer {admin_token}"} if admin_token else {}
+    try:
+        status, body, _ = _http_request(
+            "POST",
+            f"{CALLOSUM_URL}/admin/routing",
+            body={"routing": _RESTORE_TARGET},
+            headers=headers,
+        )
+    except Exception as exc:
+        print(
+            f"\n!!! ERROR restoring routing to {_RESTORE_TARGET!r}: "
+            f"{type(exc).__name__}: {exc}. "
+            f"Manually run: callosum-ctl routing set {_RESTORE_TARGET}",
+            file=sys.stderr,
+        )
+        return
+    if status != 200:
+        print(
+            f"\n!!! WARNING: failed to restore routing to "
+            f"{_RESTORE_TARGET!r}: {status} {body[:200]!r}. "
+            f"Manually run: callosum-ctl routing set {_RESTORE_TARGET}",
+            file=sys.stderr,
+        )
+    else:
+        print(f"Routing restored to {_RESTORE_TARGET!r}")
+
+
+def _restore_signal_handler(signum: int, frame: object) -> None:
+    """Convert SIGTERM/SIGINT into a SystemExit so the cleanup chain
+    (atexit + finally) runs. Without this, default SIGTERM behavior
+    silently terminates Python and leaves the routing flip stuck."""
+    print(
+        f"\n!!! Received signal {signum}; restoring routing before exit",
+        file=sys.stderr,
+    )
+    _restore_routing()
+    sys.exit(128 + signum)
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--scenario", default=None, help="Filter to one scenario id.")
@@ -605,9 +666,9 @@ def main() -> int:
 
     print(f"Probing models={len(models)} scenarios={len(scenarios)} paths={paths} mode={args.mode}")
 
-    # Routing-mode flip wrapper. Records current state up-front; restores
-    # in finally so an exception, KeyboardInterrupt, or normal exit all
-    # end with routing back to its original value.
+    # Routing-mode flip wrapper. Records current state up-front, then
+    # arms the signal/atexit guards BEFORE the flip POST so the cleanup
+    # chain is in place even if the POST itself is interrupted.
     original_routing: str | None = None
     if args.flip_routing_to is not None:
         admin_token = _admin_token()
@@ -625,6 +686,16 @@ def main() -> int:
         original_routing = json.loads(body).get("routing")
         if not original_routing:
             sys.exit(f"could not parse current routing from /admin/routing")
+        # Arm the guards as soon as we know what to restore to. Pre-flip
+        # arming means a signal between this point and the POST still
+        # results in the right restore target being committed (an
+        # idempotent re-POST of the original value if the flip already
+        # landed on the server, a no-op if it didn't).
+        global _RESTORE_TARGET
+        _RESTORE_TARGET = original_routing
+        atexit.register(_restore_routing)
+        signal.signal(signal.SIGTERM, _restore_signal_handler)
+        signal.signal(signal.SIGINT, _restore_signal_handler)
         print(
             f"Routing flip: current={original_routing!r}, "
             f"flipping to {args.flip_routing_to!r}; will restore on exit"
@@ -677,22 +748,9 @@ def main() -> int:
                                 "error": f"{type(exc).__name__}: {exc}",
                             })
     finally:
-        if original_routing is not None:
-            admin_token = _admin_token()
-            headers = {"Authorization": f"Bearer {admin_token}"} if admin_token else {}
-            status, body, _ = _http_request(
-                "POST", f"{CALLOSUM_URL}/admin/routing",
-                body={"routing": original_routing}, headers=headers,
-            )
-            if status != 200:
-                print(
-                    f"\n!!! WARNING: failed to restore routing to "
-                    f"{original_routing!r}: {status} {body[:200]!r}. "
-                    f"Manually run: callosum-ctl routing set {original_routing}",
-                    file=sys.stderr,
-                )
-            else:
-                print(f"Routing restored to {original_routing!r}")
+        # Delegated to _restore_routing(). The _RESTORE_DONE flag means
+        # this is a no-op if the signal handler or atexit already ran.
+        _restore_routing()
 
     summary_path = OUTPUT_ROOT / "summary.json"
     summary_path.write_text(json.dumps(summary, indent=2))
