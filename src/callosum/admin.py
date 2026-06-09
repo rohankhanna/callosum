@@ -584,6 +584,9 @@ def _dataclass_to_dict(obj: Any) -> dict[str, Any]:
     of the AssessmentMetrics / AssessmentDecision types (which contain
     only JSON-friendly primitives)."""
     from dataclasses import asdict, is_dataclass
-    if is_dataclass(obj):
+    # is_dataclass() is True for both instances AND classes; asdict()
+    # requires an instance. Narrow explicitly so callers passing a class
+    # by mistake hit the dict() fallback instead of an asdict TypeError.
+    if is_dataclass(obj) and not isinstance(obj, type):
         return asdict(obj)
     return dict(obj)
