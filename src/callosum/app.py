@@ -3226,7 +3226,10 @@ class _PeriodicCooldownProber:
                     logger.exception("cooldown prober: usage_snapshot failed for %r", backend.id)
                     continue
                 now = time.time()
-                if usage.cooldown_until_ts is None or usage.cooldown_until_ts <= now:
+                in_active_cooldown = (
+                    usage.cooldown_until_ts is not None and usage.cooldown_until_ts > now
+                )
+                if not in_active_cooldown and not usage.weekly_exhausted:
                     continue
                 try:
                     result = await _diagnose_backend(backend, force=True)
@@ -3240,8 +3243,8 @@ class _PeriodicCooldownProber:
                             clear()
                             logger.warning(
                                 "cooldown prober: %r probe succeeded; cooldown cleared "
-                                "(was until %s)",
-                                backend.id, usage.cooldown_until_ts,
+                                "(was until %s, weekly_exhausted=%s)",
+                                backend.id, usage.cooldown_until_ts, usage.weekly_exhausted,
                             )
                         except Exception:
                             logger.exception(

@@ -14,7 +14,8 @@ from dataclasses import dataclass
 
 from fastapi.testclient import TestClient
 
-from callosum.app import _diagnose_backend, create_app
+from callosum import app as app_module
+from callosum.app import _diagnose_backend, _PeriodicCooldownProber, create_app
 from callosum.backend import HealthStatus, UsageSnapshot
 from callosum.errors import BackendError
 
@@ -113,3 +114,35 @@ def test_diagnose_backend_force_bypasses_cooldown_skip() -> None:
     result = asyncio.run(_diagnose_backend(backend, force=True))
     assert result.get("skipped") is not True
     assert result.get("stage") != "cooldown"
+
+
+def test_periodic_prober_checks_stale_weekly_exhausted_without_active_cooldown(
+    monkeypatch,
+) -> None:
+    backend = _StuckCooldownBackend(id="stuck", cleared=False)
+    calls: list[tuple[str, bool]] = []
+
+    async def fake_diagnose_backend(probed_backend, *, force=False):
+        calls.append((probed_backend.id, force))
+        return {"ok": True, "skipped": False}
+
+    async def usage_snapshot() -> UsageSnapshot:
+        return UsageSnapshot(
+            remaining_fraction=None,
+            cooldown_until_ts=None,
+            weekly_exhausted=not backend.cleared,
+            probed_at_ts=time.time(),
+        )
+
+    async def run_once() -> None:
+        backend.usage_snapshot = usage_snapshot  # type: ignore[method-assign]
+        monkeypatch.setattr(app_module, "_diagnose_backend", fake_diagnose_backend)
+        prober = _PeriodicCooldownProber(backends=[backend], interval_s=0.01)
+        prober.start()
+        await asyncio.sleep(0.05)
+        await prober.stop()
+
+    asyncio.run(run_once())
+
+    assert calls == [("stuck", True)]
+    assert backend.cleared is True
