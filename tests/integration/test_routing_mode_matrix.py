@@ -82,7 +82,7 @@ def test_all_backends_exhausted_returns_503_with_retry_after(
         state.close()
 
 
-def test_auto_mode_remote_exhausted_routes_to_local(tmp_path: Path) -> None:
+def test_auto_mode_remote_exhausted_routes_to_local(tmp_path: Path, monkeypatch) -> None:
     """The parity fix: in auto mode with remote quota exhausted, callosum
     must route to a healthy local backend. The bug was that dead remote
     cells stayed in the routing grid, the capability filter sometimes
@@ -91,6 +91,7 @@ def test_auto_mode_remote_exhausted_routes_to_local(tmp_path: Path) -> None:
         id="remote", kind="codex_auth_vault", weekly_exhausted=True,
     )
     local = _make_backend(id="local", kind="litellm_gateway")
+    monkeypatch.setenv("CALLOSUM_CANARY_PERCENT", "0")
     state = OperatorState(tmp_path / "op.sqlite")
     state.set_routing("auto")
     try:
