@@ -12,7 +12,14 @@ functional capability.
 
 from __future__ import annotations
 
-from callosum.backends.local_direct import LocalModelRegistryBackend
+import httpx
+import pytest
+
+from callosum.backends.local_direct import (
+    MAX_LOCAL_TOOL_REQUEST_BYTES,
+    LocalModelRegistryBackend,
+)
+from callosum.errors import BackendError
 from callosum.local import ModelEntry
 
 
@@ -87,3 +94,32 @@ def test_model_metadata_filtered_same_as_advertised_models() -> None:
     meta = backend.model_metadata
     assert "responses-capable" in meta
     assert "chat-only" not in meta
+
+
+async def test_responses_stream_rejects_oversized_tool_request_before_send() -> None:
+    src = _FakeSource([_entry("responses-capable", ("responses",))])
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        return httpx.Response(500)
+
+    backend = LocalModelRegistryBackend(
+        id="test",
+        source=src,
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(BackendError) as exc_info:
+        async for _ in backend.responses_stream(
+            {
+                "model": "responses-capable",
+                "input": "x" * MAX_LOCAL_TOOL_REQUEST_BYTES,
+                "stream": True,
+                "tools": [{"type": "function", "function": {"name": "shell"}}],
+            }
+        ):
+            pass
+    assert exc_info.value.classification == "client_error"
+    assert exc_info.value.status_code == 413
+    assert "/v1/responses" not in calls
+    await backend.aclose()

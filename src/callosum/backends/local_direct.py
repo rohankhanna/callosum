@@ -24,6 +24,7 @@ Compared to talking to ollama directly:
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from collections.abc import AsyncIterator
@@ -48,6 +49,7 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_CALL_TIMEOUT_S = 300.0  # Cold-load latency for big models can exceed 60s
+MAX_LOCAL_TOOL_REQUEST_BYTES = 50_000
 LOCAL_PRIORITY_OFFSET = 10_000  # local cells sort after Codex cells in the grid
 
 
@@ -235,6 +237,27 @@ class LocalModelRegistryBackend:
             client_body=body,
         )
 
+    def _reject_oversized_tool_request(self, body: dict[str, Any]) -> None:
+        tools = body.get("tools")
+        if not isinstance(tools, list) or not tools:
+            return
+        request_bytes = len(
+            json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode(
+                "utf-8"
+            )
+        )
+        if request_bytes <= MAX_LOCAL_TOOL_REQUEST_BYTES:
+            return
+        raise BackendError(
+            classification="client_error",
+            status_code=413,
+            message=(
+                "local backend request too large for tool-capable local routing "
+                f"({request_bytes} bytes > {MAX_LOCAL_TOOL_REQUEST_BYTES}); "
+                "use remote-only or reduce conversation context"
+            ),
+        )
+
     def _outbound(self, body: dict[str, Any], *, stream: bool) -> tuple[ModelEntry, dict[str, Any]]:
         """Build the request body callosum will send. Resolves the
         local LLM gateway entry, rewrites `model` from the public id (e.g.
@@ -249,6 +272,7 @@ class LocalModelRegistryBackend:
         # `reasoning.effort` is the main one — Codex uses it; ollama/
         # vllm tend to ignore-or-error.
         out.pop("reasoning", None)
+        self._reject_oversized_tool_request(out)
         return entry, out
 
     async def chat_completions(
@@ -373,6 +397,7 @@ class LocalModelRegistryBackend:
             # id, POST.
             out = self._apply_params({**body, "stream": False})
             out["model"] = entry.runtime_model
+            self._reject_oversized_tool_request(out)
             try:
                 response = await self._client.post(
                     f"{entry.endpoint.rstrip('/')}/v1/responses",
@@ -404,6 +429,7 @@ class LocalModelRegistryBackend:
         if "responses" in entry.api_surfaces:
             out = self._apply_params({**body, "stream": True})
             out["model"] = entry.runtime_model
+            self._reject_oversized_tool_request(out)
             try:
                 async with self._client.stream(
                     "POST",
