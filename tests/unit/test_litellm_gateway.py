@@ -25,11 +25,13 @@ import pytest
 from callosum.backends.litellm_gateway import (
     DEFAULT_CALL_TIMEOUT_S,
     LOCAL_PRIORITY_OFFSET,
+    MAX_LOCAL_TOOL_REQUEST_BYTES,
     LiteLLMGatewayBackend,
     _chat_to_responses_response,
     _responses_to_chat_request,
     _strip_codex_only_fields,
 )
+from callosum.errors import BackendError
 
 
 def _models_payload(*slugs: str) -> dict[str, Any]:
@@ -655,8 +657,6 @@ async def test_codex_only_fields_stripped_before_send() -> None:
 
 
 async def test_chat_completions_raises_backenderror_on_4xx() -> None:
-    from callosum.errors import BackendError
-
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/models":
             return httpx.Response(200, json=_models_payload("model-a0d3"))
@@ -669,6 +669,62 @@ async def test_chat_completions_raises_backenderror_on_4xx() -> None:
         await backend.chat_completions(
             {"model": "model-a0d3", "messages": [{"role": "user", "content": "hi"}]}
         )
+    await backend.aclose()
+
+
+async def test_chat_completions_rejects_oversized_tool_request_before_send() -> None:
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json=_models_payload("model-a0d5"))
+        return httpx.Response(500)
+
+    backend = LiteLLMGatewayBackend(
+        id="local", transport=httpx.MockTransport(handler)
+    )
+    with pytest.raises(BackendError) as exc_info:
+        await backend.chat_completions(
+            {
+                "model": "model-a0d5",
+                "messages": [
+                    {"role": "user", "content": "x" * MAX_LOCAL_TOOL_REQUEST_BYTES}
+                ],
+                "tools": [{"type": "function", "function": {"name": "shell"}}],
+            }
+        )
+    assert exc_info.value.classification == "client_error"
+    assert exc_info.value.status_code == 413
+    assert "/v1/chat/completions" not in calls
+    await backend.aclose()
+
+
+async def test_responses_stream_rejects_oversized_tool_request_before_send() -> None:
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json=_models_payload("model-a0d5"))
+        return httpx.Response(500)
+
+    backend = LiteLLMGatewayBackend(
+        id="local", transport=httpx.MockTransport(handler)
+    )
+    with pytest.raises(BackendError) as exc_info:
+        async for _ in backend.responses_stream(
+            {
+                "model": "model-a0d5",
+                "input": "x" * MAX_LOCAL_TOOL_REQUEST_BYTES,
+                "stream": True,
+                "tools": [{"type": "function", "function": {"name": "shell"}}],
+            }
+        ):
+            pass
+    assert exc_info.value.classification == "client_error"
+    assert exc_info.value.status_code == 413
+    assert "/v1/chat/completions" not in calls
     await backend.aclose()
 
 

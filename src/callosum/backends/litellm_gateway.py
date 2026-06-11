@@ -57,6 +57,11 @@ DEFAULT_HEALTH_TIMEOUT_S = 2.0
 # lower this via CALLOSUM_LITELLM_TIMEOUT_S; the catalog poll uses
 # DEFAULT_HEALTH_TIMEOUT_S separately and is unaffected.
 DEFAULT_CALL_TIMEOUT_S = 300.0
+# Codex CLI can send very large streaming tool requests once a session has
+# history. Local tool-capable models may accept the socket and then produce no
+# useful bytes until the 300s transport timeout. Fail fast before opening the
+# upstream stream so local-only mode does not look like a loop.
+MAX_LOCAL_TOOL_REQUEST_BYTES = 50_000
 # Priority offset for local cells in the merged cell grid. Remote Codex
 # priorities are small ints (16, 23, etc.); offsetting local by +10_000
 # means local cells sort AFTER Codex cells in the recommender's ranking,
@@ -199,6 +204,7 @@ class LiteLLMGatewayBackend:
         out_body = self._apply_inference_params(
             _strip_codex_only_fields({**body, "stream": False})
         )
+        _reject_oversized_tool_request(out_body)
         # KNOWN LIMITATION (2026-06-09): the LiteLLM gateway's chat-
         # completions hangs indefinitely for certain advertised models
         # whose upstream runtime is a responses-only proxy (model entries
@@ -249,6 +255,7 @@ class LiteLLMGatewayBackend:
         out_body = self._apply_inference_params(
             _strip_codex_only_fields({**body, "stream": True})
         )
+        _reject_oversized_tool_request(out_body)
         try:
             stream_ctx = self._client.stream(
                 "POST",
@@ -348,6 +355,7 @@ class LiteLLMGatewayBackend:
         out_body = self._apply_inference_params(
             _strip_codex_only_fields({**body, "stream": True})
         )
+        _reject_oversized_tool_request(out_body)
         # If the body arrived in Responses-API shape (has `input` instead
         # of `messages`), translate to Chat Completions shape before
         # forwarding. This is the streaming counterpart of what `responses`
@@ -885,6 +893,26 @@ class LiteLLMGatewayBackend:
 #     can honor it. Add new keys as more upstream incompatibilities
 #     surface in real traffic.
 _CODEX_ONLY_BODY_KEYS = ("reasoning", "parallel_tool_calls")
+
+
+def _reject_oversized_tool_request(body: dict[str, Any]) -> None:
+    tools = body.get("tools")
+    if not isinstance(tools, list) or not tools:
+        return
+    request_bytes = len(
+        json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    )
+    if request_bytes <= MAX_LOCAL_TOOL_REQUEST_BYTES:
+        return
+    raise BackendError(
+        classification="client_error",
+        status_code=413,
+        message=(
+            "local backend request too large for tool-capable local routing "
+            f"({request_bytes} bytes > {MAX_LOCAL_TOOL_REQUEST_BYTES}); "
+            "use remote-only or reduce conversation context"
+        ),
+    )
 
 
 def _strip_codex_only_fields(body: dict[str, Any]) -> dict[str, Any]:
