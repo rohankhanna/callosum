@@ -253,6 +253,58 @@ def test_4xx_propagates_without_trying_next_cell(
     assert rows == [(0, 401, "failed")]
 
 
+def test_413_payload_too_large_propagates_without_trying_next_cell(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Oversized local tool requests are a client/request-shape problem,
+    not a transient routing problem. The local backend guard raises 413;
+    cell-level retry must not walk to another local cell and recreate the
+    multi-attempt local-model burn this guard exists to prevent."""
+    log = UsageLog(tmp_path / "u.sqlite")
+    seen = _install_inner_stub(
+        monkeypatch,
+        log=log,
+        behavior={
+            "model-a": HTTPException(
+                status_code=413,
+                detail="local backend request too large for tool-capable local routing",
+            ),
+            "model-b": {"served": "b"},
+        },
+    )
+    body = {"model": "auto"}
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            _dispatch_nonstream_with_cell_retry(
+                body,
+                candidates=(CELLS[0], CELLS[1]),
+                usage_log=log,
+                model="auto",
+                route_name="/v1/responses",
+                backends_list=[],
+                preferred_id=None,
+                session_id=None,
+                session_registry=object(),
+                call=None,
+            )
+        )
+    assert exc_info.value.status_code == 413
+    assert [s["model"] for s in seen] == ["model-a"]
+    conn = sqlite3.connect(tmp_path / "u.sqlite")
+    rows = conn.execute(
+        "SELECT attempt_idx, status, classification, error_message "
+        "FROM request_routing_attempts"
+    ).fetchall()
+    assert rows == [
+        (
+            0,
+            413,
+            "failed",
+            "local backend request too large for tool-capable local routing",
+        )
+    ]
+
+
 # ---------- cap at MAX_CELL_ATTEMPTS ---------------------------------------
 
 
