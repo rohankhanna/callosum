@@ -61,7 +61,7 @@ EnvironmentFile=-%h/.config/callosum-dev-loop.env
 # The dispatcher itself relies on PATH for its inner subprocesses
 # (git, pytest), so getting PATH right is still important; this
 # ExecStart just ensures the FIRST hop succeeds.
-ExecStart=@UV_PATH@ run callosum-dev-loop run
+ExecStart=@UV_PATH@ run callosum-dev-loop run --cron
 
 # Don't let one iteration hang forever. Codex with a meaningful
 # prompt typically completes in 1-3 minutes; one hour is a generous

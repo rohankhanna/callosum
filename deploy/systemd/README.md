@@ -14,6 +14,10 @@ See `src/callosum/dev_loop/` for the runtime details.
 
 Scheduling: by default, the dev loop fires every 6h, matching the
 capability harness's cadence so each iteration has fresh data.
+Scheduled invocations run `callosum-dev-loop run --cron`, which means
+they consult the autonomy level and record skip/failure/success outcomes
+in the autonomy audit log. Manual `run` invocations remain operator-driven
+unless you pass `--cron` explicitly.
 
 ## Activation
 
@@ -109,5 +113,6 @@ git branch | grep '^  auto/dev-loop-'
 
 A successful "do nothing" iteration is the most common outcome when
 there are no failing harness findings — the dispatcher exits 0 and
-no branch is created. That is correct behavior. The system only
-generates code when there is observed work to do.
+no branch is created. That is correct behavior. Scheduled skips should
+still appear in the autonomy audit log because the systemd unit runs with
+`--cron`. The system only generates code when there is observed work to do.
