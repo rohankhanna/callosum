@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import contextlib
 import json
 import os
 import signal
@@ -56,18 +57,15 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
-from urllib import error, request as urlrequest
+from urllib import error
+from urllib import request as urlrequest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BATTERY_PATH = REPO_ROOT / "tests" / "integration" / "probes" / "battery.json"
 OUTPUT_ROOT = REPO_ROOT / "tests" / "integration" / "fixtures" / "probed"
 
-GATEWAY_URL = os.environ.get(
-    "CALLOSUM_LITELLM_GATEWAY_URL", "http://127.0.0.1:4000"
-)
-CALLOSUM_URL = os.environ.get(
-    "CALLOSUM_BASE_URL", "http://127.0.0.1:8765"
-)
+GATEWAY_URL = os.environ.get("CALLOSUM_LITELLM_GATEWAY_URL", "http://127.0.0.1:4000")
+CALLOSUM_URL = os.environ.get("CALLOSUM_BASE_URL", "http://127.0.0.1:8765")
 ADMIN_TOKEN_PATH = Path("~/.config/callosum/admin_token").expanduser()
 
 PATHS = (
@@ -166,9 +164,7 @@ def _stream_request(
             return status, bytes(raw), events, dict(resp.headers)
     except error.HTTPError as e:
         body_bytes = e.read()
-        return e.code, body_bytes, [
-            body_bytes.decode("utf-8", errors="replace")
-        ], dict(e.headers or {})
+        return e.code, body_bytes, [body_bytes.decode("utf-8", errors="replace")], dict(e.headers or {})
 
 
 def list_local_models() -> list[str]:
@@ -194,7 +190,10 @@ def resolve_proxy_endpoint(model: str) -> str | None:
     try:
         proc = subprocess.run(
             ["local-llm", "models", "local", "--json"],
-            capture_output=True, text=True, check=False, timeout=10,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return None
@@ -223,11 +222,13 @@ def _convert_chat_to_responses(chat_body: dict) -> dict:
         content = m.get("content", "")
         if not isinstance(content, str):
             content = json.dumps(content)
-        input_items.append({
-            "type": "message",
-            "role": role,
-            "content": [{"type": "input_text", "text": content}],
-        })
+        input_items.append(
+            {
+                "type": "message",
+                "role": role,
+                "content": [{"type": "input_text", "text": content}],
+            }
+        )
     out: dict[str, Any] = {
         "input": input_items,
     }
@@ -238,19 +239,14 @@ def _convert_chat_to_responses(chat_body: dict) -> dict:
     return out
 
 
-def build_request_for_path(
-    scenario: dict, model: str, path: str
-) -> tuple[str, dict, dict[str, str]]:
+def build_request_for_path(scenario: dict, model: str, path: str) -> tuple[str, dict, dict[str, str]]:
     """Return (url, body, headers) for the (scenario, model, path) combo."""
     shape = scenario.get("request_shape", "chat")
     body = {**scenario["request"], "model": model}
     headers: dict[str, str] = {}
 
     if path == "gateway":
-        if shape == "chat":
-            url = f"{GATEWAY_URL}/v1/chat/completions"
-        else:
-            url = f"{GATEWAY_URL}/v1/responses"
+        url = f"{GATEWAY_URL}/v1/chat/completions" if shape == "chat" else f"{GATEWAY_URL}/v1/responses"
         key = os.environ.get("CALLOSUM_LITELLM_MASTER_KEY", "")
         if key:
             headers["Authorization"] = f"Bearer {key}"
@@ -259,15 +255,11 @@ def build_request_for_path(
     if path == "proxy-direct":
         endpoint = resolve_proxy_endpoint(model)
         if endpoint is None:
-            raise RuntimeError(
-                f"no proxy endpoint registered for {model!r}"
-            )
+            raise RuntimeError(f"no proxy endpoint registered for {model!r}")
         # Per-model proxies speak the Responses API. Convert chat scenarios.
         if shape == "chat":
             body = _convert_chat_to_responses(body)
-        body["model"] = model.replace("-ollama-responses-proxy", "-local").replace(
-            "-responses-proxy-q4_k_m", "-local"
-        )
+        body["model"] = model.replace("-ollama-responses-proxy", "-local").replace("-responses-proxy-q4_k_m", "-local")
         # ^ A best-effort runtime-model rewrite; the registry's runtime_model
         # field would be the authoritative source. Good enough for the
         # known suffix patterns in this lab.
@@ -283,10 +275,7 @@ def build_request_for_path(
         token = os.environ.get("CODEX_PROXY_TOKEN")
         if token:
             headers["Authorization"] = f"Bearer {token}"
-        if shape == "chat":
-            url = f"{CALLOSUM_URL}/v1/chat/completions"
-        else:
-            url = f"{CALLOSUM_URL}/v1/responses"
+        url = f"{CALLOSUM_URL}/v1/chat/completions" if shape == "chat" else f"{CALLOSUM_URL}/v1/responses"
         return url, body, headers
 
     if path == "callosum-codex":
@@ -307,10 +296,7 @@ def build_request_for_path(
         # callosum's process without requiring an operator routing-mode flip.
         admin_token = _admin_token()
         if not admin_token:
-            raise RuntimeError(
-                "no admin token found at ~/.config/callosum/admin_token; "
-                "cannot drive /admin/cell-call"
-            )
+            raise RuntimeError("no admin token found at ~/.config/callosum/admin_token; cannot drive /admin/cell-call")
         headers["Authorization"] = f"Bearer {admin_token}"
         # /admin/cell-call only speaks Responses; convert chat scenarios.
         inner = body
@@ -326,14 +312,10 @@ def build_request_for_path(
     raise ValueError(f"unknown path: {path}")
 
 
-def run_probe(
-    scenario: dict, model: str, *, path: str, mode: str
-) -> dict[str, Any]:
+def run_probe(scenario: dict, model: str, *, path: str, mode: str) -> dict[str, Any]:
     """Execute one (scenario, model, path, mode) probe; capture to disk;
     return a metadata summary."""
-    output_dir = (
-        OUTPUT_ROOT / _slugify(model) / scenario["id"] / f"{path}__{mode}"
-    )
+    output_dir = OUTPUT_ROOT / _slugify(model) / scenario["id"] / f"{path}__{mode}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # /admin/cell-call is non-stream only — the admin endpoint awaits the
@@ -364,8 +346,7 @@ def run_probe(
             "path": path,
             "mode": mode,
             "skipped_reason": (
-                f"model does not advertise {req_cap!r} capability "
-                f"(register in MODEL_CAPABILITIES to enable)"
+                f"model does not advertise {req_cap!r} capability (register in MODEL_CAPABILITIES to enable)"
             ),
         }
         (output_dir / "metadata.json").write_text(json.dumps(meta, indent=2))
@@ -385,17 +366,16 @@ def run_probe(
         return meta
 
     # Pin stream mode.
-    if mode == "stream":
-        body = {**body, "stream": True}
-    else:
-        body = {**body, "stream": False}
+    body = {**body, "stream": True} if mode == "stream" else {**body, "stream": False}
 
     (output_dir / "request.json").write_text(json.dumps(body, indent=2))
 
     t0 = time.time()
     if mode == "stream":
         status, raw, events, resp_headers = _stream_request(
-            url, body=body, headers=headers,
+            url,
+            body=body,
+            headers=headers,
         )
         (output_dir / "response.raw").write_bytes(raw)
         # Save a readable event summary for grep-ability.
@@ -406,17 +386,13 @@ def run_probe(
             for line in ev.splitlines():
                 line = line.strip()
                 if line.startswith("data:"):
-                    payload = line[len("data:"):].strip()
+                    payload = line[len("data:") :].strip()
                     if payload == "[DONE]":
                         parsed_events.append({"_marker": "DONE"})
                         continue
-                    try:
+                    with contextlib.suppress(json.JSONDecodeError):
                         parsed_events.append(json.loads(payload))
-                    except json.JSONDecodeError:
-                        pass
-        (output_dir / "response.json").write_text(
-            json.dumps(parsed_events, indent=2)
-        )
+        (output_dir / "response.json").write_text(json.dumps(parsed_events, indent=2))
         finish_reason = None
         for ev in parsed_events:
             if not isinstance(ev, dict):
@@ -428,23 +404,21 @@ def run_probe(
                 finish_reason = "completed"
         meta_extra = {
             "event_count": len(parsed_events),
-            "saw_done_marker": any(
-                ev.get("_marker") == "DONE" for ev in parsed_events
-                if isinstance(ev, dict)
-            ),
+            "saw_done_marker": any(ev.get("_marker") == "DONE" for ev in parsed_events if isinstance(ev, dict)),
             "finish_reason": finish_reason,
         }
     else:
         status, raw, resp_headers = _http_request(
-            "POST", url, body=body, headers=headers,
+            "POST",
+            url,
+            body=body,
+            headers=headers,
         )
         (output_dir / "response.raw").write_bytes(raw)
         parsed: dict | None = None
         try:
             parsed = json.loads(raw.decode("utf-8", errors="replace"))
-            (output_dir / "response.json").write_text(
-                json.dumps(parsed, indent=2)
-            )
+            (output_dir / "response.json").write_text(json.dumps(parsed, indent=2))
         except json.JSONDecodeError:
             parsed = None
 
@@ -485,7 +459,7 @@ def run_probe(
                         for c in item.get("content", []) or []:
                             if isinstance(c, dict) and c.get("type") == "output_text":
                                 content_preview = (content_preview or "") + (
-                                    c.get("text", "")[:300 - len(content_preview or "")]
+                                    c.get("text", "")[: 300 - len(content_preview or "")]
                                     if content_preview is None or len(content_preview) < 300
                                     else ""
                                 )
@@ -587,19 +561,25 @@ def main() -> int:
     p.add_argument("--scenario", default=None, help="Filter to one scenario id.")
     p.add_argument("--model", default=None, help="Filter to one model slug.")
     p.add_argument(
-        "--path", default="callosum-v1", choices=PATHS + ("all",),
+        "--path",
+        default="callosum-v1",
+        choices=PATHS + ("all",),
         help="Dispatch path. 'all' runs every applicable path.",
     )
     p.add_argument(
-        "--mode", default="non_stream", choices=MODES + ("all", "scenario"),
+        "--mode",
+        default="non_stream",
+        choices=MODES + ("all", "scenario"),
         help="non_stream | stream | all | scenario (use the modes declared by the scenario)",
     )
     p.add_argument(
-        "--category", default=None,
+        "--category",
+        default=None,
         help="Filter by battery category (generic|codex|noteapp|format|stress|multimodal)",
     )
     p.add_argument(
-        "--ignore-capability-gate", action="store_true",
+        "--ignore-capability-gate",
+        action="store_true",
         help=(
             "Run requires_capability scenarios even against models that "
             "don't advertise the capability (instead of marking skipped). "
@@ -608,7 +588,8 @@ def main() -> int:
         ),
     )
     p.add_argument(
-        "--flip-routing-to", default=None,
+        "--flip-routing-to",
+        default=None,
         choices=["auto", "offline", "local-only", "remote-only"],
         help=(
             "Briefly flip callosum's routing mode to the given value for "
@@ -620,7 +601,8 @@ def main() -> int:
         ),
     )
     p.add_argument(
-        "--list", action="store_true",
+        "--list",
+        action="store_true",
         help="Print what would run and exit.",
     )
     args = p.parse_args()
@@ -646,10 +628,7 @@ def main() -> int:
     models = list_local_models()
     if args.model:
         if args.model not in models:
-            sys.exit(
-                f"model {args.model!r} not in routing pool. "
-                f"available: {models}"
-            )
+            sys.exit(f"model {args.model!r} not in routing pool. available: {models}")
         models = [args.model]
 
     paths = list(PATHS) if args.path == "all" else [args.path]
@@ -673,19 +652,18 @@ def main() -> int:
     if args.flip_routing_to is not None:
         admin_token = _admin_token()
         if not admin_token:
-            sys.exit(
-                "no admin token at ~/.config/callosum/admin_token; cannot "
-                "perform --flip-routing-to"
-            )
+            sys.exit("no admin token at ~/.config/callosum/admin_token; cannot perform --flip-routing-to")
         headers = {"Authorization": f"Bearer {admin_token}"}
         status, body, _ = _http_request(
-            "GET", f"{CALLOSUM_URL}/admin/routing", headers=headers,
+            "GET",
+            f"{CALLOSUM_URL}/admin/routing",
+            headers=headers,
         )
         if status != 200:
             sys.exit(f"failed to GET /admin/routing: {status} {body[:200]!r}")
         original_routing = json.loads(body).get("routing")
         if not original_routing:
-            sys.exit(f"could not parse current routing from /admin/routing")
+            sys.exit("could not parse current routing from /admin/routing")
         # Arm the guards as soon as we know what to restore to. Pre-flip
         # arming means a signal between this point and the POST still
         # results in the right restore target being committed (an
@@ -696,19 +674,15 @@ def main() -> int:
         atexit.register(_restore_routing)
         signal.signal(signal.SIGTERM, _restore_signal_handler)
         signal.signal(signal.SIGINT, _restore_signal_handler)
-        print(
-            f"Routing flip: current={original_routing!r}, "
-            f"flipping to {args.flip_routing_to!r}; will restore on exit"
-        )
+        print(f"Routing flip: current={original_routing!r}, flipping to {args.flip_routing_to!r}; will restore on exit")
         status, body, _ = _http_request(
-            "POST", f"{CALLOSUM_URL}/admin/routing",
-            body={"routing": args.flip_routing_to}, headers=headers,
+            "POST",
+            f"{CALLOSUM_URL}/admin/routing",
+            body={"routing": args.flip_routing_to},
+            headers=headers,
         )
         if status != 200:
-            sys.exit(
-                f"failed to flip routing to {args.flip_routing_to!r}: "
-                f"{status} {body[:200]!r}"
-            )
+            sys.exit(f"failed to flip routing to {args.flip_routing_to!r}: {status} {body[:200]!r}")
 
     summary: list[dict] = []
     try:
@@ -724,9 +698,9 @@ def main() -> int:
                 for path in paths:
                     for mode in modes:
                         print(
-                            f"  {model[:40]:40s} :: {scenario['id']:35s} "
-                            f"path={path:14s} mode={mode:11s} ",
-                            end="", flush=True,
+                            f"  {model[:40]:40s} :: {scenario['id']:35s} path={path:14s} mode={mode:11s} ",
+                            end="",
+                            flush=True,
                         )
                         try:
                             meta = run_probe(scenario, model, path=path, mode=mode)
@@ -742,11 +716,15 @@ def main() -> int:
                                 )
                         except Exception as exc:
                             print(f"ERROR: {type(exc).__name__}: {str(exc)[:80]}")
-                            summary.append({
-                                "scenario_id": scenario["id"], "model": model,
-                                "path": path, "mode": mode,
-                                "error": f"{type(exc).__name__}: {exc}",
-                            })
+                            summary.append(
+                                {
+                                    "scenario_id": scenario["id"],
+                                    "model": model,
+                                    "path": path,
+                                    "mode": mode,
+                                    "error": f"{type(exc).__name__}: {exc}",
+                                }
+                            )
     finally:
         # Delegated to _restore_routing(). The _RESTORE_DONE flag means
         # this is a no-op if the signal handler or atexit already ran.

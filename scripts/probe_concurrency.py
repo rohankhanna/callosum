@@ -84,7 +84,10 @@ def resolve_proxy_endpoint(model: str) -> str | None:
     try:
         proc = subprocess.run(
             ["local-llm", "models", "local", "--json"],
-            capture_output=True, text=True, check=False, timeout=10,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return None
@@ -101,14 +104,9 @@ def resolve_proxy_endpoint(model: str) -> str | None:
     return None
 
 
-def build_url_body_headers(
-    model: str, path: str, prompt: str
-) -> tuple[str, dict, dict]:
+def build_url_body_headers(model: str, path: str, prompt: str) -> tuple[str, dict, dict]:
     body_responses: dict = {
-        "input": [
-            {"type": "message", "role": "user",
-             "content": [{"type": "input_text", "text": prompt}]}
-        ],
+        "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": prompt}]}],
         "max_output_tokens": 50,
         "temperature": 0,
         "stream": False,
@@ -133,9 +131,8 @@ def build_url_body_headers(
         endpoint = resolve_proxy_endpoint(model)
         if endpoint is None:
             raise RuntimeError(f"no proxy endpoint registered for {model!r}")
-        body_responses["model"] = (
-            model.replace("-ollama-responses-proxy", "-local")
-                 .replace("-responses-proxy-q4_k_m", "-local")
+        body_responses["model"] = model.replace("-ollama-responses-proxy", "-local").replace(
+            "-responses-proxy-q4_k_m", "-local"
         )
         return f"{endpoint.rstrip('/')}/v1/responses", body_responses, headers
 
@@ -186,7 +183,10 @@ async def fire_one(
     t0 = time.time()
     try:
         response = await client.post(
-            url, json=body, headers=headers, timeout=240.0,
+            url,
+            json=body,
+            headers=headers,
+            timeout=240.0,
         )
         latency_ms = int((time.time() - t0) * 1000)
         raw = response.content
@@ -210,11 +210,7 @@ async def fire_one(
             for item in parsed.get("output", []) or []:
                 if isinstance(item, dict) and item.get("type") == "message":
                     for c in item.get("content", []) or []:
-                        if (
-                            isinstance(c, dict)
-                            and c.get("type") == "output_text"
-                            and not content_excerpt
-                        ):
+                        if isinstance(c, dict) and c.get("type") == "output_text" and not content_excerpt:
                             content_excerpt = c.get("text", "")[:100]
         return {
             "req_id": req_id,
@@ -257,9 +253,7 @@ async def run_concurrency(
     prompt_source: str,
     output_root: Path | None = None,
 ) -> dict:
-    output_dir = (
-        (output_root or OUTPUT_ROOT) / f"{_slugify(model)}__{path}__N{n}"
-    )
+    output_dir = (output_root or OUTPUT_ROOT) / f"{_slugify(model)}__{path}__N{n}"
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "requests").mkdir(exist_ok=True)
 
@@ -272,9 +266,7 @@ async def run_concurrency(
     else:
         per_req_prompts = [prompt for _ in range(n)]
 
-    per_req_targets: list[tuple[str, dict, dict]] = [
-        build_url_body_headers(model, path, p) for p in per_req_prompts
-    ]
+    per_req_targets: list[tuple[str, dict, dict]] = [build_url_body_headers(model, path, p) for p in per_req_prompts]
 
     # Use a fresh async client per run. Shared connection-pool intentional
     # so concurrent requests do share TCP connections — that's part of
@@ -298,14 +290,8 @@ async def run_concurrency(
     succeeded = [r for r in results if r.get("http_status") == 200]
     failed = [r for r in results if r.get("http_status") != 200]
     latencies = sorted([r["latency_ms"] for r in succeeded])
-    distinct_response_ids = {
-        r.get("upstream_response_id") for r in succeeded
-        if r.get("upstream_response_id")
-    }
-    distinct_content = {
-        r.get("content_excerpt") for r in succeeded
-        if r.get("content_excerpt")
-    }
+    distinct_response_ids = {r.get("upstream_response_id") for r in succeeded if r.get("upstream_response_id")}
+    distinct_content = {r.get("content_excerpt") for r in succeeded if r.get("content_excerpt")}
     # Bucket failures by class — most-common-first.
     failure_classes: dict[str, int] = {}
     for r in failed:
@@ -349,7 +335,10 @@ async def run_concurrency(
         if dupes:
             cross_talk_warning = {
                 "duplicate_response_ids": dupes,
-                "implication": "two or more concurrent requests got the same upstream response id; investigate for stale-cache or session-leak",
+                "implication": (
+                    "two or more concurrent requests got the same upstream response id; "
+                    "investigate for stale-cache or session-leak"
+                ),
             }
     if cross_talk_warning:
         summary["cross_talk_warning"] = cross_talk_warning
@@ -387,17 +376,11 @@ async def run_sweep(
 ) -> dict:
     """Run a sequence of bursts at increasing N. Writes a sweep_report
     alongside the per-N summaries."""
-    sweep_root = OUTPUT_ROOT / (
-        f"_sweep__{_slugify(model)}__{path}__"
-        f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
-    )
+    sweep_root = OUTPUT_ROOT / (f"_sweep__{_slugify(model)}__{path}__{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}")
     sweep_root.mkdir(parents=True, exist_ok=True)
 
     bursts: list[dict] = []
-    print(
-        f"Sweeping {model} via {path} across N={n_values} "
-        f"(prompt_source={prompt_source})"
-    )
+    print(f"Sweeping {model} via {path} across N={n_values} (prompt_source={prompt_source})")
     for n in n_values:
         summary = await run_concurrency(
             model=model,
@@ -436,7 +419,7 @@ async def run_sweep(
     if knee_n is not None:
         print(f"Degradation knee: N={knee_n} (first N with success_rate < 1.0)")
     else:
-        print(f"No degradation knee within the sweep — all N values ran clean.")
+        print("No degradation knee within the sweep — all N values ran clean.")
     return sweep_report
 
 
@@ -448,8 +431,8 @@ def _parse_sweep_arg(s: str) -> list[int]:
             continue
         try:
             n = int(part)
-        except ValueError:
-            raise argparse.ArgumentTypeError(f"invalid N value in sweep: {part!r}")
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(f"invalid N value in sweep: {part!r}") from exc
         if n <= 0:
             raise argparse.ArgumentTypeError(f"sweep N values must be positive, got {n}")
         out.append(n)
@@ -461,47 +444,71 @@ def _parse_sweep_arg(s: str) -> list[int]:
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--model", required=True)
-    p.add_argument("--path", default="proxy-direct",
-                   choices=["gateway", "proxy-direct", "callosum-v1", "callosum-codex"])
-    p.add_argument("--n", type=int, default=5,
-                   help="Number of concurrent requests (default 5). Ignored if --sweep is set.")
-    p.add_argument("--sweep", type=_parse_sweep_arg, default=None,
-                   help="Comma-separated N values to sweep (e.g. '1,5,10,20'). "
-                        "Runs each burst in sequence and writes a sweep_report.json.")
+    p.add_argument(
+        "--path", default="proxy-direct", choices=["gateway", "proxy-direct", "callosum-v1", "callosum-codex"]
+    )
+    p.add_argument(
+        "--n", type=int, default=5, help="Number of concurrent requests (default 5). Ignored if --sweep is set."
+    )
+    p.add_argument(
+        "--sweep",
+        type=_parse_sweep_arg,
+        default=None,
+        help="Comma-separated N values to sweep (e.g. '1,5,10,20'). "
+        "Runs each burst in sequence and writes a sweep_report.json.",
+    )
     p.add_argument("--prompt", default=DEFAULT_PROMPT_TEXT)
-    p.add_argument("--prompt-source", default="static",
-                   choices=["static", "varied"],
-                   help="static: send N copies of --prompt. varied: cycle through "
-                        "a built-in list of short prompts so the burst is heterogeneous "
-                        "(avoids cache-masking serialization).")
+    p.add_argument(
+        "--prompt-source",
+        default="static",
+        choices=["static", "varied"],
+        help="static: send N copies of --prompt. varied: cycle through "
+        "a built-in list of short prompts so the burst is heterogeneous "
+        "(avoids cache-masking serialization).",
+    )
     args = p.parse_args()
 
     if args.sweep is not None:
-        asyncio.run(run_sweep(
-            model=args.model, path=args.path, n_values=args.sweep,
-            prompt=args.prompt, prompt_source=args.prompt_source,
-        ))
+        asyncio.run(
+            run_sweep(
+                model=args.model,
+                path=args.path,
+                n_values=args.sweep,
+                prompt=args.prompt,
+                prompt_source=args.prompt_source,
+            )
+        )
         return 0
 
     print(f"Firing N={args.n} concurrent requests to {args.model} via {args.path}")
-    summary = asyncio.run(run_concurrency(
-        model=args.model, path=args.path, n=args.n, prompt=args.prompt,
-        prompt_source=args.prompt_source,
-    ))
-    print(json.dumps({
-        "wall_ms": summary["wall_ms"],
-        "success_rate": summary["success_rate"],
-        "success_count": summary["success_count"],
-        "failure_count": summary["failure_count"],
-        "failure_classes": summary["failure_classes"],
-        "latency_p50_ms": summary.get("latency_ms_p50"),
-        "latency_p90_ms": summary.get("latency_ms_p90"),
-        "latency_p95_ms": summary.get("latency_ms_p95"),
-        "latency_p99_ms": summary.get("latency_ms_p99"),
-        "distinct_response_ids": summary["distinct_response_id_count"],
-        "distinct_content_excerpts": summary["distinct_content_excerpt_count"],
-        "cross_talk_warning": summary.get("cross_talk_warning"),
-    }, indent=2))
+    summary = asyncio.run(
+        run_concurrency(
+            model=args.model,
+            path=args.path,
+            n=args.n,
+            prompt=args.prompt,
+            prompt_source=args.prompt_source,
+        )
+    )
+    print(
+        json.dumps(
+            {
+                "wall_ms": summary["wall_ms"],
+                "success_rate": summary["success_rate"],
+                "success_count": summary["success_count"],
+                "failure_count": summary["failure_count"],
+                "failure_classes": summary["failure_classes"],
+                "latency_p50_ms": summary.get("latency_ms_p50"),
+                "latency_p90_ms": summary.get("latency_ms_p90"),
+                "latency_p95_ms": summary.get("latency_ms_p95"),
+                "latency_p99_ms": summary.get("latency_ms_p99"),
+                "distinct_response_ids": summary["distinct_response_id_count"],
+                "distinct_content_excerpts": summary["distinct_content_excerpt_count"],
+                "cross_talk_warning": summary.get("cross_talk_warning"),
+            },
+            indent=2,
+        )
+    )
     return 0
 
 

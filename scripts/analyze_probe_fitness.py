@@ -103,9 +103,7 @@ def aggregate_by_model_and_category(
     captures: dict[str, list[dict]],
 ) -> dict[str, dict[str, dict[str, int]]]:
     cats = _scenario_category_map()
-    out: dict[str, dict[str, dict[str, int]]] = defaultdict(
-        lambda: defaultdict(lambda: defaultdict(int))
-    )
+    out: dict[str, dict[str, dict[str, int]]] = defaultdict(lambda: defaultdict(lambda: defaultdict(int)))
     for model, metas in captures.items():
         for meta in metas:
             sid = meta.get("scenario_id", "?")
@@ -127,7 +125,10 @@ def render_markdown(
         "`tests/integration/fixtures/probed/`. Coarse outcome buckets:\n"
     )
     lines.append("- `pass` — HTTP 200, finish_reason in {stop, completed, tool_calls}.")
-    lines.append("- `incomplete` — HTTP 200 but finish_reason in {incomplete, length}; the model didn't terminate naturally (budget-bound or thinking-budget-eaten).")
+    lines.append(
+        "- `incomplete` — HTTP 200 but finish_reason in {incomplete, length}; "
+        "the model didn't terminate naturally (budget-bound or thinking-budget-eaten)."
+    )
     lines.append("- `fail` — HTTP >= 400. Request rejected upstream.")
     lines.append("- `error` — runtime error in the probe runner itself.")
     lines.append("- `skipped` — probe declined to run (e.g. unsupported path for this model).\n")
@@ -137,8 +138,8 @@ def render_markdown(
     for model in sorted(aggregates.keys()):
         t = aggregates[model]["_total"]
         lines.append(
-            f"| `{model}` | {t.get('pass',0)} | {t.get('incomplete',0)} | "
-            f"{t.get('fail',0)} | {t.get('error',0)} | {t.get('skipped',0)} |"
+            f"| `{model}` | {t.get('pass', 0)} | {t.get('incomplete', 0)} | "
+            f"{t.get('fail', 0)} | {t.get('error', 0)} | {t.get('skipped', 0)} |"
         )
     lines.append("")
     lines.append("## Per-category breakdown\n")
@@ -151,8 +152,8 @@ def render_markdown(
             if not row:
                 continue
             lines.append(
-                f"| {cat} | {row.get('pass',0)} | {row.get('incomplete',0)} | "
-                f"{row.get('fail',0)} | {row.get('error',0)} | {row.get('skipped',0)} |"
+                f"| {cat} | {row.get('pass', 0)} | {row.get('incomplete', 0)} | "
+                f"{row.get('fail', 0)} | {row.get('error', 0)} | {row.get('skipped', 0)} |"
             )
         lines.append("")
     lines.append("## Tool-call propensity\n")
@@ -168,17 +169,14 @@ def render_markdown(
     lines.append("|---|---:|---:|---:|---:|")
     for model in sorted(captures.keys()):
         lats = [
-            m["latency_ms"] for m in captures[model]
-            if m.get("mode") == "non_stream"
-            and isinstance(m.get("latency_ms"), int)
-            and m.get("http_status") == 200
+            m["latency_ms"]
+            for m in captures[model]
+            if m.get("mode") == "non_stream" and isinstance(m.get("latency_ms"), int) and m.get("http_status") == 200
         ]
         if not lats:
             continue
         mean = sum(lats) // len(lats)
-        lines.append(
-            f"| `{model}` | {len(lats)} | {mean} | {min(lats)} | {max(lats)} |"
-        )
+        lines.append(f"| `{model}` | {len(lats)} | {mean} | {min(lats)} | {max(lats)} |")
     lines.append("")
     return "\n".join(lines)
 
@@ -197,12 +195,16 @@ def main() -> int:
     out_md = PROBED_ROOT / "_fitness_report.md"
     out_md.write_text(md)
     out_json = PROBED_ROOT / "_fitness_report.json"
-    out_json.write_text(json.dumps({
-        "aggregates": {
-            m: {cat: dict(buckets) for cat, buckets in cats.items()}
-            for m, cats in aggregates.items()
-        },
-    }, indent=2))
+    out_json.write_text(
+        json.dumps(
+            {
+                "aggregates": {
+                    m: {cat: dict(buckets) for cat, buckets in cats.items()} for m, cats in aggregates.items()
+                },
+            },
+            indent=2,
+        )
+    )
     print(f"Wrote {out_md}")
     print(f"Wrote {out_json}")
     print()
