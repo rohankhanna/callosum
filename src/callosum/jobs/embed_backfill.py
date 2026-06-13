@@ -67,9 +67,7 @@ def _save_checkpoint(path: Path, cursor: int) -> None:
     os.replace(tmp, path)
 
 
-def _fetch_batch(
-    conn: sqlite3.Connection, *, since_id: int, limit: int
-) -> list[tuple[int, str]]:
+def _fetch_batch(conn: sqlite3.Connection, *, since_id: int, limit: int) -> list[tuple[int, str]]:
     """Return (request_id, prompt_text) pairs for rows needing embeddings."""
     rows = conn.execute(
         "SELECT id, prompt_text FROM requests "
@@ -80,9 +78,7 @@ def _fetch_batch(
     return [(int(r[0]), str(r[1])) for r in rows if r[1]]
 
 
-def _write_embeddings(
-    conn: sqlite3.Connection, items: list[tuple[int, bytes]]
-) -> None:
+def _write_embeddings(conn: sqlite3.Connection, items: list[tuple[int, bytes]]) -> None:
     """Write embeddings for `items = [(request_id, embedding_bytes), ...]`
     in a single transaction. Skipped rows (failed embeddings) don't appear
     in `items`; they remain prompt_embedding=NULL and get retried on the
@@ -110,6 +106,7 @@ def run(
     # Import the embedding provider lazily — both because it's a heavy
     # import (torch + huggingface) and so unit tests can stub it.
     from callosum.routing.embedding.bge import BGELargeEmbeddingProvider
+
     provider = BGELargeEmbeddingProvider()
 
     conn = sqlite3.connect(str(db_path), timeout=30.0)
@@ -154,9 +151,7 @@ def run(
                         embeddings.append(provider.encode_batch_sync([text], batch_size=1)[0])
                     except Exception:
                         embeddings.append(b"")
-            items = [
-                (rid, emb) for rid, emb in zip(ids, embeddings, strict=True) if emb
-            ]
+            items = [(rid, emb) for rid, emb in zip(ids, embeddings, strict=True) if emb]
             _write_embeddings(conn, items)
             cursor = rows[-1][0]
             _save_checkpoint(checkpoint_path, cursor)
@@ -164,8 +159,7 @@ def run(
             elapsed = time.time() - start_ts
             rate = processed_total / elapsed if elapsed > 0 else 0
             print(
-                f"embed_backfill: cursor={cursor} processed={processed_total} "
-                f"rate={rate:.1f}/s elapsed={elapsed:.1f}s",
+                f"embed_backfill: cursor={cursor} processed={processed_total} rate={rate:.1f}/s elapsed={elapsed:.1f}s",
                 file=sys.stderr,
             )
     finally:
@@ -179,12 +173,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="callosum.jobs.embed_backfill")
     parser.add_argument("--db-path", type=Path, required=True)
     parser.add_argument(
-        "--checkpoint-path", type=Path, default=None,
+        "--checkpoint-path",
+        type=Path,
+        default=None,
         help="Defaults to <db-path>.embed_backfill.ckpt",
     )
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument(
-        "--max-rows", type=int, default=None,
+        "--max-rows",
+        type=int,
+        default=None,
         help="Cap total rows processed this run (omit for unlimited).",
     )
     args = parser.parse_args()

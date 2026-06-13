@@ -26,9 +26,7 @@ class UniformPriorPredictor:
 
     id: str = "uniform"
 
-    def predict(
-        self, features: PromptFeatures, candidates: list[Cell]
-    ) -> dict[Cell, float]:
+    def predict(self, features: PromptFeatures, candidates: list[Cell]) -> dict[Cell, float]:
         return {c: 0.5 for c in candidates}
 
     def reload(self, labeled: Iterable[LabeledRow]) -> None:

@@ -66,9 +66,7 @@ def test_synthetic_virtual_model_tags_rows_separately(tmp_path: Path) -> None:
     assert r.status_code == 200
 
     conn = sqlite3.connect(tmp_path / "u.sqlite")
-    row = conn.execute(
-        "SELECT requested_model, routing_mode, model, reasoning_effort FROM requests"
-    ).fetchone()
+    row = conn.execute("SELECT requested_model, routing_mode, model, reasoning_effort FROM requests").fetchone()
     assert row is not None
     requested_model, routing_mode, model, reasoning = row
     assert requested_model == "auto-learning-synthetic"
@@ -90,9 +88,7 @@ def test_synthetic_and_organic_are_logged_as_distinct_routing_modes(tmp_path: Pa
         client.post("/v1/responses", json={"model": "auto-learning-synthetic", "input": []})
 
     conn = sqlite3.connect(tmp_path / "u.sqlite")
-    rows = conn.execute(
-        "SELECT routing_mode, model, reasoning_effort FROM requests ORDER BY id"
-    ).fetchall()
+    rows = conn.execute("SELECT routing_mode, model, reasoning_effort FROM requests ORDER BY id").fetchall()
     assert len(rows) == 2
     organic = [r for r in rows if r[0] == "auto-learning"]
     synthetic = [r for r in rows if r[0] == "auto-learning-synthetic"]
@@ -118,8 +114,7 @@ def test_explicit_model_request_routes_through_router(tmp_path: Path) -> None:
 
     conn = sqlite3.connect(tmp_path / "u.sqlite")
     row = conn.execute(
-        "SELECT requested_model, requested_reasoning_effort, routing_mode,"
-        " model, reasoning_effort FROM requests"
+        "SELECT requested_model, requested_reasoning_effort, routing_mode, model, reasoning_effort FROM requests"
     ).fetchone()
     requested_model, requested_reasoning, routing_mode, model, reasoning = row
     assert requested_model == "model-a0e7"

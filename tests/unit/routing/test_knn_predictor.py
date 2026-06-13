@@ -93,16 +93,22 @@ def test_predictor_maps_negative_outcomes_to_low_probability() -> None:
     p = KNNPredictor(k=3)
     rows = [
         LabeledRow(
-            request_id=1, prompt_embedding=_emb([1, 0, 0]),
-            cell_used="local default", outcome=-1.0,
+            request_id=1,
+            prompt_embedding=_emb([1, 0, 0]),
+            cell_used="local default",
+            outcome=-1.0,
         ),
         LabeledRow(
-            request_id=2, prompt_embedding=_emb([1, 0.01, 0]),
-            cell_used="local default", outcome=-1.0,
+            request_id=2,
+            prompt_embedding=_emb([1, 0.01, 0]),
+            cell_used="local default",
+            outcome=-1.0,
         ),
         LabeledRow(
-            request_id=3, prompt_embedding=_emb([0.99, 0, 0]),
-            cell_used="local default", outcome=-1.0,
+            request_id=3,
+            prompt_embedding=_emb([0.99, 0, 0]),
+            cell_used="local default",
+            outcome=-1.0,
         ),
     ]
     p.reload(rows)
@@ -117,12 +123,16 @@ def test_predictor_handles_dimensionality_mismatch_gracefully() -> None:
     comes from a different one (different dim), we can't compare
     them — fall back to uniform rather than producing garbage."""
     p = KNNPredictor(k=3)
-    p.reload([
-        LabeledRow(
-            request_id=1, prompt_embedding=_emb([1, 0, 0, 0, 0]),  # 5-dim
-            cell_used="local default", outcome=1.0,
-        ),
-    ])
+    p.reload(
+        [
+            LabeledRow(
+                request_id=1,
+                prompt_embedding=_emb([1, 0, 0, 0, 0]),  # 5-dim
+                cell_used="local default",
+                outcome=1.0,
+            ),
+        ]
+    )
     # Query is 3-dim — mismatch.
     out = p.predict(_features_with_embedding(_emb([1, 0, 0])), [CELL_LOCAL])
     assert out[CELL_LOCAL] == 0.5
@@ -133,12 +143,16 @@ def test_reload_with_empty_iterable_resets_to_cold_start() -> None:
     and for the case where all labeled rows get filtered out (e.g.
     after a model-version migration)."""
     p = KNNPredictor()
-    p.reload([
-        LabeledRow(
-            request_id=1, prompt_embedding=_emb([1, 0, 0]),
-            cell_used="local default", outcome=1.0,
-        ),
-    ])
+    p.reload(
+        [
+            LabeledRow(
+                request_id=1,
+                prompt_embedding=_emb([1, 0, 0]),
+                cell_used="local default",
+                outcome=1.0,
+            ),
+        ]
+    )
     # Verify it learned.
     out_warm = p.predict(_features_with_embedding(_emb([1, 0, 0])), [CELL_LOCAL])
     assert out_warm[CELL_LOCAL] == 1.0

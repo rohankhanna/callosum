@@ -50,9 +50,7 @@ def test_routable_excludes_weekly_exhausted() -> None:
     """Codex weekly-exhausted state must take a backend out of rotation —
     the whole point of the failover."""
     healthy = _fake_backend(id="local", models=["model-a0a9"])
-    exhausted = _fake_backend(
-        id="codex-primary", models=["model-a0e7"], weekly_exhausted=True
-    )
+    exhausted = _fake_backend(id="codex-primary", models=["model-a0e7"], weekly_exhausted=True)
     routable = asyncio.run(_routable_backends([healthy, exhausted]))
     assert [b.id for b in routable] == ["local"]
 
@@ -62,9 +60,7 @@ def test_routable_excludes_active_cooldown() -> None:
     until the cooldown expires."""
     healthy = _fake_backend(id="local", models=["model-a0a9"])
     future = time.time() + 600  # cooldown ends in 10 minutes
-    cooling = _fake_backend(
-        id="codex-secondary", models=["model-a0e7"], cooldown_until_ts=future
-    )
+    cooling = _fake_backend(id="codex-secondary", models=["model-a0e7"], cooldown_until_ts=future)
     routable = asyncio.run(_routable_backends([healthy, cooling]))
     assert [b.id for b in routable] == ["local"]
 
@@ -73,9 +69,7 @@ def test_routable_includes_expired_cooldown() -> None:
     """A cooldown_until_ts in the past doesn't exclude the backend —
     it's recovered, the snapshot just hasn't been refreshed."""
     past = time.time() - 60
-    recovered = _fake_backend(
-        id="codex-primary", models=["model-a0e7"], cooldown_until_ts=past
-    )
+    recovered = _fake_backend(id="codex-primary", models=["model-a0e7"], cooldown_until_ts=past)
     routable = asyncio.run(_routable_backends([recovered]))
     assert [b.id for b in routable] == ["codex-primary"]
 
@@ -88,9 +82,7 @@ def test_routable_handles_unreadable_backend() -> None:
         async def usage_snapshot(self):
             raise RuntimeError("backend state unreadable")
 
-    broken = _BrokenBackend(
-        id="broken", advertised_models=frozenset({"model-a0e7"})
-    )
+    broken = _BrokenBackend(id="broken", advertised_models=frozenset({"model-a0e7"}))
     healthy = _fake_backend(id="ok", models=["model-a0a9"])
     routable = asyncio.run(_routable_backends([broken, healthy]))
     assert [b.id for b in routable] == ["ok"]
@@ -117,8 +109,7 @@ def test_filter_drops_codex_cells_when_all_codex_unroutable() -> None:
     """The core failover behavior: Codex exhausted → all Codex cells
     disappear from the grid → classifier can only pick local."""
     codex_cells = [
-        Cell(model="model-a0e7", reasoning_effort=e, context_window=128_000)
-        for e in ("low", "medium", "high", "xhigh")
+        Cell(model="model-a0e7", reasoning_effort=e, context_window=128_000) for e in ("low", "medium", "high", "xhigh")
     ]
     local_cells = [
         Cell(model="model-a0a9", reasoning_effort="default", context_window=262_144),

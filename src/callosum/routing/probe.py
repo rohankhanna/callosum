@@ -93,8 +93,7 @@ _PROBE_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "name": "read_file",
         "description": (
-            "Read a UTF-8 file from disk and return its contents. Returns "
-            "an error if the path is missing or not text."
+            "Read a UTF-8 file from disk and return its contents. Returns an error if the path is missing or not text."
         ),
         "parameters": {
             "type": "object",
@@ -116,8 +115,7 @@ _PROBE_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "name": "list_directory",
         "description": (
-            "List the entries in a directory. Returns each entry's name "
-            "and whether it is a file or directory."
+            "List the entries in a directory. Returns each entry's name and whether it is a file or directory."
         ),
         "parameters": {
             "type": "object",
@@ -175,8 +173,7 @@ _PROBE_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "name": "update_plan",
         "description": (
-            "Update the visible plan / progress checklist shown to the "
-            "user. Use whenever the high-level plan changes."
+            "Update the visible plan / progress checklist shown to the user. Use whenever the high-level plan changes."
         ),
         "parameters": {
             "type": "object",
@@ -284,9 +281,7 @@ def build_probe_body(model: str) -> dict[str, Any]:
     body: dict[str, Any] = {}
     for k, v in _PROBE_BODY.items():
         if isinstance(v, list):
-            body[k] = [
-                dict(item) if isinstance(item, dict) else item for item in v
-            ]
+            body[k] = [dict(item) if isinstance(item, dict) else item for item in v]
         else:
             body[k] = v
     body["model"] = model

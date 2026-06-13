@@ -32,10 +32,7 @@ from urllib import error, request
 REPO_ROOT = Path(__file__).resolve().parent.parent
 OUTPUT_ROOT = REPO_ROOT / "tmp" / "codex-local-only-repro"
 DEFAULT_TIMEOUT_S = 180.0
-DEFAULT_PROMPT = (
-    "Reply with exactly this JSON object and nothing else: "
-    '{"callosum_local_only_probe":"ok"}'
-)
+DEFAULT_PROMPT = 'Reply with exactly this JSON object and nothing else: {"callosum_local_only_probe":"ok"}'
 CASES: dict[str, str] = {
     "smoke": DEFAULT_PROMPT,
     "repo_inspect": (
@@ -227,8 +224,7 @@ def main(argv: list[str] | None = None) -> int:
         _write_json(out_dir / "status_before.json", status_before)
         status_error = str(status_before.get("stderr") or "").strip()
         print(
-            f"Refusing to run Codex because callosum routing is {routing!r}, "
-            "not 'local-only'.",
+            f"Refusing to run Codex because callosum routing is {routing!r}, not 'local-only'.",
             file=sys.stderr,
         )
         if status_error:

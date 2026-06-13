@@ -29,14 +29,19 @@ def _write_minimal_auth(path: Path) -> None:
     Values are clearly bogus — they're never used; the test only cares
     about HTTP client construction."""
     import json
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({
-        "tokens": {
-            "access_token": "test-access-not-real",
-            "refresh_token": "test-refresh-not-real",
-            "account_id": "test@example.invalid",
-        }
-    }))
+    path.write_text(
+        json.dumps(
+            {
+                "tokens": {
+                    "access_token": "test-access-not-real",
+                    "refresh_token": "test-refresh-not-real",
+                    "account_id": "test@example.invalid",
+                }
+            }
+        )
+    )
 
 
 def test_user_agent_names_callosum_first() -> None:
@@ -44,9 +49,7 @@ def test_user_agent_names_callosum_first() -> None:
     callosum name so that an upstream observer reading the header
     knows where the request is actually from."""
     ua = _user_agent()
-    assert ua.startswith("callosum/"), (
-        f"UA must start with 'callosum/<version>'; got {ua!r}"
-    )
+    assert ua.startswith("callosum/"), f"UA must start with 'callosum/<version>'; got {ua!r}"
 
 
 def test_user_agent_includes_codex_flow_context() -> None:
@@ -56,9 +59,7 @@ def test_user_agent_includes_codex_flow_context() -> None:
     surface-level identifier."""
     ua = _user_agent()
     assert "codex-flow" in ua, f"UA must include 'codex-flow'; got {ua!r}"
-    assert "codex_cli_rs/" in ua, (
-        f"UA must include codex_cli_rs version; got {ua!r}"
-    )
+    assert "codex_cli_rs/" in ua, f"UA must include codex_cli_rs version; got {ua!r}"
 
 
 def test_user_agent_includes_python_runtime() -> None:
@@ -75,9 +76,7 @@ def test_user_agent_is_NOT_default_httpx() -> None:
     `python-httpx/X.Y.Z` default UA. If someone refactors and the UA
     regresses to httpx's default, this test catches it immediately."""
     ua = _user_agent()
-    assert not ua.startswith("python-httpx/"), (
-        f"UA must NOT be httpx default; got {ua!r}"
-    )
+    assert not ua.startswith("python-httpx/"), f"UA must NOT be httpx default; got {ua!r}"
 
 
 def test_default_headers_carries_user_agent() -> None:
@@ -106,6 +105,7 @@ def test_auth_vault_sets_user_agent_on_client(tmp_path: Path) -> None:
         # AuthVault owns the client when it built it; close to avoid
         # leaving an event loop / connection pool behind.
         import asyncio
+
         asyncio.run(vault.aclose() if hasattr(vault, "aclose") else asyncio.sleep(0))
 
 
@@ -129,12 +129,14 @@ def test_codex_auth_vault_backend_sets_user_agent(tmp_path: Path) -> None:
         assert not ua.startswith("python-httpx/")
     finally:
         import asyncio
+
         with pytest.MonkeyPatch.context():
             asyncio.run(backend.aclose())
 
 
 def test_user_agent_falls_back_when_codex_version_unavailable(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """If the codex CLI install isn't reachable, the UA should still
     be built (with a known fallback). This is the cron / minimal

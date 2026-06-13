@@ -35,6 +35,7 @@ def _bge_provider_factory() -> EmbeddingProvider:
     can be imported without sentence-transformers installed. Selected
     only when operator configures embedding_provider='bge-large-en-v1.5'."""
     from callosum.routing.embedding.bge import BGELargeEmbeddingProvider
+
     return BGELargeEmbeddingProvider()
 
 
@@ -76,23 +77,18 @@ def build_router(
         embedding_cls = _EMBEDDING_IMPLS[config.embedding_provider]
     except KeyError as e:
         raise ValueError(
-            f"unknown embedding_provider {config.embedding_provider!r}; "
-            f"available: {sorted(_EMBEDDING_IMPLS)}"
+            f"unknown embedding_provider {config.embedding_provider!r}; available: {sorted(_EMBEDDING_IMPLS)}"
         ) from e
     try:
         predictor_cls = _PREDICTOR_IMPLS[config.quality_predictor]
     except KeyError as e:
         raise ValueError(
-            f"unknown quality_predictor {config.quality_predictor!r}; "
-            f"available: {sorted(_PREDICTOR_IMPLS)}"
+            f"unknown quality_predictor {config.quality_predictor!r}; available: {sorted(_PREDICTOR_IMPLS)}"
         ) from e
     try:
         selector_cls = _SELECTOR_IMPLS[config.cell_selector]
     except KeyError as e:
-        raise ValueError(
-            f"unknown cell_selector {config.cell_selector!r}; "
-            f"available: {sorted(_SELECTOR_IMPLS)}"
-        ) from e
+        raise ValueError(f"unknown cell_selector {config.cell_selector!r}; available: {sorted(_SELECTOR_IMPLS)}") from e
     return Router(
         embedding=embedding_cls(),
         predictor=predictor_cls(),

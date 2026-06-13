@@ -45,7 +45,9 @@ def test_live_completion_models_orders_by_priority_ascending() -> None:
         "model-a0e6": _md("model-a0e6", priority=29, supported_in_api=True, visibility="list"),
     }
     assert live_completion_models_from_metadata(metadata) == (
-        "model-a0e7", "model-a0c3", "model-a0e6",
+        "model-a0e7",
+        "model-a0c3",
+        "model-a0e6",
     )
 
 
@@ -53,9 +55,7 @@ def test_live_completion_models_excludes_hidden() -> None:
     """`visibility=hide` (e.g. codex-auto-review) must not appear in the grid."""
     metadata = {
         "model-a0e7": _md("model-a0e7", priority=16, supported_in_api=True, visibility="list"),
-        "codex-auto-review": _md(
-            "codex-auto-review", priority=43, supported_in_api=True, visibility="hide"
-        ),
+        "codex-auto-review": _md("codex-auto-review", priority=43, supported_in_api=True, visibility="hide"),
     }
     out = live_completion_models_from_metadata(metadata)
     assert out == ("model-a0e7",)
@@ -65,9 +65,7 @@ def test_live_completion_models_excludes_not_supported_in_api() -> None:
     """`supported_in_api=False` excludes the model even if visibility says 'list'."""
     metadata = {
         "model-a0e7": _md("model-a0e7", priority=16, supported_in_api=True, visibility="list"),
-        "internal-only-thing": _md(
-            "internal-only-thing", priority=99, supported_in_api=False, visibility="list"
-        ),
+        "internal-only-thing": _md("internal-only-thing", priority=99, supported_in_api=False, visibility="list"),
     }
     assert live_completion_models_from_metadata(metadata) == ("model-a0e7",)
 
@@ -91,7 +89,10 @@ def test_reasoning_levels_for_uses_api_when_present() -> None:
         "gpt-NEW": _md("gpt-NEW", levels=("low", "medium", "high", "ultra")),
     }
     assert reasoning_levels_for("gpt-NEW", metadata) == (
-        "low", "medium", "high", "ultra",
+        "low",
+        "medium",
+        "high",
+        "ultra",
     )
 
 
@@ -107,10 +108,17 @@ def test_build_cells_from_metadata_uses_per_model_levels() -> None:
     """Different models can advertise different effort sets. The cell grid
     should respect that, not project a global REASONING_LEVELS onto all."""
     metadata = {
-        "gpt-A": _md("gpt-A", priority=1, supported_in_api=True, visibility="list",
-                     levels=("low", "high"), context_window=128_000),
-        "gpt-B": _md("gpt-B", priority=2, supported_in_api=True, visibility="list",
-                     levels=("medium",), context_window=64_000),
+        "gpt-A": _md(
+            "gpt-A",
+            priority=1,
+            supported_in_api=True,
+            visibility="list",
+            levels=("low", "high"),
+            context_window=128_000,
+        ),
+        "gpt-B": _md(
+            "gpt-B", priority=2, supported_in_api=True, visibility="list", levels=("medium",), context_window=64_000
+        ),
     }
     cells = build_cells_from_metadata(metadata)
     # gpt-A has 2 efforts → 2 cells; gpt-B has 1 effort → 1 cell.
@@ -127,12 +135,9 @@ def test_build_cells_from_metadata_uses_per_model_levels() -> None:
 def test_build_cells_from_metadata_orders_by_priority() -> None:
     """Model order in the cell list reflects priority (stronger first)."""
     metadata = {
-        "gpt-mid": _md("gpt-mid", priority=20, supported_in_api=True, visibility="list",
-                       levels=("low",)),
-        "gpt-strongest": _md("gpt-strongest", priority=5, supported_in_api=True, visibility="list",
-                             levels=("low",)),
-        "gpt-weakest": _md("gpt-weakest", priority=99, supported_in_api=True, visibility="list",
-                           levels=("low",)),
+        "gpt-mid": _md("gpt-mid", priority=20, supported_in_api=True, visibility="list", levels=("low",)),
+        "gpt-strongest": _md("gpt-strongest", priority=5, supported_in_api=True, visibility="list", levels=("low",)),
+        "gpt-weakest": _md("gpt-weakest", priority=99, supported_in_api=True, visibility="list", levels=("low",)),
     }
     cells = build_cells_from_metadata(metadata)
     assert [c.model for c in cells] == ["gpt-strongest", "gpt-mid", "gpt-weakest"]

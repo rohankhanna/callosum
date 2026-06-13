@@ -170,9 +170,7 @@ class OperatorState:
     def clear_inference_overrides(self, model: str) -> None:
         """Remove any override for `model`. Backend defaults still apply."""
         with self._lock:
-            self._conn.execute(
-                "DELETE FROM inference_overrides WHERE model = ?", (model,)
-            )
+            self._conn.execute("DELETE FROM inference_overrides WHERE model = ?", (model,))
             self._conn.commit()
 
     # ---------- cell denylist --------------------------------------------
@@ -192,26 +190,20 @@ class OperatorState:
 
     def remove_denied_cell(self, model: str) -> None:
         with self._lock:
-            self._conn.execute(
-                "DELETE FROM cell_denylist WHERE model = ?", (model,)
-            )
+            self._conn.execute("DELETE FROM cell_denylist WHERE model = ?", (model,))
             self._conn.commit()
 
     def list_denied_cells(self) -> list[tuple[str, str | None]]:
         """Return [(model, reason), ...] in insertion order."""
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT model, reason FROM cell_denylist ORDER BY added_at"
-            ).fetchall()
+            rows = self._conn.execute("SELECT model, reason FROM cell_denylist ORDER BY added_at").fetchall()
         return [(str(m), r if r is None or isinstance(r, str) else None) for m, r in rows]
 
     def is_denied(self, model: str) -> bool:
         """Hot-path check: is this model in the denylist? Sub-millisecond
         SELECT — called once per routing decision."""
         with self._lock:
-            row = self._conn.execute(
-                "SELECT 1 FROM cell_denylist WHERE model = ? LIMIT 1", (model,)
-            ).fetchone()
+            row = self._conn.execute("SELECT 1 FROM cell_denylist WHERE model = ? LIMIT 1", (model,)).fetchone()
         return row is not None
 
     # ---------- routing mode ---------------------------------------------
@@ -223,9 +215,7 @@ class OperatorState:
         DBs; only the Python API and user-facing surfaces use the
         clearer 'routing' name."""
         with self._lock:
-            row = self._conn.execute(
-                "SELECT mode FROM operator_mode WHERE id = 1"
-            ).fetchone()
+            row = self._conn.execute("SELECT mode FROM operator_mode WHERE id = 1").fetchone()
         if row is None:
             return "auto"
         routing = str(row[0])
@@ -234,10 +224,7 @@ class OperatorState:
     def set_routing(self, routing: str) -> None:
         """Set the routing mode. Raises ValueError on unknown value."""
         if routing not in VALID_ROUTING_MODES:
-            raise ValueError(
-                f"unknown routing {routing!r}; "
-                f"valid: {sorted(VALID_ROUTING_MODES)}"
-            )
+            raise ValueError(f"unknown routing {routing!r}; valid: {sorted(VALID_ROUTING_MODES)}")
         with self._lock:
             self._conn.execute(
                 "INSERT INTO operator_mode (id, mode, updated_at) "
@@ -250,9 +237,7 @@ class OperatorState:
 
     # ---------- probe results --------------------------------------------
 
-    def get_probe_result(
-        self, backend_id: str, model: str
-    ) -> tuple[bool, float] | None:
+    def get_probe_result(self, backend_id: str, model: str) -> tuple[bool, float] | None:
         """Hot-path read used by `_capabilities_of` to override
         `supports_tools` for cells that failed the verification probe.
 
@@ -266,8 +251,7 @@ class OperatorState:
         """
         with self._lock:
             row = self._conn.execute(
-                "SELECT supports_tools, probed_at FROM probe_results "
-                "WHERE backend_id = ? AND model = ?",
+                "SELECT supports_tools, probed_at FROM probe_results WHERE backend_id = ? AND model = ?",
                 (backend_id, model),
             ).fetchone()
         if row is None:
@@ -323,9 +307,14 @@ class OperatorState:
                 "FROM probe_results ORDER BY backend_id, model"
             ).fetchall()
         return [
-            (str(r[0]), str(r[1]), float(r[2]), bool(r[3]),
-             r[4] if r[4] is None else str(r[4]),
-             r[5] if r[5] is None else int(r[5]))
+            (
+                str(r[0]),
+                str(r[1]),
+                float(r[2]),
+                bool(r[3]),
+                r[4] if r[4] is None else str(r[4]),
+                r[5] if r[5] is None else int(r[5]),
+            )
             for r in rows
         ]
 

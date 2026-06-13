@@ -59,9 +59,7 @@ def test_unknown_key_401_includes_prefix_and_active_count(tmp_path: Path) -> Non
 def test_valid_key_passes_middleware(tmp_path: Path) -> None:
     app, svc, plaintext = _app_with_auth(tmp_path)
     with TestClient(app) as client:
-        r = client.get(
-            "/v1/models", headers={"Authorization": f"Bearer {plaintext}"}
-        )
+        r = client.get("/v1/models", headers={"Authorization": f"Bearer {plaintext}"})
     # 200 (models list) — the point is it's NOT 401; auth passed.
     assert r.status_code == 200
     svc.db.close()

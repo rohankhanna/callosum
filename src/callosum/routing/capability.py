@@ -56,9 +56,7 @@ class CapabilityFilter:
         self._at_scale_fails_for = at_scale_fails_for
         self._at_scale_chars_threshold = at_scale_chars_threshold
 
-    def filter(
-        self, cells: list[Cell], features: PromptFeatures
-    ) -> list[Cell]:
+    def filter(self, cells: list[Cell], features: PromptFeatures) -> list[Cell]:
         """Return cells whose capabilities cover the features' HARD
         requirements:
 
@@ -88,11 +86,7 @@ class CapabilityFilter:
                 continue
             if features.needs_tools and not caps.supports_tools:
                 continue
-            if (
-                is_at_scale_request
-                and self._at_scale_fails_for is not None
-                and self._at_scale_fails_for(c.model)
-            ):
+            if is_at_scale_request and self._at_scale_fails_for is not None and self._at_scale_fails_for(c.model):
                 continue
             out.append(c)
         return out

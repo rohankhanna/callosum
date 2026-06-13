@@ -40,9 +40,7 @@ def test_header_opts_session_into_sticky_binding() -> None:
         beta.set_usage(_usage(0.99))
         alpha.set_usage(_usage(0.1))
 
-        second = client.post(
-            "/v1/chat/completions", json=body, headers={"X-Codex-Session-Id": "s1"}
-        )
+        second = client.post("/v1/chat/completions", json=body, headers={"X-Codex-Session-Id": "s1"})
         assert second.status_code == 200
         assert second.json()["id"] == "fake-alpha"
 
@@ -90,9 +88,7 @@ def test_sticky_binding_migrates_when_bound_backend_fails() -> None:
     )
     with TestClient(create_app(backends=[alpha, beta])) as client:
         body = {"model": "model-a0d0", "messages": []}
-        response = client.post(
-            "/v1/chat/completions", json=body, headers={"X-Codex-Session-Id": "s1"}
-        )
+        response = client.post("/v1/chat/completions", json=body, headers={"X-Codex-Session-Id": "s1"})
         assert response.status_code == 200
         # alpha failed, rotation landed on beta, and the binding was updated.
         assert response.json()["id"] == "fake-beta"
@@ -117,7 +113,5 @@ def test_pin_overrides_session_binding() -> None:
 
         # Pin to beta. Subsequent s1 traffic must go to beta, not its binding.
         client.post("/control/pin", json={"backend_id": "beta"})
-        response = client.post(
-            "/v1/chat/completions", json=body, headers={"X-Codex-Session-Id": "s1"}
-        )
+        response = client.post("/v1/chat/completions", json=body, headers={"X-Codex-Session-Id": "s1"})
         assert response.json()["id"] == "fake-beta"

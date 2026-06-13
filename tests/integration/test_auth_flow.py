@@ -23,9 +23,7 @@ def _backend() -> InMemoryFakeBackend:
 def test_register_login_create_key_call_v1_logs_attribution(tmp_path: Path) -> None:
     auth_service = _service(tmp_path)
     log = UsageLog(tmp_path / "u.sqlite")
-    with TestClient(
-        create_app(backends=[_backend()], usage_log=log, auth_service=auth_service)
-    ) as client:
+    with TestClient(create_app(backends=[_backend()], usage_log=log, auth_service=auth_service)) as client:
         # 1. Register
         r = client.post("/auth/register", json={"username": "alice", "password": "x"})
         assert r.status_code == 201
@@ -154,12 +152,8 @@ def test_list_keys_returns_only_callers_keys(tmp_path: Path) -> None:
     with TestClient(create_app(backends=[_backend()], auth_service=auth_service)) as client:
         for username in ("alice", "bob"):
             client.post("/auth/register", json={"username": username, "password": "x"})
-        alice_session = client.post(
-            "/auth/login", json={"username": "alice", "password": "x"}
-        ).json()["session_token"]
-        bob_session = client.post("/auth/login", json={"username": "bob", "password": "x"}).json()[
-            "session_token"
-        ]
+        alice_session = client.post("/auth/login", json={"username": "alice", "password": "x"}).json()["session_token"]
+        bob_session = client.post("/auth/login", json={"username": "bob", "password": "x"}).json()["session_token"]
         client.post(
             "/auth/keys",
             json={"label": "alice-key-1"},
@@ -175,11 +169,7 @@ def test_list_keys_returns_only_callers_keys(tmp_path: Path) -> None:
             json={"label": "bob-key"},
             headers={"Authorization": f"Bearer {bob_session}"},
         )
-        alice_keys = client.get(
-            "/auth/keys", headers={"Authorization": f"Bearer {alice_session}"}
-        ).json()["keys"]
-        bob_keys = client.get(
-            "/auth/keys", headers={"Authorization": f"Bearer {bob_session}"}
-        ).json()["keys"]
+        alice_keys = client.get("/auth/keys", headers={"Authorization": f"Bearer {alice_session}"}).json()["keys"]
+        bob_keys = client.get("/auth/keys", headers={"Authorization": f"Bearer {bob_session}"}).json()["keys"]
     assert {k["label"] for k in alice_keys} == {"alice-key-1", "alice-key-2"}
     assert {k["label"] for k in bob_keys} == {"bob-key"}

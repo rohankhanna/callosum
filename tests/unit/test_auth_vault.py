@@ -79,9 +79,7 @@ async def test_current_triggers_refresh_when_access_token_near_expiry(tmp_path: 
             json={
                 "access_token": new_access,
                 "refresh_token": "refresh-2",
-                "id_token": _make_jwt(
-                    {"https://api.openai.com/auth": {"chatgpt_account_id": "acct-jwt-2"}}
-                ),
+                "id_token": _make_jwt({"https://api.openai.com/auth": {"chatgpt_account_id": "acct-jwt-2"}}),
             },
         )
 

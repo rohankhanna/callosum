@@ -24,10 +24,7 @@ def db(tmp_path: Path) -> Path:
     p = tmp_path / "requests.sqlite"
     conn = sqlite3.connect(str(p))
     conn.execute(
-        "CREATE TABLE requests ("
-        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-        "prompt_text TEXT, "
-        "prompt_embedding BLOB)"
+        "CREATE TABLE requests (id INTEGER PRIMARY KEY AUTOINCREMENT, prompt_text TEXT, prompt_embedding BLOB)"
     )
     conn.executemany(
         "INSERT INTO requests (prompt_text, prompt_embedding) VALUES (?, ?)",
@@ -52,6 +49,7 @@ def stub_provider(monkeypatch):
     Exposes both async `embed` and batched `encode_batch_sync` so the
     fixture works whether the job calls the per-row or batched path.
     """
+
     class _FakeProvider:
         @property
         def dim(self) -> int:
@@ -79,41 +77,39 @@ def stub_provider(monkeypatch):
     return _FakeProvider
 
 
-def test_backfill_populates_embeddings_for_rows_with_prompt_text(
-    db: Path, stub_provider, tmp_path: Path
-) -> None:
+def test_backfill_populates_embeddings_for_rows_with_prompt_text(db: Path, stub_provider, tmp_path: Path) -> None:
     """Rows 1, 2, 5 should get embedded; row 3 (no prompt_text) and row 4
     (already has embedding) are left alone."""
     ckpt = tmp_path / "ck.json"
     rc = embed_backfill.run(
-        db_path=db, checkpoint_path=ckpt, batch_size=64, max_rows=None,
+        db_path=db,
+        checkpoint_path=ckpt,
+        batch_size=64,
+        max_rows=None,
     )
     assert rc == 0
     conn = sqlite3.connect(str(db))
-    rows = conn.execute(
-        "SELECT id, prompt_embedding IS NOT NULL FROM requests ORDER BY id"
-    ).fetchall()
+    rows = conn.execute("SELECT id, prompt_embedding IS NOT NULL FROM requests ORDER BY id").fetchall()
     conn.close()
     assert rows == [(1, 1), (2, 1), (3, 0), (4, 1), (5, 1)]
 
 
-def test_backfill_writes_checkpoint_after_processing(
-    db: Path, stub_provider, tmp_path: Path
-) -> None:
+def test_backfill_writes_checkpoint_after_processing(db: Path, stub_provider, tmp_path: Path) -> None:
     """After successful completion the checkpoint records the max id
     processed — a resumed run starts AFTER it (no work redone)."""
     ckpt = tmp_path / "ck.json"
     embed_backfill.run(
-        db_path=db, checkpoint_path=ckpt, batch_size=64, max_rows=None,
+        db_path=db,
+        checkpoint_path=ckpt,
+        batch_size=64,
+        max_rows=None,
     )
     assert ckpt.exists()
     data = json.loads(ckpt.read_text())
     assert data["cursor"] == 5  # last id processed
 
 
-def test_backfill_resumes_from_checkpoint(
-    db: Path, stub_provider, tmp_path: Path
-) -> None:
+def test_backfill_resumes_from_checkpoint(db: Path, stub_provider, tmp_path: Path) -> None:
     """Pre-seeded checkpoint at cursor=2 → backfill only processes
     rows with id > 2."""
     ckpt = tmp_path / "ck.json"
@@ -126,32 +122,33 @@ def test_backfill_resumes_from_checkpoint(
     conn.commit()
     conn.close()
     embed_backfill.run(
-        db_path=db, checkpoint_path=ckpt, batch_size=64, max_rows=None,
+        db_path=db,
+        checkpoint_path=ckpt,
+        batch_size=64,
+        max_rows=None,
     )
     conn = sqlite3.connect(str(db))
-    rows = conn.execute(
-        "SELECT id, prompt_embedding IS NOT NULL FROM requests ORDER BY id"
-    ).fetchall()
+    rows = conn.execute("SELECT id, prompt_embedding IS NOT NULL FROM requests ORDER BY id").fetchall()
     conn.close()
     # 1, 2 still NULL because cursor said skip them.
     assert rows == [(1, 0), (2, 0), (3, 0), (4, 1), (5, 1)]
 
 
-def test_backfill_respects_max_rows(
-    db: Path, stub_provider, tmp_path: Path
-) -> None:
+def test_backfill_respects_max_rows(db: Path, stub_provider, tmp_path: Path) -> None:
     """When --max-rows is given, the job stops after the batch that
     crosses it. batch_size=1 makes the cap exact — useful for Dispatch
     jobs that should run for a bounded time slice before yielding the
     GPU. (Larger batch_size may overshoot by up to batch_size-1.)"""
     ckpt = tmp_path / "ck.json"
     embed_backfill.run(
-        db_path=db, checkpoint_path=ckpt, batch_size=1, max_rows=2,
+        db_path=db,
+        checkpoint_path=ckpt,
+        batch_size=1,
+        max_rows=2,
     )
     conn = sqlite3.connect(str(db))
     embedded = conn.execute(
-        "SELECT COUNT(*) FROM requests "
-        "WHERE prompt_embedding IS NOT NULL AND prompt_text IS NOT NULL"
+        "SELECT COUNT(*) FROM requests WHERE prompt_embedding IS NOT NULL AND prompt_text IS NOT NULL"
     ).fetchone()[0]
     conn.close()
     # 2 newly embedded (rows 1, 2) + 1 already embedded (row 4) = 3.
@@ -159,9 +156,7 @@ def test_backfill_respects_max_rows(
     assert embedded == 3
     # Row 5 specifically should still be NULL.
     conn = sqlite3.connect(str(db))
-    row5_emb = conn.execute(
-        "SELECT prompt_embedding FROM requests WHERE id = 5"
-    ).fetchone()[0]
+    row5_emb = conn.execute("SELECT prompt_embedding FROM requests WHERE id = 5").fetchone()[0]
     conn.close()
     assert row5_emb is None
 

@@ -71,6 +71,7 @@ class BGELargeEmbeddingProvider:
                 # back to FP32 on CPU or older GPUs.
                 import torch
                 from sentence_transformers import SentenceTransformer
+
                 use_fp16 = torch.cuda.is_available()
                 kwargs: dict[str, Any] = {}
                 if use_fp16:
@@ -84,6 +85,7 @@ class BGELargeEmbeddingProvider:
     def _encode_sync(self, text: str) -> bytes:
         self._ensure_loaded()
         import numpy as np
+
         assert self._model is not None
         vec = self._model.encode(
             [text],
@@ -122,16 +124,14 @@ class BGELargeEmbeddingProvider:
         """
         self._ensure_loaded()
         import numpy as np
+
         assert self._model is not None
         # Pre-truncate before handing to encode — see comment on
         # _MAX_INPUT_CHARS_FOR_ENCODE for why. Slicing a Python str is
         # O(1) so this adds ~zero overhead, but avoids feeding the
         # tokenizer multi-MB inputs that produce identical embeddings
         # to a ~2KB prefix after BGE's internal truncation.
-        truncated = [
-            t[: self._MAX_INPUT_CHARS_FOR_ENCODE] if t else t
-            for t in texts
-        ]
+        truncated = [t[: self._MAX_INPUT_CHARS_FOR_ENCODE] if t else t for t in texts]
         vecs = self._model.encode(
             truncated,
             batch_size=batch_size,

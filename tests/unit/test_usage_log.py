@@ -101,9 +101,7 @@ def test_record_flags_window_reset_crossover(tmp_path: Path) -> None:
         )
     )
     conn = sqlite3.connect(tmp_path / "u.sqlite")
-    (crossover,) = conn.execute(
-        "SELECT quota_reset_crossover FROM requests WHERE id = ?", (rowid,)
-    ).fetchone()
+    (crossover,) = conn.execute("SELECT quota_reset_crossover FROM requests WHERE id = ?", (rowid,)).fetchone()
     assert crossover == 1
     log.close()
 
@@ -116,8 +114,7 @@ def test_record_writes_compressed_bodies_round_trip(tmp_path: Path) -> None:
     rowid = log.record(_entry(req_payload=req, resp_payload=resp, upstream_headers=headers))
     conn = sqlite3.connect(tmp_path / "u.sqlite")
     row = conn.execute(
-        "SELECT req_payload, resp_payload, upstream_headers"
-        " FROM request_bodies WHERE request_id = ?",
+        "SELECT req_payload, resp_payload, upstream_headers FROM request_bodies WHERE request_id = ?",
         (rowid,),
     ).fetchone()
     assert row is not None
@@ -139,9 +136,7 @@ def test_capture_bodies_off_drops_blobs(tmp_path: Path) -> None:
         )
     )
     conn = sqlite3.connect(tmp_path / "u.sqlite")
-    row = conn.execute(
-        "SELECT COUNT(*) FROM request_bodies WHERE request_id = ?", (rowid,)
-    ).fetchone()
+    row = conn.execute("SELECT COUNT(*) FROM request_bodies WHERE request_id = ?", (rowid,)).fetchone()
     assert row[0] == 0
     log.close()
 
@@ -252,7 +247,5 @@ def test_migration_backfills_existing_rows(tmp_path: Path) -> None:
     log = UsageLog(db_path)
     log.close()
     conn = sqlite3.connect(db_path)
-    row = conn.execute(
-        "SELECT requested_model, requested_reasoning_effort, routing_mode FROM requests"
-    ).fetchone()
+    row = conn.execute("SELECT requested_model, requested_reasoning_effort, routing_mode FROM requests").fetchone()
     assert row == ("model-a0e7", "xhigh", "pass-through")

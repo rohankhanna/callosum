@@ -40,7 +40,8 @@ def _redirect_profile_dir(monkeypatch, tmp_path: Path):
     profile written by a real running callosum instance and assertions
     would silently see stale field values."""
     monkeypatch.setattr(
-        "callosum.capability.profile.DEFAULT_PROFILE_DIR", tmp_path,
+        "callosum.capability.profile.DEFAULT_PROFILE_DIR",
+        tmp_path,
     )
     yield
 
@@ -77,19 +78,16 @@ def test_runner_stamps_identity_from_provider() -> None:
     profile carries it. Without this, the whole 'callosum knows which
     cells share weights' story falls apart at the persistence layer."""
     identity = WeightIdentity(
-        source="model-a0d6", runtime="ollama",
-        quantization="ollama-q4_k_m", family="model-a0e5",
+        source="model-a0d6",
+        runtime="ollama",
+        quantization="ollama-q4_k_m",
+        family="model-a0e5",
     )
     provider = _StubProvider({"model-a0a9": identity})
 
     # Use a non-empty response so at least one dimension produces a
     # result and triggers profile.save().
-    fake_response = {
-        "output": [
-            {"type": "function_call", "name": "exec_command",
-             "call_id": "1", "arguments": "{}"}
-        ]
-    }
+    fake_response = {"output": [{"type": "function_call", "name": "exec_command", "call_id": "1", "arguments": "{}"}]}
     asyncio.run(
         runner.run_dimensions(
             cell="model-a0a9",
@@ -108,16 +106,13 @@ def test_runner_persists_identity_in_json_roundtrip() -> None:
     drops the field, our pipeline is broken regardless of how well the
     in-memory stamping works."""
     identity = WeightIdentity(
-        source="model-a0d7", runtime="responses_proxy",
-        quantization="ollama-q4_k_m", family="model-a0e5",
+        source="model-a0d7",
+        runtime="responses_proxy",
+        quantization="ollama-q4_k_m",
+        family="model-a0e5",
     )
     provider = _StubProvider({"model-a0a3": identity})
-    fake_response = {
-        "output": [
-            {"type": "function_call", "name": "exec_command",
-             "call_id": "1", "arguments": "{}"}
-        ]
-    }
+    fake_response = {"output": [{"type": "function_call", "name": "exec_command", "call_id": "1", "arguments": "{}"}]}
     asyncio.run(
         runner.run_dimensions(
             cell="model-a0a3",
@@ -140,7 +135,8 @@ def test_runner_does_not_clobber_existing_identity_on_none() -> None:
     # Seed the profile with a known identity.
     profile = CapabilityProfile(model_id="seeded-cell")
     profile.weight_identity = WeightIdentity(
-        source="known-source", runtime="ollama",
+        source="known-source",
+        runtime="ollama",
     )
     profile.upsert(
         DimensionFinding(
@@ -152,12 +148,7 @@ def test_runner_does_not_clobber_existing_identity_on_none() -> None:
     save_profile(profile)
 
     # Now run with a provider that knows nothing about this cell.
-    fake_response = {
-        "output": [
-            {"type": "function_call", "name": "exec_command",
-             "call_id": "1", "arguments": "{}"}
-        ]
-    }
+    fake_response = {"output": [{"type": "function_call", "name": "exec_command", "call_id": "1", "arguments": "{}"}]}
     asyncio.run(
         runner.run_dimensions(
             cell="seeded-cell",
@@ -178,12 +169,7 @@ def test_runner_omits_identity_when_no_provider() -> None:
     whatever it was (initially None for a fresh cell). Verifies the
     runner doesn't construct a default provider on its own — the
     caller's choice is respected."""
-    fake_response = {
-        "output": [
-            {"type": "function_call", "name": "exec_command",
-             "call_id": "1", "arguments": "{}"}
-        ]
-    }
+    fake_response = {"output": [{"type": "function_call", "name": "exec_command", "call_id": "1", "arguments": "{}"}]}
     asyncio.run(
         runner.run_dimensions(
             cell="unprovided-cell",

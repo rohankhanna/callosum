@@ -30,7 +30,8 @@ def _reset_cache_and_redirect(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     in-memory cache before each test. Without this every test would
     pollute the next via the module-global cache."""
     monkeypatch.setattr(
-        gating, "profile_path",
+        gating,
+        "profile_path",
         lambda model_id, profile_dir=None: tmp_path / f"{model_id}.json",
     )
     gating.clear_cache()
@@ -38,9 +39,7 @@ def _reset_cache_and_redirect(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     gating.clear_cache()
 
 
-def _write_finding(
-    tmp_path: Path, model_id: str, status: str
-) -> None:
+def _write_finding(tmp_path: Path, model_id: str, status: str) -> None:
     """Helper: persist a profile with one tool_call_at_scale finding."""
     profile = CapabilityProfile(model_id=model_id)
     profile.upsert(

@@ -186,7 +186,9 @@ class LocalLlmCliWeightIdentityProvider:
             )
         except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
             logger.warning(
-                "%s: failed to invoke local-llm CLI: %s", self.id, exc,
+                "%s: failed to invoke local-llm CLI: %s",
+                self.id,
+                exc,
             )
             with self._lock:
                 # Stamp time so we don't retry on every call within
@@ -197,7 +199,9 @@ class LocalLlmCliWeightIdentityProvider:
         if proc.returncode != 0:
             logger.warning(
                 "%s: local-llm CLI exited %d; stderr=%s",
-                self.id, proc.returncode, proc.stderr[:300],
+                self.id,
+                proc.returncode,
+                proc.stderr[:300],
             )
             with self._lock:
                 self._catalog_at = now
@@ -206,7 +210,9 @@ class LocalLlmCliWeightIdentityProvider:
             payload = json.loads(proc.stdout)
         except json.JSONDecodeError as exc:
             logger.warning(
-                "%s: local-llm output not valid JSON: %s", self.id, exc,
+                "%s: local-llm output not valid JSON: %s",
+                self.id,
+                exc,
             )
             with self._lock:
                 self._catalog_at = now
@@ -214,7 +220,8 @@ class LocalLlmCliWeightIdentityProvider:
         entries = payload.get("entries") if isinstance(payload, dict) else None
         if not isinstance(entries, list):
             logger.warning(
-                "%s: local-llm output lacks 'entries' list", self.id,
+                "%s: local-llm output lacks 'entries' list",
+                self.id,
             )
             with self._lock:
                 self._catalog_at = now
@@ -236,10 +243,8 @@ class LocalLlmCliWeightIdentityProvider:
             new_catalog[model_id] = WeightIdentity(
                 source=source,
                 runtime=runtime,
-                quantization=m.get("quantization")
-                if isinstance(m.get("quantization"), str) else None,
-                family=m.get("family")
-                if isinstance(m.get("family"), str) else None,
+                quantization=m.get("quantization") if isinstance(m.get("quantization"), str) else None,
+                family=m.get("family") if isinstance(m.get("family"), str) else None,
             )
         with self._lock:
             self._catalog = new_catalog
@@ -298,10 +303,7 @@ class HeuristicWeightIdentityProvider:
             return None
         # Family is the stem with size tag stripped, if recognizable.
         family_match = _SIZE_TAG_PATTERN.search(stem)
-        family = (
-            stem[: family_match.start()].rstrip("-")
-            if family_match else stem
-        )
+        family = stem[: family_match.start()].rstrip("-") if family_match else stem
         return WeightIdentity(
             source=stem,
             runtime=runtime,
@@ -366,8 +368,7 @@ class CompositeWeightIdentityProvider:
             # an operator notices a missing wire-up at startup rather
             # than wondering why every weight_family is None forever.
             logger.warning(
-                "composite weight-identity provider constructed with NO "
-                "providers; identify() will always return None"
+                "composite weight-identity provider constructed with NO providers; identify() will always return None"
             )
         self._providers = providers
         self._stats = _CompositeStats()
@@ -382,7 +383,8 @@ class CompositeWeightIdentityProvider:
             except Exception:
                 logger.exception(
                     "composite weight-identity: provider %r raised on %r",
-                    p.id, model_id,
+                    p.id,
+                    model_id,
                 )
                 continue
             if ans is None:
@@ -393,10 +395,13 @@ class CompositeWeightIdentityProvider:
                 continue
             if ans.source != first_answer.source:
                 logger.warning(
-                    "weight-identity disagreement for %r: %s says source=%r, "
-                    "%s says source=%r (using %s)",
-                    model_id, first_provider_id, first_answer.source,
-                    p.id, ans.source, first_provider_id,
+                    "weight-identity disagreement for %r: %s says source=%r, %s says source=%r (using %s)",
+                    model_id,
+                    first_provider_id,
+                    first_answer.source,
+                    p.id,
+                    ans.source,
+                    first_provider_id,
                 )
                 with self._lock:
                     self._stats.disagreements += 1
@@ -404,9 +409,7 @@ class CompositeWeightIdentityProvider:
             if first_answer is None:
                 self._stats.misses += 1
             elif first_provider_id is not None:
-                self._stats.hits[first_provider_id] = (
-                    self._stats.hits.get(first_provider_id, 0) + 1
-                )
+                self._stats.hits[first_provider_id] = self._stats.hits.get(first_provider_id, 0) + 1
         return first_answer
 
     def stats(self) -> dict[str, Any]:

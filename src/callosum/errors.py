@@ -10,9 +10,7 @@ ErrorClass = Literal[
     "transient",
 ]
 
-RETRYABLE: frozenset[ErrorClass] = frozenset(
-    {"auth_invalid", "unknown_model", "rate_limited", "transient"}
-)
+RETRYABLE: frozenset[ErrorClass] = frozenset({"auth_invalid", "unknown_model", "rate_limited", "transient"})
 
 
 class BackendError(Exception):

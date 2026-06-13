@@ -197,13 +197,9 @@ class LiteLLMGatewayBackend:
         if self._owns_client:
             await self._client.aclose()
 
-    async def chat_completions(
-        self, body: dict[str, Any], handle: CallHandle | None = None
-    ) -> dict[str, Any]:
+    async def chat_completions(self, body: dict[str, Any], handle: CallHandle | None = None) -> dict[str, Any]:
         await self._refresh_catalog_if_stale()
-        out_body = self._apply_inference_params(
-            _strip_codex_only_fields({**body, "stream": False})
-        )
+        out_body = self._apply_inference_params(_strip_codex_only_fields({**body, "stream": False}))
         _reject_oversized_tool_request(out_body)
         # KNOWN LIMITATION (2026-06-09): the LiteLLM gateway's chat-
         # completions hangs indefinitely for certain advertised models
@@ -252,9 +248,7 @@ class LiteLLMGatewayBackend:
         self, body: dict[str, Any], handle: CallHandle | None = None
     ) -> AsyncIterator[bytes]:
         await self._refresh_catalog_if_stale()
-        out_body = self._apply_inference_params(
-            _strip_codex_only_fields({**body, "stream": True})
-        )
+        out_body = self._apply_inference_params(_strip_codex_only_fields({**body, "stream": True}))
         _reject_oversized_tool_request(out_body)
         try:
             stream_ctx = self._client.stream(
@@ -275,9 +269,7 @@ class LiteLLMGatewayBackend:
         except httpx.HTTPError as exc:
             raise BackendError(classification="transient", message=str(exc)) from exc
 
-    async def responses(
-        self, body: dict[str, Any], handle: CallHandle | None = None
-    ) -> dict[str, Any]:
+    async def responses(self, body: dict[str, Any], handle: CallHandle | None = None) -> dict[str, Any]:
         # LiteLLM is chat-completions-first. Translate to chat, call,
         # translate back. Sufficient for the simple text path; advanced
         # Responses-API features (file inputs, structured outputs, etc.)
@@ -286,9 +278,7 @@ class LiteLLMGatewayBackend:
         chat_response = await self.chat_completions(chat_body, handle)
         return _chat_to_responses_response(chat_response)
 
-    async def responses_stream(
-        self, body: dict[str, Any], handle: CallHandle | None = None
-    ) -> AsyncIterator[bytes]:
+    async def responses_stream(self, body: dict[str, Any], handle: CallHandle | None = None) -> AsyncIterator[bytes]:
         """True stream-through Responses-API SSE.
 
         Opens an httpx stream to LiteLLM (which streams from ollama) and
@@ -334,9 +324,7 @@ class LiteLLMGatewayBackend:
         # Capture the inner generator's output as it flows so the
         # final `handle.stream_summary` has a parseable raw_blob
         # containing the emitted response.completed event.
-        collector = ResponsesStreamCollector(
-            self._responses_stream_inner(body, handle)
-        )
+        collector = ResponsesStreamCollector(self._responses_stream_inner(body, handle))
         try:
             async for chunk in collector.iter_through():
                 yield chunk
@@ -344,17 +332,13 @@ class LiteLLMGatewayBackend:
             if handle is not None:
                 handle.stream_summary = collector.summary
 
-    async def _responses_stream_inner(
-        self, body: dict[str, Any], handle: CallHandle | None
-    ) -> AsyncIterator[bytes]:
+    async def _responses_stream_inner(self, body: dict[str, Any], handle: CallHandle | None) -> AsyncIterator[bytes]:
         """The translation generator. Was previously the body of
         `responses_stream` directly; split out so the outer method
         can tee the output through a ResponsesStreamCollector to
         populate stream_summary on the handle. See `responses_stream`
         docstring for the rationale."""
-        out_body = self._apply_inference_params(
-            _strip_codex_only_fields({**body, "stream": True})
-        )
+        out_body = self._apply_inference_params(_strip_codex_only_fields({**body, "stream": True}))
         _reject_oversized_tool_request(out_body)
         # If the body arrived in Responses-API shape (has `input` instead
         # of `messages`), translate to Chat Completions shape before
@@ -465,21 +449,27 @@ class LiteLLMGatewayBackend:
                             reasoning_output_index = next_output_index
                             next_output_index += 1
                             reasoning_item_id = f"rs_{resp_id}_{reasoning_output_index}"
-                            yield _emit("response.output_item.added", {
-                                "output_index": reasoning_output_index,
-                                "item": {
-                                    "type": "reasoning",
-                                    "id": reasoning_item_id,
-                                    "summary": [],
+                            yield _emit(
+                                "response.output_item.added",
+                                {
+                                    "output_index": reasoning_output_index,
+                                    "item": {
+                                        "type": "reasoning",
+                                        "id": reasoning_item_id,
+                                        "summary": [],
+                                    },
                                 },
-                            })
+                            )
                         thinking_so_far += thinking_delta
-                        yield _emit("response.reasoning_summary_text.delta", {
-                            "item_id": reasoning_item_id,
-                            "output_index": reasoning_output_index,
-                            "summary_index": 0,
-                            "delta": thinking_delta,
-                        })
+                        yield _emit(
+                            "response.reasoning_summary_text.delta",
+                            {
+                                "item_id": reasoning_item_id,
+                                "output_index": reasoning_output_index,
+                                "summary_index": 0,
+                                "delta": thinking_delta,
+                            },
+                        )
 
                     # Tool-call deltas.
                     tool_calls_delta = delta.get("tool_calls") or []
@@ -506,17 +496,20 @@ class LiteLLMGatewayBackend:
                                     "item_id": f"fc_{call_id}",
                                 }
                                 tool_calls_state[tc_idx] = state
-                                yield _emit("response.output_item.added", {
-                                    "output_index": out_idx,
-                                    "item": {
-                                        "type": "function_call",
-                                        "id": state["item_id"],
-                                        "call_id": call_id,
-                                        "name": name,
-                                        "arguments": "",
-                                        "status": "in_progress",
+                                yield _emit(
+                                    "response.output_item.added",
+                                    {
+                                        "output_index": out_idx,
+                                        "item": {
+                                            "type": "function_call",
+                                            "id": state["item_id"],
+                                            "call_id": call_id,
+                                            "name": name,
+                                            "arguments": "",
+                                            "status": "in_progress",
+                                        },
                                     },
-                                })
+                                )
                             else:
                                 fn = tc_delta.get("function") or {}
                                 if isinstance(fn, dict) and isinstance(fn.get("name"), str):
@@ -525,11 +518,14 @@ class LiteLLMGatewayBackend:
                             args_delta = fn.get("arguments") if isinstance(fn, dict) else None
                             if isinstance(args_delta, str) and args_delta:
                                 state["args"] += args_delta
-                                yield _emit("response.function_call_arguments.delta", {
-                                    "item_id": state["item_id"],
-                                    "output_index": state["output_index"],
-                                    "delta": args_delta,
-                                })
+                                yield _emit(
+                                    "response.function_call_arguments.delta",
+                                    {
+                                        "item_id": state["item_id"],
+                                        "output_index": state["output_index"],
+                                        "delta": args_delta,
+                                    },
+                                )
 
                     # Message text delta.
                     content_delta = delta.get("content")
@@ -538,52 +534,67 @@ class LiteLLMGatewayBackend:
                             message_output_index = next_output_index
                             next_output_index += 1
                             message_item_id = f"msg_{resp_id}_{message_output_index}"
-                            yield _emit("response.output_item.added", {
-                                "output_index": message_output_index,
-                                "item": {
-                                    "type": "message",
-                                    "id": message_item_id,
-                                    "role": "assistant",
-                                    "content": [],
-                                    "status": "in_progress",
+                            yield _emit(
+                                "response.output_item.added",
+                                {
+                                    "output_index": message_output_index,
+                                    "item": {
+                                        "type": "message",
+                                        "id": message_item_id,
+                                        "role": "assistant",
+                                        "content": [],
+                                        "status": "in_progress",
+                                    },
                                 },
-                            })
+                            )
                         text_so_far += content_delta
-                        yield _emit("response.output_text.delta", {
-                            "item_id": message_item_id,
-                            "output_index": message_output_index,
-                            "content_index": 0,
-                            "delta": content_delta,
-                        })
+                        yield _emit(
+                            "response.output_text.delta",
+                            {
+                                "item_id": message_item_id,
+                                "output_index": message_output_index,
+                                "content_index": 0,
+                                "delta": content_delta,
+                            },
+                        )
 
             # Stream ended cleanly.
             # Emit per-item .done events in output order, then
             # response.output_item.done, then response.completed.
             if reasoning_output_index is not None:
-                yield _emit("response.reasoning_summary_text.done", {
-                    "item_id": reasoning_item_id,
-                    "output_index": reasoning_output_index,
-                    "summary_index": 0,
-                    "text": thinking_so_far,
-                })
+                yield _emit(
+                    "response.reasoning_summary_text.done",
+                    {
+                        "item_id": reasoning_item_id,
+                        "output_index": reasoning_output_index,
+                        "summary_index": 0,
+                        "text": thinking_so_far,
+                    },
+                )
                 reasoning_item = {
                     "type": "reasoning",
                     "id": reasoning_item_id,
                     "summary": [{"type": "summary_text", "text": thinking_so_far}],
                 }
                 output_items.append(reasoning_item)
-                yield _emit("response.output_item.done", {
-                    "output_index": reasoning_output_index,
-                    "item": reasoning_item,
-                })
+                yield _emit(
+                    "response.output_item.done",
+                    {
+                        "output_index": reasoning_output_index,
+                        "item": reasoning_item,
+                    },
+                )
 
             for tc_idx in sorted(tool_calls_state):
                 state = tool_calls_state[tc_idx]
-                yield _emit("response.function_call_arguments.done", {
-                    "item_id": state["item_id"],
-                    "output_index": state["output_index"],
-                    "arguments": state["args"],
-                })
+                yield _emit(
+                    "response.function_call_arguments.done",
+                    {
+                        "item_id": state["item_id"],
+                        "output_index": state["output_index"],
+                        "arguments": state["args"],
+                    },
+                )
                 fn_item = {
                     "type": "function_call",
                     "id": state["item_id"],
@@ -593,18 +604,24 @@ class LiteLLMGatewayBackend:
                     "status": "completed",
                 }
                 output_items.append(fn_item)
-                yield _emit("response.output_item.done", {
-                    "output_index": state["output_index"],
-                    "item": fn_item,
-                })
+                yield _emit(
+                    "response.output_item.done",
+                    {
+                        "output_index": state["output_index"],
+                        "item": fn_item,
+                    },
+                )
 
             if message_output_index is not None:
-                yield _emit("response.output_text.done", {
-                    "item_id": message_item_id,
-                    "output_index": message_output_index,
-                    "content_index": 0,
-                    "text": text_so_far,
-                })
+                yield _emit(
+                    "response.output_text.done",
+                    {
+                        "item_id": message_item_id,
+                        "output_index": message_output_index,
+                        "content_index": 0,
+                        "text": text_so_far,
+                    },
+                )
                 msg_item = {
                     "type": "message",
                     "id": message_item_id,
@@ -613,10 +630,13 @@ class LiteLLMGatewayBackend:
                     "status": "completed",
                 }
                 output_items.append(msg_item)
-                yield _emit("response.output_item.done", {
-                    "output_index": message_output_index,
-                    "item": msg_item,
-                })
+                yield _emit(
+                    "response.output_item.done",
+                    {
+                        "output_index": message_output_index,
+                        "item": msg_item,
+                    },
+                )
 
             # Codex CLI requires input_tokens; map from chat usage shape.
             chat_usage = usage if isinstance(usage, dict) else {}
@@ -723,7 +743,7 @@ class LiteLLMGatewayBackend:
             if not isinstance(model_id, str) or not isinstance(litellm_name, str):
                 continue
             if model_id.startswith("ollama/"):
-                ollama_mapping[litellm_name] = model_id[len("ollama/"):]
+                ollama_mapping[litellm_name] = model_id[len("ollama/") :]
         # Step 2: per-model /api/show on ollama directly.
         for litellm_name, ollama_name in ollama_mapping.items():
             try:
@@ -814,9 +834,7 @@ class LiteLLMGatewayBackend:
         operator_overrides: dict[str, Any] = {}
         operator_force = False
         if self._operator_state is not None:
-            operator_overrides, operator_force = (
-                self._operator_state.get_inference_overrides(model)
-            )
+            operator_overrides, operator_force = self._operator_state.get_inference_overrides(model)
         return merge_inference_params(
             backend_defaults=backend_defaults,
             operator_overrides=operator_overrides,
@@ -899,9 +917,7 @@ def _reject_oversized_tool_request(body: dict[str, Any]) -> None:
     tools = body.get("tools")
     if not isinstance(tools, list) or not tools:
         return
-    request_bytes = len(
-        json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    )
+    request_bytes = len(json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
     if request_bytes <= MAX_LOCAL_TOOL_REQUEST_BYTES:
         return
     raise BackendError(
@@ -942,16 +958,18 @@ def _strip_codex_only_fields(body: dict[str, Any]) -> dict[str, Any]:
 # top_p, parallel_tool_calls, n, seed, response_format, …) is preserved
 # verbatim — keeps the translator small as new request fields are added
 # upstream.
-_RESPONSES_ONLY_KEYS: frozenset[str] = frozenset({
-    "input",
-    "instructions",
-    "store",
-    "include",
-    "prompt_cache_key",
-    "client_metadata",
-    "text",  # Responses-API response_format equivalent; not the same field
-    "reasoning",  # Codex-only request hint; redundant since _strip_codex_only_fields
-})
+_RESPONSES_ONLY_KEYS: frozenset[str] = frozenset(
+    {
+        "input",
+        "instructions",
+        "store",
+        "include",
+        "prompt_cache_key",
+        "client_metadata",
+        "text",  # Responses-API response_format equivalent; not the same field
+        "reasoning",  # Codex-only request hint; redundant since _strip_codex_only_fields
+    }
+)
 
 
 def _extract_text_from_content(content: Any) -> str:
@@ -1006,9 +1024,7 @@ def _responses_to_chat_request(body: dict[str, Any]) -> dict[str, Any]:
     # is the opposite of a key whitelist — we explicitly know what to
     # drop, and pass through everything else. Reduces translator churn as
     # the upstream API grows.
-    chat_body: dict[str, Any] = {
-        k: v for k, v in body.items() if k not in _RESPONSES_ONLY_KEYS
-    }
+    chat_body: dict[str, Any] = {k: v for k, v in body.items() if k not in _RESPONSES_ONLY_KEYS}
     messages: list[dict[str, Any]] = []
     instructions = body.get("instructions")
     if isinstance(instructions, str) and instructions:
@@ -1024,11 +1040,13 @@ def _responses_to_chat_request(body: dict[str, Any]) -> dict[str, Any]:
 
         def _flush_pending() -> None:
             if pending_tool_calls:
-                messages.append({
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": list(pending_tool_calls),
-                })
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": list(pending_tool_calls),
+                    }
+                )
                 pending_tool_calls.clear()
 
         for item in input_block:
@@ -1052,14 +1070,16 @@ def _responses_to_chat_request(body: dict[str, Any]) -> dict[str, Any]:
                     args = json.dumps(args)
                 elif not isinstance(args, str):
                     args = "{}"
-                pending_tool_calls.append({
-                    "id": call_id,
-                    "type": "function",
-                    "function": {
-                        "name": item.get("name", ""),
-                        "arguments": args,
-                    },
-                })
+                pending_tool_calls.append(
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": item.get("name", ""),
+                            "arguments": args,
+                        },
+                    }
+                )
             elif t in ("function_call_output", "custom_tool_call_output"):
                 _flush_pending()
                 output = item.get("output", "")
@@ -1067,11 +1087,13 @@ def _responses_to_chat_request(body: dict[str, Any]) -> dict[str, Any]:
                     output = json.dumps(output)
                 elif not isinstance(output, str):
                     output = str(output)
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": item.get("call_id", ""),
-                    "content": output,
-                })
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": item.get("call_id", ""),
+                        "content": output,
+                    }
+                )
             elif t == "reasoning":
                 # Encrypted CoT from prior OpenAI turns; no chat-completions
                 # equivalent. Dropping it is correct, not lossy in the sense
@@ -1080,16 +1102,17 @@ def _responses_to_chat_request(body: dict[str, Any]) -> dict[str, Any]:
                 # reasoning produced.
                 continue
             elif t == "compaction":
-                summary = (
-                    _extract_text_from_content(item.get("content"))
-                    or (item.get("summary") if isinstance(item.get("summary"), str) else "")
+                summary = _extract_text_from_content(item.get("content")) or (
+                    item.get("summary") if isinstance(item.get("summary"), str) else ""
                 )
                 if summary:
                     _flush_pending()
-                    messages.append({
-                        "role": "system",
-                        "content": f"[compacted prior turns: {summary}]",
-                    })
+                    messages.append(
+                        {
+                            "role": "system",
+                            "content": f"[compacted prior turns: {summary}]",
+                        }
+                    )
             # Unknown types are intentionally dropped. Add a branch here
             # the first time a new type surfaces in real traffic.
         _flush_pending()
@@ -1142,11 +1165,13 @@ def _chat_to_responses_response(chat: dict[str, Any]) -> dict[str, Any]:
     # are present, emit an empty message so output[] is never empty.
     output: list[dict[str, Any]] = []
     if thinking:
-        output.append({
-            "type": "reasoning",
-            "id": f"rs_{chat.get('id', 'reasoning')}",
-            "summary": [{"type": "summary_text", "text": thinking}],
-        })
+        output.append(
+            {
+                "type": "reasoning",
+                "id": f"rs_{chat.get('id', 'reasoning')}",
+                "summary": [{"type": "summary_text", "text": thinking}],
+            }
+        )
     for tc in tool_calls:
         fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
         if not isinstance(fn, dict):
@@ -1160,23 +1185,27 @@ def _chat_to_responses_response(chat: dict[str, Any]) -> dict[str, Any]:
         elif not isinstance(args, str):
             args = "{}"
         call_id = tc.get("id") or fn.get("name", "") or "fc-unknown"
-        output.append({
-            "type": "function_call",
-            "id": f"fc_{call_id}",
-            "call_id": call_id,
-            "name": fn.get("name", ""),
-            "arguments": args,
-            "status": "completed",
-        })
+        output.append(
+            {
+                "type": "function_call",
+                "id": f"fc_{call_id}",
+                "call_id": call_id,
+                "name": fn.get("name", ""),
+                "arguments": args,
+                "status": "completed",
+            }
+        )
     if text or not tool_calls:
         # Emit the message even when empty if there were no tool calls,
         # so output[] is never an empty list (Codex parsers vary on
         # how strictly they require at least one item).
-        output.append({
-            "type": "message",
-            "role": "assistant",
-            "content": [{"type": "output_text", "text": text}],
-        })
+        output.append(
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": text}],
+            }
+        )
     # Translate usage from chat-completions shape (prompt_tokens /
     # completion_tokens) to Responses-API shape (input_tokens /
     # output_tokens). Codex CLI's stream parser hard-fails with

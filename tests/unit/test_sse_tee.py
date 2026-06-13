@@ -51,9 +51,7 @@ def test_parse_response_completed_extracts_terminal_event_payload() -> None:
 
 
 def test_parse_response_completed_returns_none_when_event_missing() -> None:
-    blob = _build_stream(
-        [("response.output_text.delta", {"type": "response.output_text.delta", "delta": "x"})]
-    )
+    blob = _build_stream([("response.output_text.delta", {"type": "response.output_text.delta", "delta": "x"})])
     assert parse_response_completed(blob) is None
 
 
@@ -70,11 +68,7 @@ def test_parse_response_completed_handles_multi_data_line_payload() -> None:
     # Split the JSON across two data: lines (legal in SSE, rarely seen in
     # practice but the parser must cope).
     mid = len(raw) // 2
-    blob = (
-        b"event: response.completed\n"
-        b"data: " + raw[:mid].encode() + b"\n"
-        b"data: " + raw[mid:].encode() + b"\n\n"
-    )
+    blob = b"event: response.completed\ndata: " + raw[:mid].encode() + b"\ndata: " + raw[mid:].encode() + b"\n\n"
     parsed = parse_response_completed(blob)
     assert parsed is not None
     assert parsed["id"] == "r42"
@@ -82,10 +76,7 @@ def test_parse_response_completed_handles_multi_data_line_payload() -> None:
 
 async def test_collector_forwards_bytes_verbatim_and_exposes_summary() -> None:
     created = b'event: response.created\ndata: {"type":"response.created","id":"r1"}\n\n'
-    delta = (
-        b"event: response.output_text.delta\n"
-        b'data: {"type":"response.output_text.delta","delta":"hi"}\n\n'
-    )
+    delta = b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"hi"}\n\n'
     completed = (
         b"event: response.completed\n"
         b'data: {"type":"response.completed","response":{"id":"r1",'
@@ -124,11 +115,11 @@ def test_extract_output_text_concatenates_done_events() -> None:
     from callosum.sse_tee import extract_output_text_from_blob
 
     blob = (
-        b'event: response.output_text.delta\n'
+        b"event: response.output_text.delta\n"
         b'data: {"type":"response.output_text.delta","delta":"Hello, "}\n\n'
-        b'event: response.output_text.delta\n'
+        b"event: response.output_text.delta\n"
         b'data: {"type":"response.output_text.delta","delta":"world!"}\n\n'
-        b'event: response.output_text.done\n'
+        b"event: response.output_text.done\n"
         b'data: {"type":"response.output_text.done","text":"Hello, world!"}\n\n'
     )
     assert extract_output_text_from_blob(blob) == "Hello, world!"
@@ -141,9 +132,9 @@ def test_extract_output_text_falls_back_to_deltas_when_no_done() -> None:
     from callosum.sse_tee import extract_output_text_from_blob
 
     blob = (
-        b'event: response.output_text.delta\n'
+        b"event: response.output_text.delta\n"
         b'data: {"type":"response.output_text.delta","delta":"Partial "}\n\n'
-        b'event: response.output_text.delta\n'
+        b"event: response.output_text.delta\n"
         b'data: {"type":"response.output_text.delta","delta":"answer"}\n\n'
     )
     assert extract_output_text_from_blob(blob) == "Partial answer"
@@ -157,11 +148,11 @@ def test_assemble_completed_injects_text_when_output_is_empty() -> None:
     from callosum.sse_tee import assemble_completed_with_text
 
     blob = (
-        b'event: response.output_text.delta\n'
+        b"event: response.output_text.delta\n"
         b'data: {"type":"response.output_text.delta","delta":"model-a0e7 high"}\n\n'
-        b'event: response.output_text.done\n'
+        b"event: response.output_text.done\n"
         b'data: {"type":"response.output_text.done","text":"model-a0e7 high"}\n\n'
-        b'event: response.completed\n'
+        b"event: response.completed\n"
         b'data: {"type":"response.completed","response":{"id":"r1","output":[],"usage":{"total_tokens":4}}}\n\n'
     )
     result = assemble_completed_with_text(blob)
@@ -183,9 +174,9 @@ def test_assemble_completed_preserves_existing_output_items() -> None:
     from callosum.sse_tee import assemble_completed_with_text
 
     blob = (
-        b'event: response.output_text.done\n'
+        b"event: response.output_text.done\n"
         b'data: {"type":"response.output_text.done","text":"4"}\n\n'
-        b'event: response.completed\n'
+        b"event: response.completed\n"
         b'data: {"type":"response.completed","response":{"id":"r1","output":[{"type":"reasoning","summary":[]}],"usage":{}}}\n\n'
     )
     result = assemble_completed_with_text(blob)
@@ -203,9 +194,9 @@ def test_assemble_completed_skips_injection_when_text_already_present() -> None:
     from callosum.sse_tee import assemble_completed_with_text
 
     blob = (
-        b'event: response.output_text.done\n'
+        b"event: response.output_text.done\n"
         b'data: {"type":"response.output_text.done","text":"hello"}\n\n'
-        b'event: response.completed\n'
+        b"event: response.completed\n"
         b'data: {"type":"response.completed","response":{"id":"r1","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}]}}\n\n'
     )
     result = assemble_completed_with_text(blob)

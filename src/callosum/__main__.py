@@ -60,6 +60,7 @@ def serve_with_args(args: argparse.Namespace) -> None:
     if not config_path.exists():
         # Mirror argparse.error's behavior — write to stderr and exit non-zero.
         import sys as _sys
+
         _sys.stderr.write(f"error: config not found: {config_path}\n")
         _sys.exit(2)
     _run_server(config_path, args.host, args.port)
@@ -95,6 +96,7 @@ def _run_server(config_path: Path, host: str | None, port: int | None) -> None:
     # later steps). Lives alongside auth.sqlite under state.dir.
     if cfg.state.dir is None:
         import sys as _sys
+
         _sys.stderr.write("error: config.state.dir must be set\n")
         _sys.exit(2)
     operator_state = OperatorState(cfg.state.dir / "operator_state.sqlite")
@@ -102,28 +104,25 @@ def _run_server(config_path: Path, host: str | None, port: int | None) -> None:
     # subsequent runs reuse the persisted level. Lives alongside
     # operator_state.sqlite under state.dir.
     from callosum.autonomy import AutonomyStore
+
     autonomy_store = AutonomyStore(cfg.state.dir / "autonomy.sqlite")
     # Retention runner (Tier G) — owns the v1 policy list bound to the
     # actual db / repo / filesystem locations on this host. Wired to
     # the same usage_log / autonomy db paths the proxy uses, so
     # archives + deletes operate on the same data.
     from callosum.retention import DEFAULT_ARCHIVE_DIR, RetentionRunner
+
     repo_root_for_retention: Path | None = None
     callosum_pkg = Path(__file__).resolve().parent
     candidate_root = callosum_pkg.parents[1]
     if (candidate_root / ".git").exists():
         repo_root_for_retention = candidate_root
-    research_runner_runs_dir = (
-        Path.home() / ".local" / "state" / "research_runner"
-        / "model-research" / "runs"
-    )
+    research_runner_runs_dir = Path.home() / ".local" / "state" / "research_runner" / "model-research" / "runs"
     retention_runner = RetentionRunner(
         usage_log_path=cfg.usage_log.path,
         autonomy_db_path=cfg.state.dir / "autonomy.sqlite",
         repo_root=repo_root_for_retention,
-        research_runner_runs_dir=(
-            research_runner_runs_dir if research_runner_runs_dir.exists() else None
-        ),
+        research_runner_runs_dir=(research_runner_runs_dir if research_runner_runs_dir.exists() else None),
         archive_dir=DEFAULT_ARCHIVE_DIR,
     )
     # Self-assessment runner (Tier C) — weekly metacognition. Reuses
@@ -132,14 +131,11 @@ def _run_server(config_path: Path, host: str | None, port: int | None) -> None:
     # root is the project repo so artifacts land under feedback/
     # decisions/ where future agents can read them.
     from callosum.self_assessment import SelfAssessmentRunner
+
     self_assessment_runner = SelfAssessmentRunner(
         autonomy_store=autonomy_store,
         usage_log_path=cfg.usage_log.path,
-        feedback_root=(
-            repo_root_for_retention
-            if repo_root_for_retention is not None
-            else None
-        ),
+        feedback_root=(repo_root_for_retention if repo_root_for_retention is not None else None),
     )
     backends = build_backends(cfg)
     # Auto-register a LiteLLM gateway backend when the operator points us at
@@ -151,10 +147,7 @@ def _run_server(config_path: Path, host: str | None, port: int | None) -> None:
     # PATH. Falls back to LiteLLMGatewayBackend (litellm.yaml-driven)
     # when the operator doesn't have local LLM gateway installed.
     local_added = False
-    if (
-        os.environ.get("CALLOSUM_LOCAL_DISABLED") != "1"
-        and LocalModelRegistrySource.is_available()
-    ):
+    if os.environ.get("CALLOSUM_LOCAL_DISABLED") != "1" and LocalModelRegistrySource.is_available():
         source = LocalModelRegistrySource()
         backends.append(
             LocalModelRegistryBackend(
@@ -164,9 +157,7 @@ def _run_server(config_path: Path, host: str | None, port: int | None) -> None:
             )
         )
         local_added = True
-    litellm_url = os.environ.get(
-        "CALLOSUM_LITELLM_GATEWAY_URL", LITELLM_GATEWAY_DEFAULT_BASE_URL
-    )
+    litellm_url = os.environ.get("CALLOSUM_LITELLM_GATEWAY_URL", LITELLM_GATEWAY_DEFAULT_BASE_URL)
     # The two local-cell sources are mutually exclusive per the docstring
     # above. The LiteLLM gateway backend is the FALLBACK — only register
     # it when LocalModelRegistryBackend wasn't available. Otherwise both end up
@@ -184,10 +175,7 @@ def _run_server(config_path: Path, host: str | None, port: int | None) -> None:
     # The fallback-not-coexistence semantics are intentional and audited
     # 2026-06-09 (docs/decisions/...-keep-litellmgatewaybackend-as-
     # fallback-do-not-retire-or-unify).
-    if (
-        os.environ.get("CALLOSUM_LITELLM_GATEWAY_ENABLED") == "1"
-        and not local_added
-    ):
+    if os.environ.get("CALLOSUM_LITELLM_GATEWAY_ENABLED") == "1" and not local_added:
         # CALLOSUM_LITELLM_TIMEOUT_S overrides the per-call timeout for the
         # local backend. Default is generous (300s) to absorb cold-load
         # latency on large local models; lower it on fast hardware or when
@@ -195,11 +183,7 @@ def _run_server(config_path: Path, host: str | None, port: int | None) -> None:
         # rather than crashing the proxy at startup.
         litellm_timeout_raw = os.environ.get("CALLOSUM_LITELLM_TIMEOUT_S")
         try:
-            litellm_timeout = (
-                float(litellm_timeout_raw)
-                if litellm_timeout_raw is not None
-                else None
-            )
+            litellm_timeout = float(litellm_timeout_raw) if litellm_timeout_raw is not None else None
         except ValueError:
             litellm_timeout = None
         backend_kwargs: dict[str, object] = {

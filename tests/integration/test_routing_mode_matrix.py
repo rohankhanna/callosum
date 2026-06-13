@@ -88,7 +88,9 @@ def test_auto_mode_remote_exhausted_routes_to_local(tmp_path: Path, monkeypatch)
     cells stayed in the routing grid, the capability filter sometimes
     chose them anyway, and dispatch then failed."""
     remote = _make_backend(
-        id="remote", kind="codex_auth_vault", weekly_exhausted=True,
+        id="remote",
+        kind="codex_auth_vault",
+        weekly_exhausted=True,
     )
     local = _make_backend(id="local", kind="litellm_gateway")
     monkeypatch.setenv("CALLOSUM_CANARY_PERCENT", "0")
@@ -135,7 +137,9 @@ def test_remote_only_mode_with_remote_exhausted_returns_503(
     mode filter. Must return 503 with a routing-mode-specific message,
     not a generic 'no cell' 400."""
     remote = _make_backend(
-        id="remote", kind="codex_auth_vault", weekly_exhausted=True,
+        id="remote",
+        kind="codex_auth_vault",
+        weekly_exhausted=True,
     )
     local = _make_backend(id="local", kind="litellm_gateway")
     state = OperatorState(tmp_path / "op.sqlite")
@@ -155,10 +159,7 @@ def test_remote_only_mode_with_remote_exhausted_returns_503(
         # routability check: either "no backend currently routable" or
         # "routing mode excludes all routable backends". Either is
         # acceptable; what matters is 503 + Retry-After.
-        assert (
-            "routing mode" in body["detail"].lower()
-            or "no backend" in body["detail"].lower()
-        )
+        assert "routing mode" in body["detail"].lower() or "no backend" in body["detail"].lower()
     finally:
         state.close()
 

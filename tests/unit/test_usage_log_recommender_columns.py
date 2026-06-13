@@ -40,8 +40,7 @@ def test_pass_through_row_leaves_recommender_columns_null(tmp_path: Path) -> Non
     log.record(_entry())
     conn = sqlite3.connect(tmp_path / "u.sqlite")
     row = conn.execute(
-        "SELECT recommender_classifier_cell, recommender_raw_output, recommender_source"
-        " FROM requests"
+        "SELECT recommender_classifier_cell, recommender_raw_output, recommender_source FROM requests"
     ).fetchone()
     assert row == (None, None, None)
 
@@ -58,8 +57,7 @@ def test_recommender_columns_persist_when_set(tmp_path: Path) -> None:
     )
     conn = sqlite3.connect(tmp_path / "u.sqlite")
     row = conn.execute(
-        "SELECT routing_mode, recommender_classifier_cell,"
-        " recommender_raw_output, recommender_source FROM requests"
+        "SELECT routing_mode, recommender_classifier_cell, recommender_raw_output, recommender_source FROM requests"
     ).fetchone()
     assert row == ("auto", "model-a0c3 low", "model-a0e7 high", "upstream")
 
@@ -70,8 +68,6 @@ def test_index_on_recommender_source_exists(tmp_path: Path) -> None:
     log = UsageLog(tmp_path / "u.sqlite")
     log.record(_entry())  # trigger migrations
     conn = sqlite3.connect(tmp_path / "u.sqlite")
-    indices = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='requests'"
-    ).fetchall()
+    indices = conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='requests'").fetchall()
     names = {n for (n,) in indices}
     assert "idx_requests_recommender_source" in names

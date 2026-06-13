@@ -89,9 +89,7 @@ _complexity_class_context: ContextVar[int | None] = ContextVar("complexity_class
 # can change between requests; this captures the per-request choice.
 # Values: 'auto', 'canary_redirect', 'forced_remote', 'forced_local',
 # 'forced_offline', or None (no router; pass-through path).
-_effective_routing_mode_context: ContextVar[str | None] = ContextVar(
-    "effective_routing_mode", default=None
-)
+_effective_routing_mode_context: ContextVar[str | None] = ContextVar("effective_routing_mode", default=None)
 
 # Failure-observation registry holder. Set by create_app; consulted by
 # _log_attempt. Module-level rather than parameter-plumbed because
@@ -144,28 +142,28 @@ def _extract_complexity_class(text: str) -> tuple[int | None, str]:
          but still complied with the "first output is a classifier" intent
     """
     # 1) Strict numeric brace format
-    match = re.match(r'^\s*\{\{\{([123])\}\}\}', text)
+    match = re.match(r"^\s*\{\{\{([123])\}\}\}", text)
     if match:
         complexity_class = int(match.group(1))
-        cleaned = text[match.end():].lstrip()
+        cleaned = text[match.end() :].lstrip()
         return complexity_class, cleaned
 
     # 2) Any leading {{{...}}} (handles {{{complexity: Low}}} variants)
-    match = re.match(r'^\s*\{\{\{[^}]*\}\}\}', text)
+    match = re.match(r"^\s*\{\{\{[^}]*\}\}\}", text)
     if match:
-        cleaned = text[match.end():].lstrip()
-        inner = match.group(0).strip('{}').strip()
-        if inner.isdigit() and inner in ('1', '2', '3'):
+        cleaned = text[match.end() :].lstrip()
+        inner = match.group(0).strip("{}").strip()
+        if inner.isdigit() and inner in ("1", "2", "3"):
             return int(inner), cleaned
         return None, cleaned
 
     # 3) Bare digit followed by blank line — model dropped the braces
     # Require at least one \n then a blank line so we don't strip legitimate
     # content like "2 minutes is fine" or "2. First item".
-    match = re.match(r'^\s*([123])[ \t]*\n[ \t]*\n', text)
+    match = re.match(r"^\s*([123])[ \t]*\n[ \t]*\n", text)
     if match:
         complexity_class = int(match.group(1))
-        cleaned = text[match.end():]
+        cleaned = text[match.end() :]
         return complexity_class, cleaned
 
     return None, text
@@ -272,9 +270,7 @@ def create_app(
     # to requests cleanly. Both are None when usage_log is None — the
     # whole canary plumbing degrades to no-op without the request log.
     canary_scheduler = CanaryScheduler()
-    failure_registry: FailureRegistry | None = (
-        FailureRegistry(usage_log.path) if usage_log is not None else None
-    )
+    failure_registry: FailureRegistry | None = FailureRegistry(usage_log.path) if usage_log is not None else None
     # Transform substrate: empty by default. Concrete transforms get
     # registered here as they're authored (initially by humans
     # responding to harness findings, later potentially by the
@@ -283,6 +279,7 @@ def create_app(
     # Tests may inject a pre-populated registry via the keyword arg.
     if transform_registry is None:
         from callosum.transforms import build_default_registry
+
         transform_registry = build_default_registry()
     # Publish to module-level holders so module-level functions
     # (`_dispatch_route`, `_log_attempt`) can reach them without
@@ -332,7 +329,9 @@ def create_app(
             # grid when both production backends were credential_proxy —
             # router rejected every request with "no cell can serve."
             if b.kind not in (
-                "codex_auth_vault", "credential_proxy", "litellm_gateway",
+                "codex_auth_vault",
+                "credential_proxy",
+                "litellm_gateway",
             ):
                 continue
             backend_meta = getattr(b, "model_metadata", None) or {}
@@ -343,9 +342,7 @@ def create_app(
                 else:
                     # Pick the record with more populated fields.
                     new_filled = sum(
-                        1
-                        for f in (m.supported_in_api, m.visibility, m.priority, m.context_window)
-                        if f is not None
+                        1 for f in (m.supported_in_api, m.visibility, m.priority, m.context_window) if f is not None
                     )
                     old_filled = sum(
                         1
@@ -400,6 +397,7 @@ def create_app(
     # safely reference it even when no backends are configured.
     _capabilities_of: Callable[[Cell], CellCapabilities] | None = None
     if backends_list:
+
         def _capabilities_of_impl(cell: Cell) -> CellCapabilities:
             """Look up a cell's capabilities via the backend that
             advertises its model. Falls back to safe defaults when no
@@ -447,6 +445,7 @@ def create_app(
                 supports_tools=False,
                 cost_rank=10,
             )
+
         _capabilities_of = _capabilities_of_impl
         router = build_router(auto_cfg.routing, capabilities_of=_capabilities_of)
 
@@ -475,6 +474,7 @@ def create_app(
     # `build_default_provider()`; no caller in app.py changes.
     from callosum.capability.scheduler import PeriodicHarnessSweep
     from callosum.capability.weight_identity import build_default_provider
+
     weight_identity_provider = build_default_provider()
     periodic_harness = PeriodicHarnessSweep(
         backends=backends_list,
@@ -511,7 +511,8 @@ def create_app(
                         new_models = models_after - models_before
                         logger.info(
                             "new models detected for backend %r: %s — recording model release timestamp",
-                            backend.id, sorted(new_models)
+                            backend.id,
+                            sorted(new_models),
                         )
                         state_store.set_model_release_timestamp(time.time())
                 except Exception:
@@ -530,19 +531,16 @@ def create_app(
                 from callosum.routing.predictor.loader import (
                     labeled_rows_from_request_log,
                 )
+
                 router._predictor.reload(
                     labeled_rows_from_request_log(
-                        usage_log.path, limit=50_000,
+                        usage_log.path,
+                        limit=50_000,
                     )
                 )
-                logger.warning(
-                    "router: kNN predictor reloaded from request log"
-                )
+                logger.warning("router: kNN predictor reloaded from request log")
             except Exception:
-                logger.exception(
-                    "router: kNN predictor reload failed; predictor "
-                    "stays cold-start uniform"
-                )
+                logger.exception("router: kNN predictor reload failed; predictor stays cold-start uniform")
         if startup_smoke_test and backends_list:
             await _run_startup_smoke_test(backends_list)
         smoke_tester.start()
@@ -556,6 +554,7 @@ def create_app(
         # persist the results.
         if operator_state is not None and backends_list:
             from callosum.routing.probe_scheduler import schedule_background_sweep
+
             schedule_background_sweep(
                 backends=backends_list,
                 operator_state=operator_state,
@@ -569,6 +568,7 @@ def create_app(
             from callosum.capability.scheduler import (
                 schedule_background_harness,
             )
+
             # One-shot pass on startup for the initial fill, then the
             # periodic sweeper takes over for the lifetime of the proxy.
             schedule_background_harness(
@@ -603,6 +603,7 @@ def create_app(
     # callosum.routing_events module docstring.
     if usage_log is not None:
         from callosum.routing_events import install_routing_events
+
         install_routing_events(
             app,
             usage_log=usage_log,
@@ -616,6 +617,7 @@ def create_app(
     # restarting the proxy.
     if operator_state is not None:
         from callosum.admin import install_admin_routes
+
         install_admin_routes(
             app,
             operator_state,
@@ -636,7 +638,8 @@ def create_app(
         if plaintext is None:
             logger.warning(
                 "auth 401: no bearer token on %s %s",
-                request.method, request.url.path,
+                request.method,
+                request.url.path,
             )
             return JSONResponse(
                 status_code=401,
@@ -657,7 +660,11 @@ def create_app(
             active = _active_api_key_count(auth_service)
             logger.warning(
                 "auth 401: %s on %s %s — rejected key prefix=%r (%d active keys registered)",
-                exc, request.method, request.url.path, prefix, active,
+                exc,
+                request.method,
+                request.url.path,
+                prefix,
+                active,
             )
             return JSONResponse(
                 status_code=401,
@@ -722,12 +729,8 @@ def create_app(
                 "percent": canary_scheduler.config.percent,
                 "floor_percent": canary_scheduler.config.floor_percent,
                 "ceiling_percent": canary_scheduler.config.ceiling_percent,
-                "quota_warning_threshold": (
-                    canary_scheduler.config.quota_warning_threshold
-                ),
-                "quota_suspend_threshold": (
-                    canary_scheduler.config.quota_suspend_threshold
-                ),
+                "quota_warning_threshold": (canary_scheduler.config.quota_warning_threshold),
+                "quota_suspend_threshold": (canary_scheduler.config.quota_suspend_threshold),
             },
         }
         # Compute effective percent for the most-constrained codex
@@ -746,9 +749,7 @@ def create_app(
                 continue
             if _q_pct is None or _w > _q_pct:
                 _q_pct = _w
-        canary_block["effective_percent"] = (
-            canary_scheduler.effective_percent(quota_used_percent=_q_pct)
-        )
+        canary_block["effective_percent"] = canary_scheduler.effective_percent(quota_used_percent=_q_pct)
         canary_block["quota_used_percent"] = _q_pct
         # Rolling per-mode stats. Skipped when usage_log is absent —
         # /status still returns a partial canary block, just without
@@ -770,9 +771,7 @@ def create_app(
                 annotated: dict[str, dict[str, Any]] = {}
                 for mode, counts in stats.items():
                     total = counts["total"]
-                    failure_rate = (
-                        counts["failure"] / total if total > 0 else None
-                    )
+                    failure_rate = counts["failure"] / total if total > 0 else None
                     annotated[mode] = {
                         **counts,
                         "failure_rate": failure_rate,
@@ -816,9 +815,7 @@ def create_app(
         """
         backend = next((b for b in backends_list if b.id == backend_id), None)
         if backend is None:
-            raise HTTPException(
-                status_code=404, detail=f"backend {backend_id!r} not in pool"
-            )
+            raise HTTPException(status_code=404, detail=f"backend {backend_id!r} not in pool")
         clear = getattr(backend, "clear_cooldown", None)
         if clear is None:
             raise HTTPException(
@@ -1043,9 +1040,7 @@ def create_app(
             if isinstance(result, StreamingResponse):
                 result.headers.update(headers)
                 return result
-            return StreamingResponse(
-                result, media_type="text/event-stream", headers=headers
-            )
+            return StreamingResponse(result, media_type="text/event-stream", headers=headers)
         return result
 
     @app.post("/v1/responses")
@@ -1087,9 +1082,7 @@ def create_app(
     return app
 
 
-async def _routable_backends(
-    backends_list: Sequence[Backend], *, now: float | None = None
-) -> list[Backend]:
+async def _routable_backends(backends_list: Sequence[Backend], *, now: float | None = None) -> list[Backend]:
     """Return the subset of currently-routable backends.
 
     Routable = not weekly-exhausted, not in cooldown. Reads cached usage
@@ -1119,9 +1112,7 @@ async def _routable_backends(
     return out
 
 
-def _filter_cells_to_routable(
-    cells: list[Cell], routable_backends: Sequence[Backend]
-) -> list[Cell]:
+def _filter_cells_to_routable(cells: list[Cell], routable_backends: Sequence[Backend]) -> list[Cell]:
     """Keep only cells whose model is advertised by at least one
     currently-routable backend. When every backend serving a cell's
     model is unroutable (e.g. Codex weekly_exhausted and the cell is
@@ -1181,7 +1172,7 @@ async def _dispatch_route(
         state_store=state_store,
         auto_cfg=auto_cfg,
         router=router,
-            operator_state=operator_state,
+        operator_state=operator_state,
         live_cells_fn=live_cells_fn,
         client_endpoint=client_endpoint,
     )
@@ -1264,11 +1255,7 @@ async def _dispatch_internal(
             _routing = operator_state.get_routing()
             # Map routing mode to effective_routing_mode for the log.
             # Default mapping: 'auto' → 'auto', everything else → forced_*.
-            _effective_mode = (
-                _routing
-                if _routing == "auto"
-                else f"forced_{_routing.replace('-only', '')}"
-            )
+            _effective_mode = _routing if _routing == "auto" else f"forced_{_routing.replace('-only', '')}"
             # Quota for the canary scheduler. Walk codex_auth_vault
             # backends, take the highest weekly_used_percent (the
             # most-constrained). None means "unknown" — scheduler
@@ -1286,10 +1273,12 @@ async def _dispatch_internal(
                 if _quota_pct is None or _w > _quota_pct:
                     _quota_pct = _w
             from callosum.canary import CanaryDecision
+
             _sched = _CANARY_SCHEDULER
             if _sched is not None:
                 _canary = _sched.decide(
-                    routing=_routing, quota_used_percent=_quota_pct,
+                    routing=_routing,
+                    quota_used_percent=_quota_pct,
                 )
             else:
                 _canary = CanaryDecision.NORMAL
@@ -1302,19 +1291,19 @@ async def _dispatch_internal(
             _effective_routing_mode_context.set(_effective_mode)
             if _routing in ("offline", "local-only"):
                 cells_now = [
-                    c for c in cells_now
+                    c
+                    for c in cells_now
                     if any(
-                        c.model in b.advertised_models
-                        and getattr(b, "kind", "") == "litellm_gateway"
+                        c.model in b.advertised_models and getattr(b, "kind", "") == "litellm_gateway"
                         for b in backends_list
                     )
                 ]
             elif _routing == "remote-only":
                 cells_now = [
-                    c for c in cells_now
+                    c
+                    for c in cells_now
                     if any(
-                        c.model in b.advertised_models
-                        and getattr(b, "kind", "") != "litellm_gateway"
+                        c.model in b.advertised_models and getattr(b, "kind", "") != "litellm_gateway"
                         for b in backends_list
                     )
                 ]
@@ -1349,15 +1338,9 @@ async def _dispatch_internal(
         # current mode choice."
         if operator_state is not None:
             if _routing in ("offline", "local-only"):
-                _routable = [
-                    b for b in _routable
-                    if getattr(b, "kind", "") == "litellm_gateway"
-                ]
+                _routable = [b for b in _routable if getattr(b, "kind", "") == "litellm_gateway"]
             elif _routing == "remote-only":
-                _routable = [
-                    b for b in _routable
-                    if getattr(b, "kind", "") != "litellm_gateway"
-                ]
+                _routable = [b for b in _routable if getattr(b, "kind", "") != "litellm_gateway"]
         cells_now = _filter_cells_to_routable(cells_now, _routable)
         if not cells_now:
             if not _routable:
@@ -1373,10 +1356,7 @@ async def _dispatch_internal(
                 )
             raise HTTPException(
                 status_code=503,
-                detail=(
-                    f"current routing mode {_routing!r} excludes all "
-                    "currently-routable backends"
-                ),
+                detail=(f"current routing mode {_routing!r} excludes all currently-routable backends"),
                 headers={"Retry-After": "60"},
             )
         try:
@@ -1407,6 +1387,7 @@ async def _dispatch_internal(
                 profile_path as _profile_path,
             )
             from callosum.transforms import TransformContext
+
             # Build the transform context once per request. Loading
             # the profile from disk is cheap (small JSON), so we
             # accept it on the hot path; if it ever shows up in
@@ -1416,9 +1397,7 @@ async def _dispatch_internal(
             try:
                 _path = _profile_path(chosen.model)
                 if _path.exists():
-                    _profile = _load_profile(
-                        chosen.model, profile_dir=_path.parent
-                    )
+                    _profile = _load_profile(chosen.model, profile_dir=_path.parent)
             except Exception:
                 logger.exception(
                     "transform context: failed to load profile for %s",
@@ -1426,9 +1405,7 @@ async def _dispatch_internal(
                 )
             _transform_ctx = TransformContext(
                 cell=chosen,
-                weight_identity=(
-                    _profile.weight_identity if _profile is not None else None
-                ),
+                weight_identity=(_profile.weight_identity if _profile is not None else None),
                 capability_profile=_profile,
                 endpoint=client_endpoint,
             )
@@ -1440,9 +1417,7 @@ async def _dispatch_internal(
         # the post-filter candidate set, serialized as compact JSON.
         recommender_classifier_cell = decision.predictor_id or None
         recommender_raw_output = (
-            json.dumps(decision.predictions, separators=(",", ":"))[:500]
-            if decision.predictions
-            else None
+            json.dumps(decision.predictions, separators=(",", ":"))[:500] if decision.predictions else None
         )
         recommender_source = "router"
         # Persist the prompt embedding for the kNN predictor's training
@@ -1484,7 +1459,7 @@ async def _dispatch_internal(
             recommender_classifier_cell=recommender_classifier_cell,
             recommender_raw_output=recommender_raw_output,
             recommender_source=recommender_source,
-                prompt_embedding=prompt_embedding,
+            prompt_embedding=prompt_embedding,
         )
     result = await _dispatch_nonstream_with_cell_retry(
         body,
@@ -1505,16 +1480,12 @@ async def _dispatch_internal(
         recommender_classifier_cell=recommender_classifier_cell,
         recommender_raw_output=recommender_raw_output,
         recommender_source=recommender_source,
-                prompt_embedding=prompt_embedding,
+        prompt_embedding=prompt_embedding,
     )
     # Response-side transforms (non-stream only — see comment above on
     # the request transform for why streaming is deferred). Empty
     # registry or no-applicable-transforms is a clean no-op.
-    if (
-        _transform_ctx is not None
-        and _tr is not None
-        and isinstance(result, dict)
-    ):
+    if _transform_ctx is not None and _tr is not None and isinstance(result, dict):
         result = _tr.apply_response(result, _transform_ctx)
     return result
 
@@ -1584,9 +1555,7 @@ async def _dispatch_nonstream_with_cell_retry(
     """
     cells_to_try = list(candidates[:MAX_CELL_ATTEMPTS])
     if not cells_to_try:
-        return await _dispatch_nonstream(
-            body, model=model, usage_log=usage_log, **kwargs
-        )
+        return await _dispatch_nonstream(body, model=model, usage_log=usage_log, **kwargs)
 
     attempts: list[RoutingAttempt] = []
     final_request_id: int | None = None
@@ -1596,9 +1565,7 @@ async def _dispatch_nonstream_with_cell_retry(
         body.setdefault("reasoning", {})["effort"] = cell.reasoning_effort
         attempt_start = time.time()
         try:
-            result = await _dispatch_nonstream(
-                body, model=cell.model, usage_log=usage_log, **kwargs
-            )
+            result = await _dispatch_nonstream(body, model=cell.model, usage_log=usage_log, **kwargs)
         except HTTPException as exc:
             attempt_ms = int((time.time() - attempt_start) * 1000)
             final_request_id = _request_id_context.get()
@@ -1613,10 +1580,7 @@ async def _dispatch_nonstream_with_cell_retry(
                     reasoning_effort=cell.reasoning_effort,
                     status=exc.status_code,
                     classification=(
-                        "retried_next_cell"
-                        if exc.status_code >= 500
-                        and cell_idx + 1 < len(cells_to_try)
-                        else "failed"
+                        "retried_next_cell" if exc.status_code >= 500 and cell_idx + 1 < len(cells_to_try) else "failed"
                     ),
                     latency_ms=attempt_ms,
                     error_message=(str(exc.detail)[:500] if exc.detail else None),
@@ -1647,19 +1611,13 @@ async def _dispatch_nonstream_with_cell_retry(
         # common case and the requests row already tells the whole story —
         # keeping the sibling table to the reroute cohort makes "how often did
         # we have to reroute?" a one-line query.
-        if (
-            usage_log is not None
-            and final_request_id is not None
-            and len(attempts) > 1
-        ):
+        if usage_log is not None and final_request_id is not None and len(attempts) > 1:
             usage_log.record_routing_attempts(final_request_id, attempts)
         return result
 
     # Unreachable: the loop above either returns on success or raises after
     # the final cell. Kept for type-checker clarity.
-    raise RuntimeError(
-        "cell-level retry exhausted without raising"
-    )  # pragma: no cover
+    raise RuntimeError("cell-level retry exhausted without raising")  # pragma: no cover
 
 
 async def _dispatch_stream_with_cell_retry(
@@ -1680,9 +1638,7 @@ async def _dispatch_stream_with_cell_retry(
     """
     cells_to_try = list(candidates[:MAX_CELL_ATTEMPTS])
     if not cells_to_try:
-        return await _dispatch_stream(
-            body, model=model, usage_log=usage_log, **kwargs
-        )
+        return await _dispatch_stream(body, model=model, usage_log=usage_log, **kwargs)
 
     attempts: list[RoutingAttempt] = []
     final_request_id: int | None = None
@@ -1692,9 +1648,7 @@ async def _dispatch_stream_with_cell_retry(
         body.setdefault("reasoning", {})["effort"] = cell.reasoning_effort
         attempt_start = time.time()
         try:
-            result = await _dispatch_stream(
-                body, model=cell.model, usage_log=usage_log, **kwargs
-            )
+            result = await _dispatch_stream(body, model=cell.model, usage_log=usage_log, **kwargs)
         except HTTPException as exc:
             attempt_ms = int((time.time() - attempt_start) * 1000)
             final_request_id = _request_id_context.get()
@@ -1706,10 +1660,7 @@ async def _dispatch_stream_with_cell_retry(
                     reasoning_effort=cell.reasoning_effort,
                     status=exc.status_code,
                     classification=(
-                        "retried_next_cell"
-                        if exc.status_code >= 500
-                        and cell_idx + 1 < len(cells_to_try)
-                        else "failed"
+                        "retried_next_cell" if exc.status_code >= 500 and cell_idx + 1 < len(cells_to_try) else "failed"
                     ),
                     latency_ms=attempt_ms,
                     error_message=(str(exc.detail)[:500] if exc.detail else None),
@@ -1733,17 +1684,11 @@ async def _dispatch_stream_with_cell_retry(
                 latency_ms=attempt_ms,
             )
         )
-        if (
-            usage_log is not None
-            and final_request_id is not None
-            and len(attempts) > 1
-        ):
+        if usage_log is not None and final_request_id is not None and len(attempts) > 1:
             usage_log.record_routing_attempts(final_request_id, attempts)
         return result
 
-    raise RuntimeError(
-        "cell-level stream retry exhausted without raising"
-    )  # pragma: no cover
+    raise RuntimeError("cell-level stream retry exhausted without raising")  # pragma: no cover
 
 
 async def _dispatch_nonstream(
@@ -1846,7 +1791,7 @@ async def _dispatch_nonstream(
             recommender_classifier_cell=recommender_classifier_cell,
             recommender_raw_output=recommender_raw_output,
             recommender_source=recommender_source,
-                prompt_embedding=prompt_embedding,
+            prompt_embedding=prompt_embedding,
         )
         return result
 
@@ -1855,20 +1800,13 @@ async def _dispatch_nonstream(
     for backend in backends_list:
         try:
             usage = await backend.usage_snapshot()
-            if (
-                usage
-                and usage.cooldown_until_ts
-                and (recovery_ts is None or usage.cooldown_until_ts < recovery_ts)
-            ):
+            if usage and usage.cooldown_until_ts and (recovery_ts is None or usage.cooldown_until_ts < recovery_ts):
                 recovery_ts = usage.cooldown_until_ts
         except Exception:
             pass  # Skip backends that fail to report usage
 
     # Try fallback strategies.
-    error_classifications = {
-        backend_id: error.classification
-        for backend_id, error in excluded_errors.items()
-    }
+    error_classifications = {backend_id: error.classification for backend_id, error in excluded_errors.items()}
 
     backend_status = await _collect_backend_status(backends_list)
     if should_attempt_fallback(error_classifications):
@@ -2042,20 +1980,13 @@ async def _dispatch_stream(
     for backend in backends_list:
         try:
             usage = await backend.usage_snapshot()
-            if (
-                usage
-                and usage.cooldown_until_ts
-                and (recovery_ts is None or usage.cooldown_until_ts < recovery_ts)
-            ):
+            if usage and usage.cooldown_until_ts and (recovery_ts is None or usage.cooldown_until_ts < recovery_ts):
                 recovery_ts = usage.cooldown_until_ts
         except Exception:
             pass  # Skip backends that fail to report usage
 
     # Try fallback strategies.
-    error_classifications = {
-        backend_id: error.classification
-        for backend_id, error in excluded_errors.items()
-    }
+    error_classifications = {backend_id: error.classification for backend_id, error in excluded_errors.items()}
 
     backend_status = await _collect_backend_status(backends_list)
     if should_attempt_fallback(error_classifications):
@@ -2092,9 +2023,7 @@ async def _prepend(first: bytes, rest: AsyncIterator[bytes]) -> AsyncIterator[by
         yield chunk
 
 
-async def _safe_stream(
-    source: AsyncIterator[bytes], backend_id: str = "unknown"
-) -> AsyncIterator[bytes]:
+async def _safe_stream(source: AsyncIterator[bytes], backend_id: str = "unknown") -> AsyncIterator[bytes]:
     """Safely stream chunks, gracefully handling peer disconnections.
 
     When a peer closes connection without completing the response body,
@@ -2107,9 +2036,7 @@ async def _safe_stream(
     except Exception as exc:
         # Peer closed connection or other streaming error
         ts = _utc_timestamp()
-        logger.warning(
-            f"[{ts}] streaming error from {backend_id}: {type(exc).__name__}: {exc}"
-        )
+        logger.warning(f"[{ts}] streaming error from {backend_id}: {type(exc).__name__}: {exc}")
         # Don't re-raise; client already got partial response. Just stop streaming.
 
 
@@ -2118,10 +2045,12 @@ async def _safe_stream(
 # all of these. We deliberately do NOT include
 # `response.function_call_arguments.delta` because that field carries
 # tool-call JSON fragments — removing `{` / `}` would corrupt the JSON.
-_TEXT_BEARING_DELTA_EVENT_TYPES: frozenset[str] = frozenset({
-    "response.output_text.delta",
-    "response.reasoning_summary_text.delta",
-})
+_TEXT_BEARING_DELTA_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        "response.output_text.delta",
+        "response.reasoning_summary_text.delta",
+    }
+)
 
 # Final / accumulated-text events. These carry the FULL response text after
 # streaming completes, and Hermes / codex-cli often read from them for the
@@ -2619,10 +2548,7 @@ async def _strip_trailing_complexity_marker(
                     yield out_bytes
                 continue
 
-            while (
-                len(trail) > 1
-                and trail_chars - len(trail[0][1]) >= _COMPLEXITY_TRAILING_WINDOW
-            ):
+            while len(trail) > 1 and trail_chars - len(trail[0][1]) >= _COMPLEXITY_TRAILING_WINDOW:
                 old_ev, old_text = trail.pop(0)
                 trail_chars -= len(old_text)
                 yield old_ev + b"\n\n"
@@ -2689,7 +2615,7 @@ async def _log_on_complete(
         recommender_classifier_cell=recommender_classifier_cell,
         recommender_raw_output=recommender_raw_output,
         recommender_source=recommender_source,
-                prompt_embedding=prompt_embedding,
+        prompt_embedding=prompt_embedding,
     )
 
 
@@ -2704,41 +2630,41 @@ def _clean_sse_blob(blob: bytes | None) -> bytes | None:
         return None
 
     try:
-        text = blob.decode('utf-8')
-        lines = text.split('\n')
+        text = blob.decode("utf-8")
+        lines = text.split("\n")
         cleaned_lines = []
 
         for line in lines:
             # Check if this is a data line with JSON content
-            if line.startswith('data: '):
+            if line.startswith("data: "):
                 try:
                     json_str = line[6:]  # Strip 'data: '
                     data = json.loads(json_str)
 
                     # Handle text-bearing Responses API delta events
-                    if data.get('type') in _TEXT_BEARING_DELTA_EVENT_TYPES:
-                        delta = data.get('delta', '')
+                    if data.get("type") in _TEXT_BEARING_DELTA_EVENT_TYPES:
+                        delta = data.get("delta", "")
                         if isinstance(delta, str) and delta:
                             _, cleaned_delta = _extract_complexity_class(delta)
                             cleaned_delta = _strip_trailing_complexity_marker_text(cleaned_delta)
-                            data['delta'] = cleaned_delta
+                            data["delta"] = cleaned_delta
 
                     # Handle full-text 'done' events (Hermes / codex-cli often
                     # read these for final UI render — must be scrubbed too)
-                    elif data.get('type') in _FULL_TEXT_EVENT_PATHS:
+                    elif data.get("type") in _FULL_TEXT_EVENT_PATHS:
                         _scrub_full_text_event(data)
 
                     # Handle chat completions format (choices[0].delta.content)
-                    elif 'choices' in data and len(data.get('choices', [])) > 0:
-                        delta = data['choices'][0].get('delta', {})
-                        content = delta.get('content', '')
+                    elif "choices" in data and len(data.get("choices", [])) > 0:
+                        delta = data["choices"][0].get("delta", {})
+                        content = delta.get("content", "")
                         if isinstance(content, str) and content:
                             _, cleaned_content = _extract_complexity_class(content)
                             cleaned_content = _strip_trailing_complexity_marker_text(cleaned_content)
-                            delta['content'] = cleaned_content
-                            data['choices'][0]['delta'] = delta
+                            delta["content"] = cleaned_content
+                            data["choices"][0]["delta"] = delta
 
-                    cleaned_lines.append('data: ' + json.dumps(data))
+                    cleaned_lines.append("data: " + json.dumps(data))
                 except (json.JSONDecodeError, KeyError, TypeError):
                     # Not JSON or unexpected format, pass through unchanged
                     cleaned_lines.append(line)
@@ -2746,8 +2672,8 @@ def _clean_sse_blob(blob: bytes | None) -> bytes | None:
                 # Non-data lines pass through unchanged
                 cleaned_lines.append(line)
 
-        cleaned_text = '\n'.join(cleaned_lines)
-        return cleaned_text.encode('utf-8')
+        cleaned_text = "\n".join(cleaned_lines)
+        return cleaned_text.encode("utf-8")
     except (UnicodeDecodeError, AttributeError):
         # If we can't decode, return original blob
         return blob
@@ -2837,7 +2763,7 @@ def _log_attempt(
         recommender_classifier_cell=recommender_classifier_cell,
         recommender_raw_output=recommender_raw_output,
         recommender_source=recommender_source,
-                prompt_embedding=prompt_embedding,
+        prompt_embedding=prompt_embedding,
         effective_routing_mode=effective_routing_mode,
     )
     request_id = usage_log.record(entry)
@@ -2848,10 +2774,9 @@ def _log_attempt(
     # dashboards can detect regressions empirically. Best-effort —
     # registry write failures are swallowed inside `record()`.
     _fr = _FAILURE_REGISTRY
-    if _fr is not None and (
-        (isinstance(status, int) and status >= 500) or error is not None
-    ):
+    if _fr is not None and ((isinstance(status, int) and status >= 500) or error is not None):
         from callosum.canary import FailureObservation
+
         # Symptom: distinguish the well-known classes; everything
         # else is `http_5xx` as a catch-all that an operator can
         # refine later by annotating the row. `sym` is intentionally
@@ -2878,14 +2803,16 @@ def _log_attempt(
             resp_layer = "upstream-remote"
         else:
             resp_layer = "unknown"
-        _fr.record(FailureObservation(
-            ts=ts_end,
-            effective_mode=effective_routing_mode or "pass-through",
-            symptom=sym,
-            responsible_layer=resp_layer,
-            request_id=request_id,
-            detail=(error.message[:300] if error and error.message else None),
-        ))
+        _fr.record(
+            FailureObservation(
+                ts=ts_end,
+                effective_mode=effective_routing_mode or "pass-through",
+                symptom=sym,
+                responsible_layer=resp_layer,
+                request_id=request_id,
+                detail=(error.message[:300] if error and error.message else None),
+            )
+        )
 
 
 class _Tokens:
@@ -3032,11 +2959,7 @@ async def _diagnose_backend(backend: Backend, *, force: bool = False) -> dict[st
         }
     usage = await backend.usage_snapshot()
     now = time.time()
-    if (
-        not force
-        and usage.cooldown_until_ts is not None
-        and usage.cooldown_until_ts > now
-    ):
+    if not force and usage.cooldown_until_ts is not None and usage.cooldown_until_ts > now:
         return {
             "id": backend.id,
             "ok": True,
@@ -3105,9 +3028,7 @@ class _PeriodicSmokeTester:
     class only handles the recurring follow-up ticks. interval_s=0 disables.
     """
 
-    def __init__(
-        self, *, backends: Sequence[Backend], interval_s: int, state_store: Any | None = None
-    ) -> None:
+    def __init__(self, *, backends: Sequence[Backend], interval_s: int, state_store: Any | None = None) -> None:
         self._backends = list(backends)
         self._interval_s = interval_s
         self._task: asyncio.Task[None] | None = None
@@ -3156,7 +3077,8 @@ class _PeriodicSmokeTester:
                                 new_models = models_after - models_before
                                 logger.info(
                                     "new models detected in periodic refresh for backend %r: %s",
-                                    backend.id, sorted(new_models)
+                                    backend.id,
+                                    sorted(new_models),
                                 )
                                 self._state_store.set_model_release_timestamp(time.time())
                         except Exception:
@@ -3226,9 +3148,7 @@ class _PeriodicCooldownProber:
                     logger.exception("cooldown prober: usage_snapshot failed for %r", backend.id)
                     continue
                 now = time.time()
-                in_active_cooldown = (
-                    usage.cooldown_until_ts is not None and usage.cooldown_until_ts > now
-                )
+                in_active_cooldown = usage.cooldown_until_ts is not None and usage.cooldown_until_ts > now
                 if not in_active_cooldown and not usage.weekly_exhausted:
                     continue
                 try:
@@ -3244,12 +3164,12 @@ class _PeriodicCooldownProber:
                             logger.warning(
                                 "cooldown prober: %r probe succeeded; cooldown cleared "
                                 "(was until %s, weekly_exhausted=%s)",
-                                backend.id, usage.cooldown_until_ts, usage.weekly_exhausted,
+                                backend.id,
+                                usage.cooldown_until_ts,
+                                usage.weekly_exhausted,
                             )
                         except Exception:
-                            logger.exception(
-                                "cooldown prober: clear_cooldown raised for %r", backend.id
-                            )
+                            logger.exception("cooldown prober: clear_cooldown raised for %r", backend.id)
 
 
 async def _run_startup_smoke_test(backends_list: Sequence[Backend]) -> None:
@@ -3267,9 +3187,7 @@ async def _run_startup_smoke_test(backends_list: Sequence[Backend]) -> None:
             result = await _diagnose_backend(backend)
         except Exception as exc:
             logger.exception("startup smoke test: backend %r raised", backend.id)
-            results.append(
-                {"id": backend.id, "ok": False, "stage": "exception", "reason": str(exc)}
-            )
+            results.append({"id": backend.id, "ok": False, "stage": "exception", "reason": str(exc)})
             continue
         results.append(result)
         _log_smoke_result(result)
@@ -3292,10 +3210,9 @@ def _log_smoke_result(result: dict[str, Any]) -> None:
         reason = result.get("reason", "in cooldown")
         if cooldown_until is not None:
             from datetime import datetime
+
             try:
-                reset_time = datetime.fromtimestamp(
-                    cooldown_until, tz=UTC
-                ).isoformat()
+                reset_time = datetime.fromtimestamp(cooldown_until, tz=UTC).isoformat()
                 reason = f"{reason} (reset at {reset_time})"
             except (OverflowError, ValueError, OSError):
                 # Bogus/very-large cooldown timestamps (e.g. test sentinels or
@@ -3319,6 +3236,7 @@ def _log_smoke_result(result: dict[str, Any]) -> None:
         quota = result.get("quota_after")
         if quota is not None:
             from datetime import datetime
+
             exhaustion_info = []
 
             # 5-hour quota status
@@ -3379,8 +3297,7 @@ def _evaluate_codex_diagnostic(backend_id: str, handle: CallHandle, model: str) 
     checks = {
         "http_2xx": handle.upstream_status is not None and 200 <= handle.upstream_status < 300,
         "quota_headers_present": quota is not None,
-        "five_hourly_used_percent_present": quota is not None
-        and quota.five_hourly_used_percent is not None,
+        "five_hourly_used_percent_present": quota is not None and quota.five_hourly_used_percent is not None,
         "weekly_used_percent_present": quota is not None and quota.weekly_used_percent is not None,
         "response_completed_event_present": completed is not None,
         "usage_block_present": isinstance(usage_block, dict),
@@ -3563,18 +3480,20 @@ async def _collect_backend_status(
             quota = None
         cd = getattr(usage, "cooldown_until_ts", None)
         cd_in_s = (cd - now) if cd else None
-        out.append({
-            "id": b.id,
-            "kind": getattr(b, "kind", "unknown"),
-            "advertised_models": sorted(b.advertised_models),
-            "cooldown_until_ts": cd,
-            "cooldown_in_seconds": int(cd_in_s) if cd_in_s and cd_in_s > 0 else None,
-            "weekly_exhausted": bool(getattr(usage, "weekly_exhausted", False)),
-            "five_hourly_used_percent": getattr(quota, "five_hourly_used_percent", None),
-            "five_hourly_reset_after_seconds": getattr(quota, "five_hourly_reset_after_seconds", None),
-            "weekly_used_percent": getattr(quota, "weekly_used_percent", None),
-            "weekly_reset_after_seconds": getattr(quota, "weekly_reset_after_seconds", None),
-        })
+        out.append(
+            {
+                "id": b.id,
+                "kind": getattr(b, "kind", "unknown"),
+                "advertised_models": sorted(b.advertised_models),
+                "cooldown_until_ts": cd,
+                "cooldown_in_seconds": int(cd_in_s) if cd_in_s and cd_in_s > 0 else None,
+                "weekly_exhausted": bool(getattr(usage, "weekly_exhausted", False)),
+                "five_hourly_used_percent": getattr(quota, "five_hourly_used_percent", None),
+                "five_hourly_reset_after_seconds": getattr(quota, "five_hourly_reset_after_seconds", None),
+                "weekly_used_percent": getattr(quota, "weekly_used_percent", None),
+                "weekly_reset_after_seconds": getattr(quota, "weekly_reset_after_seconds", None),
+            }
+        )
     return out
 
 
@@ -3596,10 +3515,7 @@ def _no_viable(
     """
     if excluded_backends:
         # Build error classification map for logging
-        error_classifications = {
-            backend_id: error.classification
-            for backend_id, error in excluded_backends.items()
-        }
+        error_classifications = {backend_id: error.classification for backend_id, error in excluded_backends.items()}
 
         if fallback_executor:
             fallback_executor.log_final_exhaustion(model, error_classifications)
@@ -3622,15 +3538,13 @@ def _no_viable(
         summary = short
         if recovery_ts:
             recovery_s = max(1, int(recovery_ts - time.time()))
-            summary += f" | earliest recovery in {recovery_s}s ({recovery_s/60:.1f}min)"
+            summary += f" | earliest recovery in {recovery_s}s ({recovery_s / 60:.1f}min)"
         return {
             "error": short,
             "summary": summary,
             "model": model,
             "backends": backend_status,
-            "recovery_in_seconds": (
-                max(1, int(recovery_ts - time.time())) if recovery_ts else None
-            ),
+            "recovery_in_seconds": (max(1, int(recovery_ts - time.time())) if recovery_ts else None),
         }
 
     if last_error is None:

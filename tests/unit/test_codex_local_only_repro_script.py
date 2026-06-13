@@ -17,9 +17,7 @@ def _load_script_module():
 
 def test_load_status_parses_successful_status_json() -> None:
     mod = _load_script_module()
-    assert mod._load_status({"returncode": 0, "stdout": '{"routing":"local-only"}'}) == {
-        "routing": "local-only"
-    }
+    assert mod._load_status({"returncode": 0, "stdout": '{"routing":"local-only"}'}) == {"routing": "local-only"}
 
 
 def test_load_status_returns_none_on_failed_status_command() -> None:

@@ -44,12 +44,8 @@ class CostWeightedSelector:
         capabilities: dict[Cell, CellCapabilities],
     ) -> Cell:
         if not predictions:
-            raise ValueError(
-                "CostWeightedSelector.select called with empty predictions"
-            )
-        qualifying = [
-            c for c, p in predictions.items() if p >= _DECISION_BOUNDARY
-        ]
+            raise ValueError("CostWeightedSelector.select called with empty predictions")
+        qualifying = [c for c, p in predictions.items() if p >= _DECISION_BOUNDARY]
         pool = qualifying if qualifying else list(predictions.keys())
 
         def _rank(c: Cell) -> tuple[int, int]:

@@ -62,9 +62,7 @@ def parse_codex_headers(headers: Mapping[str, str]) -> CodexQuotaSnapshot | None
         weekly_reset_at=_int(lowered, "x-codex-secondary-reset-at"),
         five_hourly_reset_after_seconds=_int(lowered, "x-codex-primary-reset-after-seconds"),
         weekly_reset_after_seconds=_int(lowered, "x-codex-secondary-reset-after-seconds"),
-        five_hourly_over_weekly_limit_percent=_int(
-            lowered, "x-codex-primary-over-secondary-limit-percent"
-        ),
+        five_hourly_over_weekly_limit_percent=_int(lowered, "x-codex-primary-over-secondary-limit-percent"),
         credits_balance=_str(lowered, "x-codex-credits-balance"),
         credits_has_credits=_bool(lowered, "x-codex-credits-has-credits"),
         credits_unlimited=_bool(lowered, "x-codex-credits-unlimited"),

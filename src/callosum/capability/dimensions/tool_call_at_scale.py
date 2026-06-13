@@ -40,14 +40,9 @@ async def probe(
         return DimensionFinding(
             dimension=DIMENSION_NAME,
             status="skipped",
-            summary=(
-                "skipped — small-prompt tool_call_shape did not pass; "
-                "no point burning minutes probing at scale"
-            ),
+            summary=("skipped — small-prompt tool_call_shape did not pass; no point burning minutes probing at scale"),
             evidence={
-                "small_test_status": (
-                    small_finding.status if small_finding else "not_run"
-                ),
+                "small_test_status": (small_finding.status if small_finding else "not_run"),
             },
         )
 
@@ -77,10 +72,7 @@ async def probe(
         return DimensionFinding(
             dimension=DIMENSION_NAME,
             status="pass",
-            summary=(
-                f"structured function_call emitted at ~{_PROMPT_CHARS} "
-                "char prompt; no JSON-text leak"
-            ),
+            summary=(f"structured function_call emitted at ~{_PROMPT_CHARS} char prompt; no JSON-text leak"),
             evidence={
                 "prompt_chars": _PROMPT_CHARS,
                 "text_excerpts": cls.text_excerpts[:3],

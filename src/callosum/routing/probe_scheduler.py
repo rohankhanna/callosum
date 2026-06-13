@@ -85,6 +85,7 @@ async def _probe_one_cell(
     captured_error: list[str | None] = [None]
     supports = False
     try:
+
         async def _call(probe_body: dict[str, Any]) -> dict[str, Any]:
             try:
                 result: dict[str, Any] = await backend.responses(probe_body)
@@ -150,9 +151,7 @@ def _cells_needing_probe(
         if not hasattr(backend, "responses"):
             continue
         backend_id = getattr(backend, "id", "?")
-        advertised: frozenset[str] = getattr(
-            backend, "advertised_models", frozenset()
-        )
+        advertised: frozenset[str] = getattr(backend, "advertised_models", frozenset())
         for model in sorted(advertised):
             key = (backend_id, model)
             if key in seen:
@@ -196,9 +195,7 @@ async def run_probe_sweep(
         probe_ttl_s,
     )
     for backend, model in todo:
-        await _probe_one_cell(
-            backend=backend, model=model, operator_state=operator_state
-        )
+        await _probe_one_cell(backend=backend, model=model, operator_state=operator_state)
     return len(todo)
 
 

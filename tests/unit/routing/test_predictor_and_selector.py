@@ -9,9 +9,7 @@ from callosum.routing.selector.cost_weighted import CostWeightedSelector
 
 
 def _features():
-    return PromptFeatures(
-        text="x", tokens=100, modalities=frozenset({"text"}), needs_tools=False
-    )
+    return PromptFeatures(text="x", tokens=100, modalities=frozenset({"text"}), needs_tools=False)
 
 
 def _caps(cost: int) -> CellCapabilities:
@@ -111,6 +109,7 @@ def test_selector_raises_on_empty_predictions() -> None:
     if the capability filter ran first. Surface immediately rather
     than picking some arbitrary 'nothing'."""
     import pytest
+
     with pytest.raises(ValueError):
         CostWeightedSelector().select({}, {})
 
@@ -125,12 +124,18 @@ def test_selector_tiebreaks_by_parameter_count_descending() -> None:
     predictions = {small_local: 0.5, large_local: 0.5}
     caps = {
         small_local: CellCapabilities(
-            context_window=128_000, modalities=frozenset({"text"}),
-            supports_tools=True, cost_rank=0, parameter_count=25_800_000_000,
+            context_window=128_000,
+            modalities=frozenset({"text"}),
+            supports_tools=True,
+            cost_rank=0,
+            parameter_count=25_800_000_000,
         ),
         large_local: CellCapabilities(
-            context_window=128_000, modalities=frozenset({"text"}),
-            supports_tools=True, cost_rank=0, parameter_count=31_300_000_000,
+            context_window=128_000,
+            modalities=frozenset({"text"}),
+            supports_tools=True,
+            cost_rank=0,
+            parameter_count=31_300_000_000,
         ),
     }
     assert CostWeightedSelector().select(predictions, caps) == large_local
@@ -145,12 +150,18 @@ def test_selector_cost_still_dominates_parameter_count() -> None:
     predictions = {cheap_small: 0.5, expensive_huge: 0.5}
     caps = {
         cheap_small: CellCapabilities(
-            context_window=128_000, modalities=frozenset({"text"}),
-            supports_tools=True, cost_rank=0, parameter_count=7_000_000_000,
+            context_window=128_000,
+            modalities=frozenset({"text"}),
+            supports_tools=True,
+            cost_rank=0,
+            parameter_count=7_000_000_000,
         ),
         expensive_huge: CellCapabilities(
-            context_window=256_000, modalities=frozenset({"text"}),
-            supports_tools=True, cost_rank=10, parameter_count=500_000_000_000,
+            context_window=256_000,
+            modalities=frozenset({"text"}),
+            supports_tools=True,
+            cost_rank=10,
+            parameter_count=500_000_000_000,
         ),
     }
     assert CostWeightedSelector().select(predictions, caps) == cheap_small

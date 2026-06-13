@@ -130,13 +130,10 @@ class AuthDB:
 
     # ---- sessions ------------------------------------------------------
 
-    def insert_session(
-        self, *, token_hash: str, user_id: int, created_at: float, expires_at: float
-    ) -> None:
+    def insert_session(self, *, token_hash: str, user_id: int, created_at: float, expires_at: float) -> None:
         with self._lock:
             self._conn.execute(
-                "INSERT INTO sessions (token_hash, user_id, created_at, expires_at)"
-                " VALUES (?, ?, ?, ?)",
+                "INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
                 (token_hash, user_id, created_at, expires_at),
             )
 
@@ -171,9 +168,7 @@ class AuthDB:
     ) -> int:
         with self._lock:
             cursor = self._conn.execute(
-                "INSERT INTO api_keys"
-                " (user_id, key_hash, key_prefix, label, created_at)"
-                " VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO api_keys (user_id, key_hash, key_prefix, label, created_at) VALUES (?, ?, ?, ?, ?)",
                 (user_id, key_hash, key_prefix, label, created_at),
             )
             key_id = cursor.lastrowid
@@ -205,9 +200,7 @@ class AuthDB:
         """Number of non-revoked API keys across all users. Used by the auth
         middleware's 401 diagnostics to distinguish 'wrong key' from
         'empty auth store'."""
-        row = self._conn.execute(
-            "SELECT COUNT(*) FROM api_keys WHERE revoked_at IS NULL"
-        ).fetchone()
+        row = self._conn.execute("SELECT COUNT(*) FROM api_keys WHERE revoked_at IS NULL").fetchone()
         return int(row[0]) if row else 0
 
     def revoke_api_key(self, *, key_id: int, user_id: int, revoked_at: float) -> bool:
@@ -217,8 +210,7 @@ class AuthDB:
         """
         with self._lock:
             cursor = self._conn.execute(
-                "UPDATE api_keys SET revoked_at = ?"
-                " WHERE id = ? AND user_id = ? AND revoked_at IS NULL",
+                "UPDATE api_keys SET revoked_at = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL",
                 (revoked_at, key_id, user_id),
             )
             return cursor.rowcount > 0
@@ -228,9 +220,7 @@ class AuthDB:
         so a logging side effect cannot break the request flow."""
         try:
             with self._lock:
-                self._conn.execute(
-                    "UPDATE api_keys SET last_used_at = ? WHERE id = ?", (now, key_id)
-                )
+                self._conn.execute("UPDATE api_keys SET last_used_at = ? WHERE id = ?", (now, key_id))
         except sqlite3.Error:
             pass
 

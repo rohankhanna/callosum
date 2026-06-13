@@ -99,9 +99,7 @@ def _cells_to_harness(backends: list[Any]) -> list[tuple[Any, str]]:
         if not hasattr(backend, "responses"):
             continue
         backend_id = getattr(backend, "id", "?")
-        advertised: frozenset[str] = getattr(
-            backend, "advertised_models", frozenset()
-        )
+        advertised: frozenset[str] = getattr(backend, "advertised_models", frozenset())
         for cell in sorted(advertised):
             key = (backend_id, cell)
             if key in seen:
@@ -170,10 +168,7 @@ async def run_harness_sweep(
         if bid in backend_routable:
             continue
         backend_routable[bid] = await _backend_routable_now(backend)
-    skipped_cooldown = sum(
-        1 for backend, _ in todo
-        if not backend_routable.get(getattr(backend, "id", "?"), True)
-    )
+    skipped_cooldown = sum(1 for backend, _ in todo if not backend_routable.get(getattr(backend, "id", "?"), True))
     if skipped_cooldown:
         logger.info(
             "capability harness sweep: %d cell(s) skipped — backend in cooldown",
@@ -190,9 +185,7 @@ async def run_harness_sweep(
         if not backend_routable.get(backend_id, True):
             continue
 
-        async def _call(
-            body: dict[str, Any], _backend: Any = backend
-        ) -> dict[str, Any]:
+        async def _call(body: dict[str, Any], _backend: Any = backend) -> dict[str, Any]:
             result: dict[str, Any] = await _backend.responses(body)
             return result
 
@@ -211,7 +204,8 @@ async def run_harness_sweep(
             # failure must not block the rest of the sweep.
             logger.exception(
                 "capability harness: sweep entry %s/%s raised",
-                backend_id, cell,
+                backend_id,
+                cell,
             )
     logger.info(
         "capability harness sweep: complete (%d dimension run(s) total)",
@@ -298,9 +292,7 @@ class PeriodicHarnessSweep:
         weight_identity_provider: WeightIdentityProvider | None = None,
     ) -> None:
         self._backends = backends
-        self._interval_s = (
-            interval_s if interval_s is not None else _default_sweep_interval_s()
-        )
+        self._interval_s = interval_s if interval_s is not None else _default_sweep_interval_s()
         self._ttl_s = ttl_s
         self._operator_state = operator_state
         self._weight_identity_provider = weight_identity_provider
@@ -322,9 +314,7 @@ class PeriodicHarnessSweep:
             return
         if self._task is not None:
             return
-        self._task = asyncio.create_task(
-            self._run(), name="periodic-harness-sweep"
-        )
+        self._task = asyncio.create_task(self._run(), name="periodic-harness-sweep")
 
     async def stop(self) -> None:
         self._stop.set()
@@ -341,13 +331,12 @@ class PeriodicHarnessSweep:
         logger.info(
             "periodic harness sweep: interval=%.0fs (one-shot startup pass "
             "already kicked off; next periodic tick in %.0fs)",
-            self._interval_s, self._interval_s,
+            self._interval_s,
+            self._interval_s,
         )
         while not self._stop.is_set():
             try:
-                await asyncio.wait_for(
-                    self._stop.wait(), timeout=self._interval_s
-                )
+                await asyncio.wait_for(self._stop.wait(), timeout=self._interval_s)
             except TimeoutError:
                 pass
             else:

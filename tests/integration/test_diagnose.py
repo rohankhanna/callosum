@@ -229,9 +229,7 @@ def test_diagnose_requires_bearer_when_auth_enabled(tmp_path: Path) -> None:
         assert anon.status_code == 401
 
         client.post("/auth/register", json={"username": "alice", "password": "x"})
-        sess = client.post("/auth/login", json={"username": "alice", "password": "x"}).json()[
-            "session_token"
-        ]
+        sess = client.post("/auth/login", json={"username": "alice", "password": "x"}).json()["session_token"]
         key = client.post(
             "/auth/keys",
             json={"label": "diag-cron"},

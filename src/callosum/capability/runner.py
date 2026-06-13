@@ -85,8 +85,8 @@ async def run_dimensions(
             new_identity = weight_identity_provider.identify(cell)
         except Exception:
             logger.exception(
-                "probe %s: weight-identity provider raised; "
-                "leaving existing identity in place", cell,
+                "probe %s: weight-identity provider raised; leaving existing identity in place",
+                cell,
             )
             new_identity = None
         if new_identity is not None and new_identity != profile.weight_identity:
@@ -96,17 +96,15 @@ async def run_dimensions(
     fresh_results: dict[str, DimensionFinding] = {}
     for name, probe_fn in DIMENSIONS:
         existing = profile.findings.get(name)
-        if (
-            existing is not None
-            and (now - profile.last_updated) < ttl_s
-            and existing.status in ("pass", "fail")
-        ):
+        if existing is not None and (now - profile.last_updated) < ttl_s and existing.status in ("pass", "fail"):
             # Skip — we have a fresh deterministic result. "error" and
             # "skipped" don't count as fresh; those should re-run so
             # transient failures don't stick forever.
             logger.debug(
                 "probe %s/%s: skipping (cached %s within TTL)",
-                cell, name, existing.status,
+                cell,
+                name,
+                existing.status,
             )
             continue
         try:
@@ -116,14 +114,14 @@ async def run_dimensions(
             # bug in a probe must not crash the runner — partial
             # results from earlier dimensions stay persisted.
             logger.exception(
-                "probe %s/%s: dimension probe raised", cell, name,
+                "probe %s/%s: dimension probe raised",
+                cell,
+                name,
             )
             finding = DimensionFinding(
                 dimension=name,
                 status="error",
-                summary=(
-                    f"probe function raised: {type(exc).__name__}: {exc}"
-                ),
+                summary=(f"probe function raised: {type(exc).__name__}: {exc}"),
                 evidence={"exception": f"{type(exc).__name__}: {exc}"},
             )
         profile.upsert(finding)
@@ -131,7 +129,10 @@ async def run_dimensions(
         fresh_results[name] = finding
         logger.info(
             "probe %s/%s: %s — %s",
-            cell, name, finding.status, finding.summary,
+            cell,
+            name,
+            finding.status,
+            finding.summary,
         )
     # If every dimension was TTL-fresh, the dimension loop did no
     # work and didn't persist. But a freshly-stamped identity still

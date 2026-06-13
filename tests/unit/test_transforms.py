@@ -75,18 +75,14 @@ class _RecordingTransform(TransformBase):
     def applies_to(self, ctx: TransformContext) -> bool:
         return self._applies
 
-    def transform_request(
-        self, body: dict[str, Any], ctx: TransformContext
-    ) -> dict[str, Any]:
+    def transform_request(self, body: dict[str, Any], ctx: TransformContext) -> dict[str, Any]:
         self.request_calls.append(dict(body))
         # Append a tag so we can verify ordering on the body.
         new = dict(body)
         new["tags"] = body.get("tags", "") + self._req_suffix
         return new
 
-    def transform_response(
-        self, body: dict[str, Any], ctx: TransformContext
-    ) -> dict[str, Any]:
+    def transform_response(self, body: dict[str, Any], ctx: TransformContext) -> dict[str, Any]:
         self.response_calls.append(dict(body))
         new = dict(body)
         new["tags"] = body.get("tags", "") + self._resp_suffix
@@ -207,9 +203,7 @@ def test_applies_to_can_filter_by_cell_model() -> None:
         def applies_to(self, ctx: TransformContext) -> bool:
             return ctx.cell.model == "target-cell"
 
-        def transform_request(
-            self, body: dict[str, Any], ctx: TransformContext
-        ) -> dict[str, Any]:
+        def transform_request(self, body: dict[str, Any], ctx: TransformContext) -> dict[str, Any]:
             return {**body, "fired": True}
 
     reg = TransformRegistry()
@@ -259,9 +253,7 @@ def test_transform_raising_in_transform_request_is_skipped() -> None:
         def applies_to(self, ctx: TransformContext) -> bool:
             return True
 
-        def transform_request(
-            self, body: dict[str, Any], ctx: TransformContext
-        ) -> dict[str, Any]:
+        def transform_request(self, body: dict[str, Any], ctx: TransformContext) -> dict[str, Any]:
             raise RuntimeError("simulated bug")
 
     good_after = _RecordingTransform("good", request_suffix="G")
@@ -285,9 +277,7 @@ def test_transform_raising_in_transform_response_is_skipped() -> None:
         def applies_to(self, ctx: TransformContext) -> bool:
             return True
 
-        def transform_response(
-            self, body: dict[str, Any], ctx: TransformContext
-        ) -> dict[str, Any]:
+        def transform_response(self, body: dict[str, Any], ctx: TransformContext) -> dict[str, Any]:
             raise RuntimeError("simulated bug")
 
     good_first = _RecordingTransform("good", response_suffix="G")
@@ -316,13 +306,16 @@ def test_context_carries_weight_identity_and_profile() -> None:
     identity and capability profile, both of which the dev loop's
     auto-generated transforms will inspect to decide what to do."""
     profile = CapabilityProfile(model_id="x")
-    profile.upsert(DimensionFinding(
-        dimension="tool_call_at_scale",
-        status="fail",
-        summary="text-as-JSON at 80K chars",
-    ))
+    profile.upsert(
+        DimensionFinding(
+            dimension="tool_call_at_scale",
+            status="fail",
+            summary="text-as-JSON at 80K chars",
+        )
+    )
     profile.weight_identity = WeightIdentity(
-        source="model-a0d7", runtime="ollama",
+        source="model-a0d7",
+        runtime="ollama",
     )
     ctx = TransformContext(
         cell=Cell(model="x", reasoning_effort="default"),
@@ -357,9 +350,13 @@ def test_transform_targets_failing_at_scale_cells() -> None:
 
     # Cell with a failing at-scale finding → applies.
     failing = CapabilityProfile(model_id="failing")
-    failing.upsert(DimensionFinding(
-        dimension="tool_call_at_scale", status="fail", summary="",
-    ))
+    failing.upsert(
+        DimensionFinding(
+            dimension="tool_call_at_scale",
+            status="fail",
+            summary="",
+        )
+    )
     ctx_failing = TransformContext(
         cell=Cell(model="failing", reasoning_effort="default"),
         weight_identity=None,
@@ -367,9 +364,13 @@ def test_transform_targets_failing_at_scale_cells() -> None:
     )
     # Cell with a passing at-scale finding → does not apply.
     passing = CapabilityProfile(model_id="passing")
-    passing.upsert(DimensionFinding(
-        dimension="tool_call_at_scale", status="pass", summary="",
-    ))
+    passing.upsert(
+        DimensionFinding(
+            dimension="tool_call_at_scale",
+            status="pass",
+            summary="",
+        )
+    )
     ctx_passing = TransformContext(
         cell=Cell(model="passing", reasoning_effort="default"),
         weight_identity=None,

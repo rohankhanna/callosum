@@ -64,10 +64,9 @@ def test_probe_body_is_realistic_size() -> None:
     size catches regressions where someone simplifies the probe back."""
     body = build_probe_body("test")
     import json as _json
+
     total_chars = len(_json.dumps(body))
-    assert total_chars > 3000, (
-        f"probe body is only {total_chars} chars — hardening regressed."
-    )
+    assert total_chars > 3000, f"probe body is only {total_chars} chars — hardening regressed."
 
 
 # ---------- response_has_structured_tool_call --------------------------
@@ -218,9 +217,7 @@ def test_text_only_output_rejected() -> None:
             {
                 "type": "message",
                 "role": "assistant",
-                "content": [
-                    {"type": "output_text", "text": "I'd be happy to help!"}
-                ],
+                "content": [{"type": "output_text", "text": "I'd be happy to help!"}],
             }
         ]
     }
@@ -329,9 +326,7 @@ async def test_probe_returns_true_when_backend_emits_structured_call() -> None:
             ]
         }
 
-    result = await probe_supports_tools(
-        model="some-local-model", call_responses=fake_call
-    )
+    result = await probe_supports_tools(model="some-local-model", call_responses=fake_call)
     assert result is True
     # Sanity: the probe DID hand the right model to the backend.
     assert captured_body["model"] == "some-local-model"
@@ -357,10 +352,7 @@ async def test_probe_returns_false_when_backend_emits_text_only() -> None:
             ]
         }
 
-    assert (
-        await probe_supports_tools(model="x", call_responses=fake_call)
-        is False
-    )
+    assert await probe_supports_tools(model="x", call_responses=fake_call) is False
 
 
 @pytest.mark.asyncio
@@ -372,7 +364,4 @@ async def test_probe_returns_false_when_backend_raises() -> None:
     async def fake_call(body: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("upstream went away mid-probe")
 
-    assert (
-        await probe_supports_tools(model="x", call_responses=fake_call)
-        is False
-    )
+    assert await probe_supports_tools(model="x", call_responses=fake_call) is False

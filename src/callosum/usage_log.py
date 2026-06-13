@@ -101,8 +101,7 @@ _MIGRATIONS = [
     "ALTER TABLE requests ADD COLUMN routing_mode TEXT",
     # Backfill: pre-router rows had no rewriting, so served == requested.
     "UPDATE requests SET requested_model = model WHERE requested_model IS NULL",
-    "UPDATE requests SET requested_reasoning_effort = reasoning_effort"
-    " WHERE requested_reasoning_effort IS NULL",
+    "UPDATE requests SET requested_reasoning_effort = reasoning_effort WHERE requested_reasoning_effort IS NULL",
     "UPDATE requests SET routing_mode = 'pass-through' WHERE routing_mode IS NULL",
     "CREATE INDEX IF NOT EXISTS idx_requests_routing_mode ON requests(routing_mode)",
     "CREATE INDEX IF NOT EXISTS idx_requests_served_cell ON requests(model, reasoning_effort)",
@@ -111,17 +110,13 @@ _MIGRATIONS = [
     # we name our own columns by what they actually mean. RENAME COLUMN is
     # SQLite ≥3.25; running a second time fails with "no such column" since the
     # old name is gone — _apply_migrations swallows that.
-    "ALTER TABLE requests RENAME COLUMN primary_used_percent_before"
-    " TO five_hourly_used_percent_before",
-    "ALTER TABLE requests RENAME COLUMN primary_used_percent_after"
-    " TO five_hourly_used_percent_after",
-    "ALTER TABLE requests RENAME COLUMN secondary_used_percent_before"
-    " TO weekly_used_percent_before",
+    "ALTER TABLE requests RENAME COLUMN primary_used_percent_before TO five_hourly_used_percent_before",
+    "ALTER TABLE requests RENAME COLUMN primary_used_percent_after TO five_hourly_used_percent_after",
+    "ALTER TABLE requests RENAME COLUMN secondary_used_percent_before TO weekly_used_percent_before",
     "ALTER TABLE requests RENAME COLUMN secondary_used_percent_after TO weekly_used_percent_after",
     "ALTER TABLE requests RENAME COLUMN primary_reset_at TO five_hourly_reset_at",
     "ALTER TABLE requests RENAME COLUMN secondary_reset_at TO weekly_reset_at",
-    "ALTER TABLE requests RENAME COLUMN primary_over_secondary_limit_percent"
-    " TO five_hourly_over_weekly_limit_percent",
+    "ALTER TABLE requests RENAME COLUMN primary_over_secondary_limit_percent TO five_hourly_over_weekly_limit_percent",
     # Quality labeling for cost-optimal router training: user feedback and automated signals.
     "ALTER TABLE requests ADD COLUMN quality_score INTEGER",  # -1, 0, +1; NULL = unlabeled
     "ALTER TABLE requests ADD COLUMN quality_label_method TEXT",  # 'user', 'llm_judge_v1', etc
@@ -164,8 +159,7 @@ END""",
     "ALTER TABLE requests ADD COLUMN recommender_classifier_cell TEXT",
     "ALTER TABLE requests ADD COLUMN recommender_raw_output TEXT",
     "ALTER TABLE requests ADD COLUMN recommender_source TEXT",
-    "CREATE INDEX IF NOT EXISTS idx_requests_recommender_source"
-    " ON requests(recommender_source)",
+    "CREATE INDEX IF NOT EXISTS idx_requests_recommender_source ON requests(recommender_source)",
     # Phase 4 learning-router columns: raw float32 bytes of the prompt
     # embedding and (optionally) response embedding, populated when the
     # configured EmbeddingProvider is non-noop. Used by the kNN
@@ -190,8 +184,7 @@ END""",
     # bucketed by this column to detect local-side regressions
     # against the remote-only baseline.
     "ALTER TABLE requests ADD COLUMN effective_routing_mode TEXT",
-    "CREATE INDEX IF NOT EXISTS idx_requests_effective_routing_mode"
-    " ON requests(effective_routing_mode)",
+    "CREATE INDEX IF NOT EXISTS idx_requests_effective_routing_mode ON requests(effective_routing_mode)",
 ]
 
 
@@ -318,11 +311,7 @@ class UsageLog:
                 msg = str(exc).lower()
                 # Already-applied signals: ADD COLUMN re-run, or RENAME COLUMN
                 # where the old name is gone (renamed) or the new name exists.
-                if (
-                    "duplicate column" in msg
-                    or "no such column" in msg
-                    or "there is already another column" in msg
-                ):
+                if "duplicate column" in msg or "no such column" in msg or "there is already another column" in msg:
                     continue
                 raise
 
@@ -434,9 +423,7 @@ class UsageLog:
             if request_id is None:
                 raise RuntimeError("sqlite3 did not return a rowid for the inserted request")
             if self._capture_bodies and (
-                entry.req_payload is not None
-                or entry.resp_payload is not None
-                or entry.upstream_headers is not None
+                entry.req_payload is not None or entry.resp_payload is not None or entry.upstream_headers is not None
             ):
                 self._conn.execute(
                     "INSERT INTO request_bodies"
@@ -447,9 +434,7 @@ class UsageLog:
                         _compress(entry.req_payload),
                         _compress(entry.resp_payload),
                         _compress(
-                            json.dumps(entry.upstream_headers).encode()
-                            if entry.upstream_headers is not None
-                            else None
+                            json.dumps(entry.upstream_headers).encode() if entry.upstream_headers is not None else None
                         ),
                     ),
                 )
@@ -525,14 +510,11 @@ class UsageLog:
             raise ValueError(f"quality_score must be -1, 0, or 1; got {score}")
         with self._lock:
             self._conn.execute(
-                "UPDATE requests SET quality_score = ?, quality_label_method = ?"
-                " WHERE id = ?",
+                "UPDATE requests SET quality_score = ?, quality_label_method = ? WHERE id = ?",
                 (score, method, request_id),
             )
 
-    def per_mode_stats_since(
-        self, *, since_ts: float
-    ) -> dict[str, dict[str, int]]:
+    def per_mode_stats_since(self, *, since_ts: float) -> dict[str, dict[str, int]]:
         """Aggregate per-effective_routing_mode counts since `since_ts`.
 
         Returns a dict keyed by mode → {total, success, failure},
@@ -673,9 +655,7 @@ def decompress(blob: bytes | None) -> bytes | None:
     return zlib.decompress(blob)
 
 
-def _is_reset_crossover(
-    before: CodexQuotaSnapshot | None, after: CodexQuotaSnapshot | None
-) -> bool:
+def _is_reset_crossover(before: CodexQuotaSnapshot | None, after: CodexQuotaSnapshot | None) -> bool:
     if before is None or after is None:
         return False
     # Either window resetting during the request looks like post < pre.

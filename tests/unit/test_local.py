@@ -25,30 +25,30 @@ def _stub_subprocess(monkeypatch, stdout: str, returncode: int = 0) -> list[list
 
     def fake_run(cmd, **kwargs):
         calls.append(list(cmd))
-        return subprocess.CompletedProcess(
-            args=cmd, returncode=returncode, stdout=stdout, stderr=""
-        )
+        return subprocess.CompletedProcess(args=cmd, returncode=returncode, stdout=stdout, stderr="")
 
     monkeypatch.setattr("callosum.local.subprocess.run", fake_run)
     return calls
 
 
 def test_models_returns_parsed_entries(monkeypatch) -> None:
-    payload = _make_payload([
-        {
-            "artifacts": {"status": "present"},
-            "model": {
-                "id": "model-a0b0",
-                "endpoint": "http://127.0.0.1:11434",
-                "runtime": "ollama",
-                "runtime_model": "model-a0d7",
-                "family": "model-a0e5",
-                "context_window": 262144,
-                "api_surfaces": ["chat"],
-                "enabled": True,
+    payload = _make_payload(
+        [
+            {
+                "artifacts": {"status": "present"},
+                "model": {
+                    "id": "model-a0b0",
+                    "endpoint": "http://127.0.0.1:11434",
+                    "runtime": "ollama",
+                    "runtime_model": "model-a0d7",
+                    "family": "model-a0e5",
+                    "context_window": 262144,
+                    "api_surfaces": ["chat"],
+                    "enabled": True,
+                },
             },
-        },
-    ])
+        ]
+    )
     _stub_subprocess(monkeypatch, payload)
     src = LocalModelRegistrySource()
     models = src.models(force=True)
@@ -63,22 +63,30 @@ def test_models_returns_parsed_entries(monkeypatch) -> None:
 
 
 def test_models_skips_disabled_entries(monkeypatch) -> None:
-    payload = _make_payload([
-        {
-            "model": {
-                "id": "enabled-model", "endpoint": "http://127.0.0.1:11434",
-                "runtime": "ollama", "runtime_model": "e:1b",
-                "enabled": True, "api_surfaces": ["chat"],
+    payload = _make_payload(
+        [
+            {
+                "model": {
+                    "id": "enabled-model",
+                    "endpoint": "http://127.0.0.1:11434",
+                    "runtime": "ollama",
+                    "runtime_model": "e:1b",
+                    "enabled": True,
+                    "api_surfaces": ["chat"],
+                },
             },
-        },
-        {
-            "model": {
-                "id": "disabled-model", "endpoint": "http://127.0.0.1:11434",
-                "runtime": "ollama", "runtime_model": "d:1b",
-                "enabled": False, "api_surfaces": ["chat"],
+            {
+                "model": {
+                    "id": "disabled-model",
+                    "endpoint": "http://127.0.0.1:11434",
+                    "runtime": "ollama",
+                    "runtime_model": "d:1b",
+                    "enabled": False,
+                    "api_surfaces": ["chat"],
+                },
             },
-        },
-    ])
+        ]
+    )
     _stub_subprocess(monkeypatch, payload)
     models = LocalModelRegistrySource().models(force=True)
     assert [m.id for m in models] == ["enabled-model"]
@@ -97,15 +105,20 @@ def test_models_handles_malformed_json(monkeypatch) -> None:
 
 
 def test_models_caches_until_refresh_ttl(monkeypatch) -> None:
-    payload = _make_payload([
-        {
-            "model": {
-                "id": "m1", "endpoint": "http://127.0.0.1:11434",
-                "runtime": "ollama", "runtime_model": "m1:1b",
-                "enabled": True, "api_surfaces": ["chat"],
+    payload = _make_payload(
+        [
+            {
+                "model": {
+                    "id": "m1",
+                    "endpoint": "http://127.0.0.1:11434",
+                    "runtime": "ollama",
+                    "runtime_model": "m1:1b",
+                    "enabled": True,
+                    "api_surfaces": ["chat"],
+                },
             },
-        },
-    ])
+        ]
+    )
     calls = _stub_subprocess(monkeypatch, payload)
     src = LocalModelRegistrySource(refresh_s=60.0)
     src.models()  # first call: fetches
@@ -115,15 +128,20 @@ def test_models_caches_until_refresh_ttl(monkeypatch) -> None:
 
 
 def test_models_force_bypasses_cache(monkeypatch) -> None:
-    payload = _make_payload([
-        {
-            "model": {
-                "id": "m1", "endpoint": "http://127.0.0.1:11434",
-                "runtime": "ollama", "runtime_model": "m1:1b",
-                "enabled": True, "api_surfaces": ["chat"],
+    payload = _make_payload(
+        [
+            {
+                "model": {
+                    "id": "m1",
+                    "endpoint": "http://127.0.0.1:11434",
+                    "runtime": "ollama",
+                    "runtime_model": "m1:1b",
+                    "enabled": True,
+                    "api_surfaces": ["chat"],
+                },
             },
-        },
-    ])
+        ]
+    )
     calls = _stub_subprocess(monkeypatch, payload)
     src = LocalModelRegistrySource(refresh_s=60.0)
     src.models(force=True)
@@ -163,8 +181,11 @@ def test_model_entry_from_cli_accepts_legacy_api_field() -> None:
     `api_surfaces: ["responses"]`. The parser should accept either."""
     entry = {
         "model": {
-            "id": "x", "endpoint": "http://h:8090", "runtime": "responses_proxy",
-            "runtime_model": "x", "api": "responses",
+            "id": "x",
+            "endpoint": "http://h:8090",
+            "runtime": "responses_proxy",
+            "runtime_model": "x",
+            "api": "responses",
         },
     }
     parsed = ModelEntry.from_cli_entry(entry)

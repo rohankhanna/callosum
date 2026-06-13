@@ -49,8 +49,7 @@ async def probe(
             summary=f"call_responses raised: {type(exc).__name__}: {exc}",
             evidence={"exception": f"{type(exc).__name__}: {exc}"},
             adapter_hint=(
-                "transport failure — not a model quirk. Investigate "
-                "callosum's backend health for this cell."
+                "transport failure — not a model quirk. Investigate callosum's backend health for this cell."
             ),
         )
 
@@ -60,10 +59,7 @@ async def probe(
         return DimensionFinding(
             dimension=DIMENSION_NAME,
             status="pass",
-            summary=(
-                "structured function_call emitted; no tool-call-JSON "
-                "leak in message text"
-            ),
+            summary=("structured function_call emitted; no tool-call-JSON leak in message text"),
             evidence={
                 "function_calls_count": cls.function_calls_count,
                 "text_excerpts": cls.text_excerpts[:3],

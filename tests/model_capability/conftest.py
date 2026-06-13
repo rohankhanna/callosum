@@ -95,9 +95,7 @@ def admin_token() -> str:
 
 
 @pytest.fixture(scope="session")
-def callosum_client(
-    callosum_base_url: str, admin_token: str
-) -> Iterator[httpx.Client]:
+def callosum_client(callosum_base_url: str, admin_token: str) -> Iterator[httpx.Client]:
     """HTTP client pre-loaded with the admin bearer. Long timeout
     because real model calls can be 60s+ for 31B-class cells."""
     with httpx.Client(
@@ -111,10 +109,7 @@ def callosum_client(
         try:
             r = client.get("/status", timeout=5.0)
             if r.status_code >= 500:
-                pytest.skip(
-                    f"callosum returned {r.status_code} from /status — "
-                    "proxy is up but unhealthy"
-                )
+                pytest.skip(f"callosum returned {r.status_code} from /status — proxy is up but unhealthy")
         except httpx.RequestError as exc:
             pytest.skip(
                 f"callosum unreachable at {callosum_base_url}: {exc}. "
@@ -141,9 +136,7 @@ def _discover_cells(client: httpx.Client) -> list[str]:
 
 
 @pytest.fixture(scope="session")
-def cells_to_probe(
-    request: pytest.FixtureRequest, callosum_client: httpx.Client
-) -> list[str]:
+def cells_to_probe(request: pytest.FixtureRequest, callosum_client: httpx.Client) -> list[str]:
     requested = request.config.getoption("--probe-cell")
     if requested:
         return [str(requested)]
@@ -153,9 +146,7 @@ def cells_to_probe(
     return cells
 
 
-def pytest_collection_modifyitems(
-    config: pytest.Config, items: list[pytest.Item]
-) -> None:
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     """When `pytest -m model_probe` is NOT used, skip all
     model_probe-marked items so the default `uv run pytest` stays fast.
 
@@ -167,10 +158,7 @@ def pytest_collection_modifyitems(
     if "model_probe" in marker_expression:
         return
     skip_marker = pytest.mark.skip(
-        reason=(
-            "model_probe tests are gated off the default suite; run with "
-            "`pytest -m model_probe` to enable."
-        )
+        reason=("model_probe tests are gated off the default suite; run with `pytest -m model_probe` to enable.")
     )
     for item in items:
         if item.get_closest_marker("model_probe") is not None:

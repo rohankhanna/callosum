@@ -102,22 +102,15 @@ def install_admin_routes(
         return {
             "routing": operator_state.get_routing(),
             "inference_overrides": [
-                {"model": m, "params": p, "force": f}
-                for m, p, f in operator_state.list_inference_overrides()
+                {"model": m, "params": p, "force": f} for m, p, f in operator_state.list_inference_overrides()
             ],
-            "denylist": [
-                {"model": m, "reason": r}
-                for m, r in operator_state.list_denied_cells()
-            ],
+            "denylist": [{"model": m, "reason": r} for m, r in operator_state.list_denied_cells()],
         }
 
     @router.get("/params")
     async def admin_params_list(request: Request) -> list[dict[str, Any]]:
         _check(request)
-        return [
-            {"model": m, "params": p, "force": f}
-            for m, p, f in operator_state.list_inference_overrides()
-        ]
+        return [{"model": m, "params": p, "force": f} for m, p, f in operator_state.list_inference_overrides()]
 
     @router.post("/params")
     async def admin_params_set(request: Request) -> dict[str, str]:
@@ -144,10 +137,7 @@ def install_admin_routes(
     @router.get("/denylist")
     async def admin_denylist_list(request: Request) -> list[dict[str, Any]]:
         _check(request)
-        return [
-            {"model": m, "reason": r}
-            for m, r in operator_state.list_denied_cells()
-        ]
+        return [{"model": m, "reason": r} for m, r in operator_state.list_denied_cells()]
 
     @router.post("/denylist")
     async def admin_denylist_modify(request: Request) -> dict[str, str]:
@@ -217,23 +207,18 @@ def install_admin_routes(
             # than 400'ing on a body that's allowed to be absent.
             body = {}
         wanted = body.get("models") if isinstance(body, dict) else None
-        wanted_set: set[str] | None = (
-            set(wanted) if isinstance(wanted, list) else None
-        )
+        wanted_set: set[str] | None = set(wanted) if isinstance(wanted, list) else None
 
         results: list[dict[str, Any]] = []
         if not backends_list:
             return {
                 "results": results,
                 "note": (
-                    "no backends wired into the admin surface; restart "
-                    "the proxy to ensure backends are passed through"
+                    "no backends wired into the admin surface; restart the proxy to ensure backends are passed through"
                 ),
             }
         for backend in backends_list:
-            advertised: frozenset[str] = getattr(
-                backend, "advertised_models", frozenset()
-            )
+            advertised: frozenset[str] = getattr(backend, "advertised_models", frozenset())
             for model in sorted(advertised):
                 if wanted_set is not None and model not in wanted_set:
                     continue
@@ -257,19 +242,19 @@ def install_admin_routes(
                 error_msg: str | None = None
                 supports: bool = False
                 try:
-                    supports = await probe_supports_tools(
-                        model=model, call_responses=_call
-                    )
+                    supports = await probe_supports_tools(model=model, call_responses=_call)
                 except Exception as exc:
                     error_msg = f"{type(exc).__name__}: {exc}"
                 latency_ms = int((time.time() - t0) * 1000)
-                results.append({
-                    "model": model,
-                    "backend": getattr(backend, "id", "?"),
-                    "supports_tools": supports,
-                    "latency_ms": latency_ms,
-                    "error": error_msg,
-                })
+                results.append(
+                    {
+                        "model": model,
+                        "backend": getattr(backend, "id", "?"),
+                        "supports_tools": supports,
+                        "latency_ms": latency_ms,
+                        "error": error_msg,
+                    }
+                )
         return {"results": results}
 
     @router.post("/cell-call")
@@ -318,17 +303,14 @@ def install_admin_routes(
 
         target_backend: Any = None
         for backend in backends_list:
-            advertised: frozenset[str] = getattr(
-                backend, "advertised_models", frozenset()
-            )
+            advertised: frozenset[str] = getattr(backend, "advertised_models", frozenset())
             if model in advertised and hasattr(backend, "responses"):
                 target_backend = backend
                 break
         if target_backend is None:
             raise HTTPException(
                 404,
-                f"no backend advertises cell {model!r} with a non-stream "
-                "responses() entry point",
+                f"no backend advertises cell {model!r} with a non-stream responses() entry point",
             )
 
         # Force the model field in the body so the test harness can
@@ -408,10 +390,7 @@ def install_admin_routes(
         except Exception:
             body = {}
         reason = body.get("reason") if isinstance(body, dict) else None
-        reason_str = (
-            str(reason) if isinstance(reason, str) and reason
-            else "operator demote"
-        )
+        reason_str = str(reason) if isinstance(reason, str) and reason else "operator demote"
         store.demote(reason=reason_str, actor="user")
         return _autonomy_state_dict(store)
 
@@ -424,20 +403,13 @@ def install_admin_routes(
             raise HTTPException(400, "expected JSON object")
         level_raw = body.get("level")
         if not isinstance(level_raw, int):
-            raise HTTPException(
-                400, "level required: integer 1..5"
-            )
+            raise HTTPException(400, "level required: integer 1..5")
         try:
             level = AutonomyLevel(level_raw)
         except ValueError as exc:
-            raise HTTPException(
-                400, f"invalid level {level_raw}: {exc}"
-            ) from exc
+            raise HTTPException(400, f"invalid level {level_raw}: {exc}") from exc
         reason = body.get("reason")
-        reason_str = (
-            str(reason) if isinstance(reason, str) and reason
-            else "operator set"
-        )
+        reason_str = str(reason) if isinstance(reason, str) and reason else "operator set"
         store.set_level(level, reason=reason_str, actor="user")
         return _autonomy_state_dict(store)
 
@@ -584,6 +556,7 @@ def _dataclass_to_dict(obj: Any) -> dict[str, Any]:
     of the AssessmentMetrics / AssessmentDecision types (which contain
     only JSON-friendly primitives)."""
     from dataclasses import asdict, is_dataclass
+
     # is_dataclass() is True for both instances AND classes; asdict()
     # requires an instance. Narrow explicitly so callers passing a class
     # by mistake hit the dict() fallback instead of an asdict TypeError.

@@ -90,9 +90,7 @@ def _load_config_path(explicit: str | None) -> Path:
     for candidate in _DEFAULT_CONFIG_PATHS:
         if candidate.exists():
             return candidate
-    raise FileNotFoundError(
-        "no callosum config.toml found in standard locations; pass --config"
-    )
+    raise FileNotFoundError("no callosum config.toml found in standard locations; pass --config")
 
 
 def _parse_vault_backends(config_path: Path) -> list[VaultBackend]:
@@ -186,9 +184,7 @@ def _rotate_one(backend: VaultBackend, *, dry_run: bool) -> bool:
             file=sys.stderr,
         )
 
-    isolated_home = Path(
-        tempfile.mkdtemp(prefix=f"codex-fresh-{backend.id}-")
-    )
+    isolated_home = Path(tempfile.mkdtemp(prefix=f"codex-fresh-{backend.id}-"))
     os.chmod(isolated_home, 0o700)
     print(f"Temp CODEX_HOME             : {isolated_home}")
 
@@ -214,18 +210,13 @@ Steps for THIS backend ({backend.id}):
 
     if dry_run:
         print("(dry-run: would wait here for operator confirmation)")
-        print(
-            f"(dry-run: would validate, back up {backend.vault_path}, "
-            "install fresh auth.json)"
-        )
+        print(f"(dry-run: would validate, back up {backend.vault_path}, install fresh auth.json)")
         # In dry-run we still clean up the temp dir.
         with contextlib.suppress(OSError):
             isolated_home.rmdir()
         return True
 
-    _prompt_continue(
-        f"After step 4 (login completed for backend `{backend.id}`):"
-    )
+    _prompt_continue(f"After step 4 (login completed for backend `{backend.id}`):")
 
     fresh_path = isolated_home / "auth.json"
     ok, reason = _validate_fresh_auth(fresh_path)
@@ -242,17 +233,12 @@ Steps for THIS backend ({backend.id}):
 
     # Backup
     ts = time.strftime("%Y%m%dT%H%M%S")
-    backup_path = backend.vault_path.with_name(
-        f"{backend.vault_path.name}.bak.{ts}"
-    )
+    backup_path = backend.vault_path.with_name(f"{backend.vault_path.name}.bak.{ts}")
     if backend.vault_path.exists():
         shutil.copy2(backend.vault_path, backup_path)
         print(f"  ✓ Backed up existing vault to {backup_path}")
     else:
-        print(
-            "  ! No existing vault file to back up — first-time rotation "
-            "for this backend?"
-        )
+        print("  ! No existing vault file to back up — first-time rotation for this backend?")
 
     # Install new vault file with mode 0600. shutil.copyfile copies
     # contents; we set mode explicitly to be safe.
@@ -293,8 +279,7 @@ def _restart_callosum(unit: str) -> bool:
         return False
     if result.returncode != 0:
         print(
-            f"  ✗ systemctl restart failed (exit {result.returncode})\n"
-            f"  stderr: {result.stderr.strip()}",
+            f"  ✗ systemctl restart failed (exit {result.returncode})\n  stderr: {result.stderr.strip()}",
             file=sys.stderr,
         )
         return False
@@ -395,31 +380,32 @@ def add_subparser(sub: Any) -> None:
     p.add_argument(
         "--config",
         help="Path to callosum config.toml (default: auto-detect under "
-             "~/.config/callosum/ then ~/.config/codex-proxy/).",
+        "~/.config/callosum/ then ~/.config/codex-proxy/).",
     )
     p.add_argument(
         "--backend",
-        help="Rotate only this backend id (default: rotate every "
-             "codex_auth_vault backend).",
+        help="Rotate only this backend id (default: rotate every codex_auth_vault backend).",
     )
     p.add_argument(
-        "--restart", action="store_true",
+        "--restart",
+        action="store_true",
         help="Restart the callosum systemd unit after rotation. Off "
-             "by default; callosum's AuthVault has mtime-based reload "
-             "and may not need a restart.",
+        "by default; callosum's AuthVault has mtime-based reload "
+        "and may not need a restart.",
     )
     p.add_argument(
-        "--systemd-unit", default=_DEFAULT_SYSTEMD_UNIT,
-        help=f"systemd unit name for stop/restart messages and "
-             f"--restart (default: {_DEFAULT_SYSTEMD_UNIT}).",
+        "--systemd-unit",
+        default=_DEFAULT_SYSTEMD_UNIT,
+        help=f"systemd unit name for stop/restart messages and --restart (default: {_DEFAULT_SYSTEMD_UNIT}).",
     )
     p.add_argument(
-        "--dry-run", action="store_true",
-        help="Print what would happen without writing files or "
-             "prompting for login completion.",
+        "--dry-run",
+        action="store_true",
+        help="Print what would happen without writing files or prompting for login completion.",
     )
     p.add_argument(
-        "--skip-stop", action="store_true",
+        "--skip-stop",
+        action="store_true",
         help="Skip the 'stop callosum first' advisory prompt.",
     )
     p.set_defaults(func=cmd_auth_rotate)

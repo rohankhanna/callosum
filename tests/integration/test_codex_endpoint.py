@@ -40,22 +40,15 @@ class _CodexOnlyResponseMarker(TransformBase):
     def applies_to(self, ctx: TransformContext) -> bool:
         return ctx.endpoint == "codex"
 
-    def transform_response(
-        self, body: dict[str, Any], ctx: TransformContext
-    ) -> dict[str, Any]:
+    def transform_response(self, body: dict[str, Any], ctx: TransformContext) -> dict[str, Any]:
         # Walk the Responses-API output array, append a marker to any
         # output_text content. Done in-place; safe for a test fake.
         for item in body.get("output", []):
             if not isinstance(item, dict):
                 continue
             for content in item.get("content", []) or []:
-                if (
-                    isinstance(content, dict)
-                    and content.get("type") == "output_text"
-                ):
-                    content["text"] = (
-                        f"{content.get('text', '')} [codex-marker]"
-                    )
+                if isinstance(content, dict) and content.get("type") == "output_text":
+                    content["text"] = f"{content.get('text', '')} [codex-marker]"
         return body
 
 
@@ -75,9 +68,7 @@ def _backend_returning_text(text: str) -> InMemoryFakeBackend:
                     "id": "msg_test",
                     "type": "message",
                     "role": "assistant",
-                    "content": [
-                        {"type": "output_text", "text": text}
-                    ],
+                    "content": [{"type": "output_text", "text": text}],
                 }
             ],
         },

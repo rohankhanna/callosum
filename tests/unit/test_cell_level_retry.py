@@ -99,9 +99,7 @@ def test_no_candidates_invokes_inner_once_passthrough(
 ) -> None:
     """candidates=() is the pass-through hatch — wrapper calls inner once
     and returns its result without any cell-retry bookkeeping."""
-    seen = _install_inner_stub(
-        monkeypatch, log=None, behavior={"original-model": {"ok": True}}
-    )
+    seen = _install_inner_stub(monkeypatch, log=None, behavior={"original-model": {"ok": True}})
     body = {"model": "original-model"}
     out = asyncio.run(
         _dispatch_nonstream_with_cell_retry(
@@ -135,9 +133,7 @@ def test_success_on_first_cell_does_not_record_routing_attempts(
     stays a one-line query.
     """
     log = UsageLog(tmp_path / "u.sqlite")
-    seen = _install_inner_stub(
-        monkeypatch, log=log, behavior={"model-a": {"served": "a"}}
-    )
+    seen = _install_inner_stub(monkeypatch, log=log, behavior={"model-a": {"served": "a"}})
     body = {"model": "auto"}
     out = asyncio.run(
         _dispatch_nonstream_with_cell_retry(
@@ -163,9 +159,7 @@ def test_success_on_first_cell_does_not_record_routing_attempts(
 # ---------- 5xx → reroute ---------------------------------------------------
 
 
-def test_reroutes_to_next_cell_on_5xx(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_reroutes_to_next_cell_on_5xx(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Primary cell's backend pool errors with 503 → wrapper rewrites body
     to candidates[1] and retries. Both attempts logged to sibling table.
     """
@@ -211,9 +205,7 @@ def test_reroutes_to_next_cell_on_5xx(
 # ---------- 4xx → propagate without retry ----------------------------------
 
 
-def test_4xx_propagates_without_trying_next_cell(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_4xx_propagates_without_trying_next_cell(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Non-retryable errors (auth failure, malformed input) are not a
     routing problem; retrying with a different model won't help."""
     log = UsageLog(tmp_path / "u.sqlite")
@@ -247,9 +239,7 @@ def test_4xx_propagates_without_trying_next_cell(
     # Persistence still happens — failures with cell-level history are
     # worth keeping even on early bail-out.
     conn = sqlite3.connect(tmp_path / "u.sqlite")
-    rows = conn.execute(
-        "SELECT attempt_idx, status, classification FROM request_routing_attempts"
-    ).fetchall()
+    rows = conn.execute("SELECT attempt_idx, status, classification FROM request_routing_attempts").fetchall()
     assert rows == [(0, 401, "failed")]
 
 
@@ -292,8 +282,7 @@ def test_413_payload_too_large_propagates_without_trying_next_cell(
     assert [s["model"] for s in seen] == ["model-a"]
     conn = sqlite3.connect(tmp_path / "u.sqlite")
     rows = conn.execute(
-        "SELECT attempt_idx, status, classification, error_message "
-        "FROM request_routing_attempts"
+        "SELECT attempt_idx, status, classification, error_message FROM request_routing_attempts"
     ).fetchall()
     assert rows == [
         (
@@ -308,9 +297,7 @@ def test_413_payload_too_large_propagates_without_trying_next_cell(
 # ---------- cap at MAX_CELL_ATTEMPTS ---------------------------------------
 
 
-def test_caps_at_max_cell_attempts(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_caps_at_max_cell_attempts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Even if the recommender supplies more candidates, we walk at most
     MAX_CELL_ATTEMPTS of them. Three cells failing in a row → 5xx
     propagated; the 4th candidate is never touched."""
@@ -347,8 +334,7 @@ def test_caps_at_max_cell_attempts(
     assert [s["model"] for s in seen] == ["model-a", "model-b", "model-c"]
     conn = sqlite3.connect(tmp_path / "u.sqlite")
     rows = conn.execute(
-        "SELECT attempt_idx, model, classification"
-        " FROM request_routing_attempts ORDER BY attempt_idx"
+        "SELECT attempt_idx, model, classification FROM request_routing_attempts ORDER BY attempt_idx"
     ).fetchall()
     assert len(rows) == 3
     # First two were rerouted, last one was the terminal failure.

@@ -48,15 +48,14 @@ def _user_agent() -> str:
         from callosum.backends.codex_auth_vault import (
             _resolve_codex_client_version,
         )
+
         codex_ver = _resolve_codex_client_version()
     except ImportError:
         codex_ver = "unknown"
     import platform
+
     py_ver = platform.python_version()
-    return (
-        f"callosum/{_callosum_version} codex-flow "
-        f"(codex_cli_rs/{codex_ver}; python/{py_ver})"
-    )
+    return f"callosum/{_callosum_version} codex-flow (codex_cli_rs/{codex_ver}; python/{py_ver})"
 
 
 def _default_headers() -> dict[str, str]:

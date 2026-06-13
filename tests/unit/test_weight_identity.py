@@ -82,9 +82,7 @@ def test_cli_provider_returns_identity_for_known_model() -> None:
     the cell's identity matches the parsed entry."""
     p = LocalLlmCliWeightIdentityProvider()
     with patch.object(subprocess, "run") as run:
-        run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout=_fake_cli_payload(), stderr=""
-        )
+        run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=_fake_cli_payload(), stderr="")
         identity = p.identify("model-a0a9")
     assert identity == WeightIdentity(
         source="model-a0d6",
@@ -101,9 +99,7 @@ def test_cli_provider_groups_cells_sharing_weights() -> None:
     can't tell `weights match, transport differs`."""
     p = LocalLlmCliWeightIdentityProvider()
     with patch.object(subprocess, "run") as run:
-        run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout=_fake_cli_payload(), stderr=""
-        )
+        run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=_fake_cli_payload(), stderr="")
         a = p.identify("model-a0a9")
         b = p.identify("model-a0a1")
     assert a is not None and b is not None
@@ -117,9 +113,7 @@ def test_cli_provider_returns_none_for_unknown_model() -> None:
     lets the composite fall through to the next provider."""
     p = LocalLlmCliWeightIdentityProvider()
     with patch.object(subprocess, "run") as run:
-        run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout=_fake_cli_payload(), stderr=""
-        )
+        run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=_fake_cli_payload(), stderr="")
         assert p.identify("not-in-catalog") is None
 
 
@@ -138,9 +132,7 @@ def test_cli_provider_handles_nonzero_exit() -> None:
     exception. Matches the cooperative-None pattern."""
     p = LocalLlmCliWeightIdentityProvider()
     with patch.object(subprocess, "run") as run:
-        run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=1, stdout="", stderr="catalog corrupt"
-        )
+        run.return_value = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="catalog corrupt")
         assert p.identify("anything") is None
 
 
@@ -150,9 +142,7 @@ def test_cli_provider_handles_malformed_json() -> None:
     every call, log the failure, and return None."""
     p = LocalLlmCliWeightIdentityProvider()
     with patch.object(subprocess, "run") as run:
-        run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="{ not json", stderr=""
-        )
+        run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="{ not json", stderr="")
         assert p.identify("anything") is None
 
 
@@ -162,9 +152,7 @@ def test_cli_provider_caches_catalog_within_ttl() -> None:
     the provider cheap enough to call on every routing decision."""
     p = LocalLlmCliWeightIdentityProvider(cache_ttl_s=600)
     with patch.object(subprocess, "run") as run:
-        run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout=_fake_cli_payload(), stderr=""
-        )
+        run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=_fake_cli_payload(), stderr="")
         for _ in range(50):
             p.identify("model-a0a9")
         assert run.call_count == 1
@@ -225,9 +213,7 @@ def test_composite_falls_through_to_next_on_none() -> None:
     provider knows, the lookup succeeds."""
     null_first = NullWeightIdentityProvider()
     heuristic_second = HeuristicWeightIdentityProvider()
-    composite = CompositeWeightIdentityProvider(
-        providers=[null_first, heuristic_second]
-    )
+    composite = CompositeWeightIdentityProvider(providers=[null_first, heuristic_second])
     ident = composite.identify("model-a0a9")
     assert ident is not None
     assert ident.source == "model-a0c7"
@@ -249,9 +235,7 @@ def test_composite_first_non_none_wins() -> None:
                 )
             return None
 
-    composite = CompositeWeightIdentityProvider(
-        providers=[FakePrecise(), HeuristicWeightIdentityProvider()]
-    )
+    composite = CompositeWeightIdentityProvider(providers=[FakePrecise(), HeuristicWeightIdentityProvider()])
     ident = composite.identify("model-a0a9")
     assert ident is not None
     assert ident.source == "precise-model-a0d6"
@@ -276,9 +260,7 @@ def test_composite_logs_disagreement_but_uses_first_answer(
         def identify(self, model_id):
             return WeightIdentity(source="second-source", runtime="ollama")
 
-    composite = CompositeWeightIdentityProvider(
-        providers=[FirstSays(), SecondSays()]
-    )
+    composite = CompositeWeightIdentityProvider(providers=[FirstSays(), SecondSays()])
     with caplog.at_level(logging.WARNING):
         ident = composite.identify("anything")
     assert ident is not None
@@ -298,9 +280,7 @@ def test_composite_survives_provider_that_raises() -> None:
         def identify(self, model_id):
             raise RuntimeError("simulated provider failure")
 
-    composite = CompositeWeightIdentityProvider(
-        providers=[BrokenProvider(), HeuristicWeightIdentityProvider()]
-    )
+    composite = CompositeWeightIdentityProvider(providers=[BrokenProvider(), HeuristicWeightIdentityProvider()])
     ident = composite.identify("model-a0a9")
     assert ident is not None
     assert ident.source == "model-a0c7"
@@ -313,9 +293,7 @@ def test_composite_with_empty_providers_returns_none(caplog) -> None:
     with caplog.at_level(logging.WARNING):
         composite = CompositeWeightIdentityProvider(providers=[])
     assert composite.identify("anything") is None
-    assert any(
-        "constructed with NO providers" in r.message for r in caplog.records
-    )
+    assert any("constructed with NO providers" in r.message for r in caplog.records)
 
 
 def test_composite_stats_are_tracked() -> None:
@@ -327,14 +305,9 @@ def test_composite_stats_are_tracked() -> None:
         id = "A"
 
         def identify(self, model_id):
-            return (
-                WeightIdentity(source="x", runtime="r")
-                if model_id == "known" else None
-            )
+            return WeightIdentity(source="x", runtime="r") if model_id == "known" else None
 
-    composite = CompositeWeightIdentityProvider(
-        providers=[ProviderA(), NullWeightIdentityProvider()]
-    )
+    composite = CompositeWeightIdentityProvider(providers=[ProviderA(), NullWeightIdentityProvider()])
     composite.identify("known")
     composite.identify("known")
     composite.identify("unknown")

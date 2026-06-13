@@ -45,11 +45,7 @@ def test_responses_api_input_extracted() -> None:
 
 def test_chat_messages_with_part_list_extracted() -> None:
     """OpenAI multimodal-style `content: [{type: text, text: ...}]`."""
-    body = {
-        "messages": [
-            {"role": "user", "content": [{"type": "text", "text": "hello"}]}
-        ]
-    }
+    body = {"messages": [{"role": "user", "content": [{"type": "text", "text": "hello"}]}]}
     assert "hello" in _extract_prompt_text(body)
 
 
@@ -60,38 +56,40 @@ def test_extractor_returns_none_when_no_text_anywhere() -> None:
 
 
 def test_response_text_chat_completions_shape() -> None:
-    payload = json.dumps({
-        "choices": [{"message": {"role": "assistant", "content": "hi back"}}]
-    }).encode()
+    payload = json.dumps({"choices": [{"message": {"role": "assistant", "content": "hi back"}}]}).encode()
     assert _extract_response_text(payload) == "hi back"
 
 
 def test_response_text_responses_api_shape() -> None:
     """Output items list with `output_text` content parts."""
-    payload = json.dumps({
-        "output": [
-            {
-                "type": "message",
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": "the answer"}],
-            }
-        ]
-    }).encode()
+    payload = json.dumps(
+        {
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "the answer"}],
+                }
+            ]
+        }
+    ).encode()
     assert "the answer" in _extract_response_text(payload)
 
 
 def test_response_text_handles_function_call_output() -> None:
     """function_call items shouldn't contribute text — but the extractor
     shouldn't crash on them either."""
-    payload = json.dumps({
-        "output": [
-            {
-                "type": "function_call",
-                "name": "shell",
-                "arguments": '{"cmd":"ls"}',
-            }
-        ]
-    }).encode()
+    payload = json.dumps(
+        {
+            "output": [
+                {
+                    "type": "function_call",
+                    "name": "shell",
+                    "arguments": '{"cmd":"ls"}',
+                }
+            ]
+        }
+    ).encode()
     # No visible text content; extractor returns the function_call
     # arguments via the walk-text fallback. That's fine — it's still
     # signal-bearing for the kNN predictor.

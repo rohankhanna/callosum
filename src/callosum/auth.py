@@ -91,9 +91,7 @@ class AuthService:
             raise InvalidCredentialsError("username and password must be non-empty")
         password_hash = _HASHER.hash(password)
         try:
-            user_id = self._db.insert_user(
-                username=username, password_hash=password_hash, created_at=time.time()
-            )
+            user_id = self._db.insert_user(username=username, password_hash=password_hash, created_at=time.time())
         except UsernameTakenError:
             raise InvalidCredentialsError("username is already taken") from None
         user = self._db.get_user_by_id(user_id)

@@ -189,7 +189,8 @@ class LocalModelRegistrySource:
         if proc.returncode != 0:
             logger.warning(
                 "local LLM gateway: CLI exited %d; stderr=%r",
-                proc.returncode, proc.stderr[:300] if proc.stderr else "",
+                proc.returncode,
+                proc.stderr[:300] if proc.stderr else "",
             )
             return _CacheState(fetched_at=time.time(), models=[], healthy=False)
         try:

@@ -52,10 +52,7 @@ class TransformRegistry:
         with two same-named transforms would be ambiguous."""
         for existing in self._transforms:
             if existing.name == transform.name:
-                raise ValueError(
-                    f"transform name {transform.name!r} is already "
-                    f"registered; pick a unique name"
-                )
+                raise ValueError(f"transform name {transform.name!r} is already registered; pick a unique name")
         self._transforms.append(transform)
 
     def names(self) -> list[str]:
@@ -67,9 +64,7 @@ class TransformRegistry:
     def __len__(self) -> int:
         return len(self._transforms)
 
-    def applicable_for(
-        self, ctx: TransformContext
-    ) -> list[Transform]:
+    def applicable_for(self, ctx: TransformContext) -> list[Transform]:
         """Filter the registered transforms down to those whose
         applies_to(ctx) returns True. Order matches registration order.
 
@@ -104,9 +99,9 @@ class TransformRegistry:
                 current = t.transform_request(current, ctx)
             except Exception:
                 logger.exception(
-                    "transform %s: transform_request raised; "
-                    "skipping this transform for cell %s",
-                    t.name, ctx.cell.model,
+                    "transform %s: transform_request raised; skipping this transform for cell %s",
+                    t.name,
+                    ctx.cell.model,
                 )
         return current
 
@@ -126,9 +121,9 @@ class TransformRegistry:
                 current = t.transform_response(current, ctx)
             except Exception:
                 logger.exception(
-                    "transform %s: transform_response raised; "
-                    "skipping this transform for cell %s",
-                    t.name, ctx.cell.model,
+                    "transform %s: transform_response raised; skipping this transform for cell %s",
+                    t.name,
+                    ctx.cell.model,
                 )
         return current
 

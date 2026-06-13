@@ -48,10 +48,12 @@ def test_legacy_x_codex_session_id_header_still_works() -> None:
 def test_unprefixed_form_wins_when_both_present() -> None:
     """If both headers are sent, the unprefixed form (Codex's actual
     value) takes precedence over the legacy prefixed form."""
-    req = _request_with_headers(**{
-        "session-id": "sess-codex-real",
-        "x-codex-session-id": "sess-legacy-ignored",
-    })
+    req = _request_with_headers(
+        **{
+            "session-id": "sess-codex-real",
+            "x-codex-session-id": "sess-legacy-ignored",
+        }
+    )
     assert _session_id_from_request(req, pinned=None) == "sess-codex-real"
 
 

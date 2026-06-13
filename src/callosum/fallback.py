@@ -73,9 +73,7 @@ class FallbackExecutor:
             f"({reason or 'no reason'}) in {duration_ms:.0f}ms"
         )
 
-    def should_retry_with_backoff(
-        self, error_classifications: Mapping[str, str]
-    ) -> bool:
+    def should_retry_with_backoff(self, error_classifications: Mapping[str, str]) -> bool:
         """Decide if we should retry with exponential backoff.
 
         Useful for transient errors like rate limits that may recover.
@@ -89,9 +87,7 @@ class FallbackExecutor:
         )
         return transient_count > 0 and len(error_classifications) > 0
 
-    def should_try_fallback_model(
-        self, model: str, available_models: frozenset[str]
-    ) -> str | None:
+    def should_try_fallback_model(self, model: str, available_models: frozenset[str]) -> str | None:
         """Choose a fallback model if primary is exhausted.
 
         Strategy: try next-cheaper/next-slower model on the same backend.
@@ -108,9 +104,7 @@ class FallbackExecutor:
             return fallback
         return None
 
-    def should_try_different_backend(
-        self, error_classifications: Mapping[str, str]
-    ) -> bool:
+    def should_try_different_backend(self, error_classifications: Mapping[str, str]) -> bool:
         """Decide if we should try a completely different backend.
 
         Useful when one backend is having persistent issues but others might work.
@@ -126,9 +120,7 @@ class FallbackExecutor:
         )
         return backend_specific > 0
 
-    def log_final_exhaustion(
-        self, model: str, error_classifications: Mapping[str, str]
-    ) -> None:
+    def log_final_exhaustion(self, model: str, error_classifications: Mapping[str, str]) -> None:
         """Log when all strategies are exhausted."""
         ts = _utc_timestamp()
         total_ms = (time.time() - self.start_time) * 1000

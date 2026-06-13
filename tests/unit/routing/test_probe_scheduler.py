@@ -60,9 +60,7 @@ def test_cells_needing_probe_skips_remote_backends(tmp_path: Path) -> None:
     """codex_auth_vault cells are NOT probed — their capability claims
     come from a curated catalog and are trustworthy."""
     state = _state(tmp_path)
-    remote = _FakeBackend(
-        id="primary", kind="codex_auth_vault", models=frozenset({"model-a0e8"})
-    )
+    remote = _FakeBackend(id="primary", kind="codex_auth_vault", models=frozenset({"model-a0e8"}))
     todo = _cells_needing_probe(
         backends=[remote],
         operator_state=state,
@@ -94,9 +92,7 @@ def test_cells_needing_probe_includes_local_cells(tmp_path: Path) -> None:
 def test_cells_needing_probe_skips_fresh_cached_results(tmp_path: Path) -> None:
     state = _state(tmp_path)
     state.set_probe_result("local", "model-a0d5-x", supports_tools=True)
-    local = _FakeBackend(
-        id="local", kind="litellm_gateway", models=frozenset({"model-a0d5-x"})
-    )
+    local = _FakeBackend(id="local", kind="litellm_gateway", models=frozenset({"model-a0d5-x"}))
     todo = _cells_needing_probe(
         backends=[local],
         operator_state=state,
@@ -110,9 +106,7 @@ def test_cells_needing_probe_re_probes_stale_results(tmp_path: Path) -> None:
     """A cached result older than the TTL must trigger a fresh probe."""
     state = _state(tmp_path)
     state.set_probe_result("local", "model-a0d5-x", supports_tools=True)
-    local = _FakeBackend(
-        id="local", kind="litellm_gateway", models=frozenset({"model-a0d5-x"})
-    )
+    local = _FakeBackend(id="local", kind="litellm_gateway", models=frozenset({"model-a0d5-x"}))
     far_future = time.time() + 100 * 24 * 3600
     todo = _cells_needing_probe(
         backends=[local],
@@ -131,12 +125,8 @@ def test_cells_needing_probe_dedupes_when_two_backends_advertise_same_model(
     miss in production). Dedupe by (backend_id, model) so we don't
     waste probes."""
     state = _state(tmp_path)
-    b1 = _FakeBackend(
-        id="local LLM gateway", kind="litellm_gateway", models=frozenset({"shared-model"})
-    )
-    b2 = _FakeBackend(
-        id="local LLM gateway", kind="litellm_gateway", models=frozenset({"shared-model"})
-    )
+    b1 = _FakeBackend(id="local LLM gateway", kind="litellm_gateway", models=frozenset({"shared-model"}))
+    b2 = _FakeBackend(id="local LLM gateway", kind="litellm_gateway", models=frozenset({"shared-model"}))
     todo = _cells_needing_probe(
         backends=[b1, b2],
         operator_state=state,
@@ -230,12 +220,8 @@ def test_supports_tools_override_returns_false_only_for_failed_probes(
     state = _state(tmp_path)
     state.set_probe_result("local", "good", supports_tools=True)
     state.set_probe_result("local", "bad", supports_tools=False)
-    assert supports_tools_override(
-        operator_state=state, backend_id="local", model="good"
-    ) is None
-    assert supports_tools_override(
-        operator_state=state, backend_id="local", model="bad"
-    ) is False
+    assert supports_tools_override(operator_state=state, backend_id="local", model="good") is None
+    assert supports_tools_override(operator_state=state, backend_id="local", model="bad") is False
 
 
 def test_supports_tools_override_returns_none_for_unprobed_cells(
@@ -244,6 +230,4 @@ def test_supports_tools_override_returns_none_for_unprobed_cells(
     """Never-probed cells get None so the caller trusts the backend's
     own claim. The override only fires when there's evidence."""
     state = _state(tmp_path)
-    assert supports_tools_override(
-        operator_state=state, backend_id="local", model="never-probed"
-    ) is None
+    assert supports_tools_override(operator_state=state, backend_id="local", model="never-probed") is None

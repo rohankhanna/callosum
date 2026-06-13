@@ -56,9 +56,7 @@ class InMemoryFakeBackend:
         # Tests that need one set self._fake_quota directly.
         return getattr(self, "_fake_quota", None)
 
-    async def chat_completions(
-        self, body: dict[str, Any], handle: CallHandle | None = None
-    ) -> dict[str, Any]:
+    async def chat_completions(self, body: dict[str, Any], handle: CallHandle | None = None) -> dict[str, Any]:
         del handle  # fake has no upstream; nothing to populate
         if self._canned_error is not None:
             raise self._canned_error
@@ -95,9 +93,7 @@ class InMemoryFakeBackend:
         for chunk in chunks:
             yield chunk
 
-    async def responses(
-        self, body: dict[str, Any], handle: CallHandle | None = None
-    ) -> dict[str, Any]:
+    async def responses(self, body: dict[str, Any], handle: CallHandle | None = None) -> dict[str, Any]:
         del handle
         if self._canned_error is not None:
             raise self._canned_error
@@ -117,9 +113,7 @@ class InMemoryFakeBackend:
             ],
         }
 
-    async def responses_stream(
-        self, body: dict[str, Any], handle: CallHandle | None = None
-    ) -> AsyncIterator[bytes]:
+    async def responses_stream(self, body: dict[str, Any], handle: CallHandle | None = None) -> AsyncIterator[bytes]:
         del handle
         if self._canned_error is not None:
             raise self._canned_error

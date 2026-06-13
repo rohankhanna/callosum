@@ -110,9 +110,7 @@ async def test_periodic_smoke_tester_fires_after_interval(
         for _ in range(40):
             await asyncio.sleep(0.1)
             if any(
-                "periodic smoke test cycle" in r.getMessage()
-                for r in caplog.records
-                if r.name == "callosum.startup"
+                "periodic smoke test cycle" in r.getMessage() for r in caplog.records if r.name == "callosum.startup"
             ):
                 break
         msgs = [r.getMessage() for r in caplog.records if r.name == "callosum.startup"]
@@ -133,9 +131,7 @@ async def test_periodic_smoke_tester_disabled_when_interval_zero(
     try:
         await asyncio.sleep(0.2)  # give it a chance to misbehave
         msgs = [r.getMessage() for r in caplog.records if r.name == "callosum.startup"]
-        assert not any("periodic smoke test cycle" in m for m in msgs), (
-            f"expected no cycles when disabled, got: {msgs}"
-        )
+        assert not any("periodic smoke test cycle" in m for m in msgs), f"expected no cycles when disabled, got: {msgs}"
         assert not tester.enabled
     finally:
         await tester.stop()

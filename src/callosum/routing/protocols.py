@@ -153,10 +153,7 @@ class QualityPredictor(Protocol):
         """Stable identifier (e.g. 'uniform', 'knn', 'gbm-v1')."""
         ...
 
-    def predict(
-        self, features: PromptFeatures, candidates: list[Cell]
-    ) -> dict[Cell, float]:
-        ...
+    def predict(self, features: PromptFeatures, candidates: list[Cell]) -> dict[Cell, float]: ...
 
     def reload(self, labeled: Iterable[LabeledRow]) -> None:
         """Refresh internal state from a labeled-row iterable. For k-NN
@@ -181,8 +178,7 @@ class CellSelector(Protocol):
         self,
         predictions: dict[Cell, float],
         capabilities: dict[Cell, CellCapabilities],
-    ) -> Cell:
-        ...
+    ) -> Cell: ...
 
 
 class OutcomeLabeler(Protocol):

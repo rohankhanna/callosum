@@ -45,9 +45,7 @@ async def test_advertised_models_empty_before_first_poll() -> None:
     """No /v1/models call yet → catalog empty, backend reports unhealthy."""
     backend = LiteLLMGatewayBackend(
         id="local",
-        transport=httpx.MockTransport(
-            lambda r: httpx.Response(200, json=_models_payload("model-a0d3"))
-        ),
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json=_models_payload("model-a0d3"))),
     )
     assert backend.advertised_models == frozenset()
     h = await backend.health()
@@ -88,9 +86,7 @@ async def test_model_metadata_marks_local_models_as_listable_default_effort() ->
     other API-listed model from the grid's perspective."""
     backend = LiteLLMGatewayBackend(
         id="local",
-        transport=httpx.MockTransport(
-            lambda r: httpx.Response(200, json=_models_payload("model-a0d3", "model-a0d9"))
-        ),
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json=_models_payload("model-a0d3", "model-a0d9"))),
     )
     await backend.health()  # populate catalog
     md = backend.model_metadata
@@ -131,9 +127,7 @@ async def test_health_reports_network_when_gateway_unreachable() -> None:
 async def test_health_reports_ok_after_successful_refresh() -> None:
     backend = LiteLLMGatewayBackend(
         id="local",
-        transport=httpx.MockTransport(
-            lambda r: httpx.Response(200, json=_models_payload("model-a0d3"))
-        ),
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json=_models_payload("model-a0d3"))),
     )
     h = await backend.health()
     assert h.available is True
@@ -157,19 +151,13 @@ async def test_chat_completions_posts_to_gateway_and_returns_payload() -> None:
             json={
                 "id": "cmpl-1",
                 "model": "model-a0d3",
-                "choices": [
-                    {"index": 0, "message": {"role": "assistant", "content": "hi back"}}
-                ],
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi back"}}],
                 "usage": {"prompt_tokens": 2, "completion_tokens": 2, "total_tokens": 4},
             },
         )
 
-    backend = LiteLLMGatewayBackend(
-        id="local", transport=httpx.MockTransport(handler)
-    )
-    out = await backend.chat_completions(
-        {"model": "model-a0d3", "messages": [{"role": "user", "content": "hi"}]}
-    )
+    backend = LiteLLMGatewayBackend(id="local", transport=httpx.MockTransport(handler))
+    out = await backend.chat_completions({"model": "model-a0d3", "messages": [{"role": "user", "content": "hi"}]})
     assert out["choices"][0]["message"]["content"] == "hi back"
     assert received["url"].endswith("/v1/chat/completions")
     assert received["body"]["model"] == "model-a0d3"
@@ -194,12 +182,8 @@ async def test_master_key_added_as_bearer_when_set() -> None:
             },
         )
 
-    backend = LiteLLMGatewayBackend(
-        id="local", master_key="sk-master-test", transport=httpx.MockTransport(handler)
-    )
-    await backend.chat_completions(
-        {"model": "model-a0d3", "messages": [{"role": "user", "content": "hi"}]}
-    )
+    backend = LiteLLMGatewayBackend(id="local", master_key="sk-master-test", transport=httpx.MockTransport(handler))
+    await backend.chat_completions({"model": "model-a0d3", "messages": [{"role": "user", "content": "hi"}]})
     assert all(a == "Bearer sk-master-test" for a in seen_auth)
     await backend.aclose()
 
@@ -455,22 +439,24 @@ def test_chat_to_responses_response_translates_tool_calls() -> None:
     chat = {
         "id": "chatcmpl-abc",
         "model": "model-a0a9",
-        "choices": [{
-            "message": {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "call_xyz",
-                        "type": "function",
-                        "function": {
-                            "name": "shell",
-                            "arguments": '{"cmd":"git log"}',
-                        },
-                    }
-                ],
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_xyz",
+                            "type": "function",
+                            "function": {
+                                "name": "shell",
+                                "arguments": '{"cmd":"git log"}',
+                            },
+                        }
+                    ],
+                }
             }
-        }],
+        ],
         "usage": {"prompt_tokens": 100, "completion_tokens": 17, "total_tokens": 117},
     }
     resp = _chat_to_responses_response(chat)
@@ -490,17 +476,21 @@ def test_chat_to_responses_response_translates_dict_arguments_to_json_string() -
     chat = {
         "id": "x",
         "model": "m",
-        "choices": [{
-            "message": {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [{
-                    "id": "c1",
-                    "type": "function",
-                    "function": {"name": "f", "arguments": {"k": "v"}},
-                }],
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "c1",
+                            "type": "function",
+                            "function": {"name": "f", "arguments": {"k": "v"}},
+                        }
+                    ],
+                }
             }
-        }],
+        ],
     }
     resp = _chat_to_responses_response(chat)
     fc = [o for o in resp["output"] if o["type"] == "function_call"][0]
@@ -517,21 +507,21 @@ def test_chat_to_responses_response_preserves_thinking_as_reasoning_item() -> No
     chat = {
         "id": "chatcmpl-think",
         "model": "model-a0b0",
-        "choices": [{
-            "message": {
-                "role": "assistant",
-                "content": "OK",
-                "thinking": "The user asked for OK. Reply with OK.",
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "OK",
+                    "thinking": "The user asked for OK. Reply with OK.",
+                }
             }
-        }],
+        ],
         "usage": {"prompt_tokens": 5, "completion_tokens": 12, "total_tokens": 17},
     }
     resp = _chat_to_responses_response(chat)
     reasoning_items = [o for o in resp["output"] if o["type"] == "reasoning"]
     assert len(reasoning_items) == 1
-    assert reasoning_items[0]["summary"][0]["text"] == (
-        "The user asked for OK. Reply with OK."
-    )
+    assert reasoning_items[0]["summary"][0]["text"] == ("The user asked for OK. Reply with OK.")
     # Message text item should also be present, AFTER the reasoning item.
     msg_items = [o for o in resp["output"] if o["type"] == "message"]
     assert len(msg_items) == 1
@@ -578,15 +568,11 @@ async def test_responses_end_to_end_translates_through_chat_completions() -> Non
             json={
                 "id": "cmpl-1",
                 "model": "model-a0d3",
-                "choices": [
-                    {"message": {"role": "assistant", "content": "translated reply"}}
-                ],
+                "choices": [{"message": {"role": "assistant", "content": "translated reply"}}],
             },
         )
 
-    backend = LiteLLMGatewayBackend(
-        id="local", transport=httpx.MockTransport(handler)
-    )
+    backend = LiteLLMGatewayBackend(id="local", transport=httpx.MockTransport(handler))
     resp = await backend.responses(
         {
             "model": "model-a0d3",
@@ -639,9 +625,7 @@ async def test_codex_only_fields_stripped_before_send() -> None:
             },
         )
 
-    backend = LiteLLMGatewayBackend(
-        id="local", transport=httpx.MockTransport(handler)
-    )
+    backend = LiteLLMGatewayBackend(id="local", transport=httpx.MockTransport(handler))
     await backend.chat_completions(
         {
             "model": "model-a0d3",
@@ -662,13 +646,9 @@ async def test_chat_completions_raises_backenderror_on_4xx() -> None:
             return httpx.Response(200, json=_models_payload("model-a0d3"))
         return httpx.Response(429, json={"error": {"message": "rate limit"}})
 
-    backend = LiteLLMGatewayBackend(
-        id="local", transport=httpx.MockTransport(handler)
-    )
+    backend = LiteLLMGatewayBackend(id="local", transport=httpx.MockTransport(handler))
     with pytest.raises(BackendError):
-        await backend.chat_completions(
-            {"model": "model-a0d3", "messages": [{"role": "user", "content": "hi"}]}
-        )
+        await backend.chat_completions({"model": "model-a0d3", "messages": [{"role": "user", "content": "hi"}]})
     await backend.aclose()
 
 
@@ -681,16 +661,12 @@ async def test_chat_completions_rejects_oversized_tool_request_before_send() -> 
             return httpx.Response(200, json=_models_payload("model-a0d5"))
         return httpx.Response(500)
 
-    backend = LiteLLMGatewayBackend(
-        id="local", transport=httpx.MockTransport(handler)
-    )
+    backend = LiteLLMGatewayBackend(id="local", transport=httpx.MockTransport(handler))
     with pytest.raises(BackendError) as exc_info:
         await backend.chat_completions(
             {
                 "model": "model-a0d5",
-                "messages": [
-                    {"role": "user", "content": "x" * MAX_LOCAL_TOOL_REQUEST_BYTES}
-                ],
+                "messages": [{"role": "user", "content": "x" * MAX_LOCAL_TOOL_REQUEST_BYTES}],
                 "tools": [{"type": "function", "function": {"name": "shell"}}],
             }
         )
@@ -709,9 +685,7 @@ async def test_responses_stream_rejects_oversized_tool_request_before_send() -> 
             return httpx.Response(200, json=_models_payload("model-a0d5"))
         return httpx.Response(500)
 
-    backend = LiteLLMGatewayBackend(
-        id="local", transport=httpx.MockTransport(handler)
-    )
+    backend = LiteLLMGatewayBackend(id="local", transport=httpx.MockTransport(handler))
     with pytest.raises(BackendError) as exc_info:
         async for _ in backend.responses_stream(
             {
@@ -751,13 +725,9 @@ async def test_responses_stream_translates_chat_deltas_as_they_arrive() -> None:
             )
         return httpx.Response(404)
 
-    backend = LiteLLMGatewayBackend(
-        id="local", transport=httpx.MockTransport(handler)
-    )
+    backend = LiteLLMGatewayBackend(id="local", transport=httpx.MockTransport(handler))
     events: list[dict[str, Any]] = []
-    async for raw in backend.responses_stream(
-        {"model": "model-a0d5", "input": "say hi", "stream": True}
-    ):
+    async for raw in backend.responses_stream({"model": "model-a0d5", "input": "say hi", "stream": True}):
         for ev_chunk in raw.split(b"\n\n"):
             if not ev_chunk:
                 continue
@@ -813,13 +783,9 @@ async def test_responses_stream_translates_tool_call_argument_chunks() -> None:
             )
         return httpx.Response(404)
 
-    backend = LiteLLMGatewayBackend(
-        id="local", transport=httpx.MockTransport(handler)
-    )
+    backend = LiteLLMGatewayBackend(id="local", transport=httpx.MockTransport(handler))
     events: list[dict[str, Any]] = []
-    async for raw in backend.responses_stream(
-        {"model": "model-a0d5", "input": "x", "stream": True}
-    ):
+    async for raw in backend.responses_stream({"model": "model-a0d5", "input": "x", "stream": True}):
         for ev_chunk in raw.split(b"\n\n"):
             for line in ev_chunk.split(b"\n"):
                 if line.startswith(b"data:"):
@@ -851,9 +817,7 @@ async def test_litellm_cell_capabilities_falls_back_when_cache_empty() -> None:
     ones drop the cell from the capability filter."""
     backend = LiteLLMGatewayBackend(
         id="local",
-        transport=httpx.MockTransport(
-            lambda r: httpx.Response(200, json=_models_payload("never-discovered"))
-        ),
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json=_models_payload("never-discovered"))),
     )
     try:
         caps = backend.cell_capabilities("never-discovered")
@@ -896,9 +860,7 @@ async def test_litellm_cell_capabilities_discovered_from_ollama() -> None:
             )
         return httpx.Response(404)
 
-    backend = LiteLLMGatewayBackend(
-        id="local", transport=httpx.MockTransport(handler)
-    )
+    backend = LiteLLMGatewayBackend(id="local", transport=httpx.MockTransport(handler))
     try:
         await backend.health()  # triggers catalog refresh + capability discovery
         caps = backend.cell_capabilities("model-a0b0")
@@ -942,9 +904,7 @@ async def test_litellm_cell_capabilities_handles_text_only_local_model() -> None
             )
         return httpx.Response(404)
 
-    backend = LiteLLMGatewayBackend(
-        id="local", transport=httpx.MockTransport(handler)
-    )
+    backend = LiteLLMGatewayBackend(id="local", transport=httpx.MockTransport(handler))
     try:
         await backend.health()
         caps = backend.cell_capabilities("text-only-local")

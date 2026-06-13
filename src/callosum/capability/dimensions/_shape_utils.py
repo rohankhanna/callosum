@@ -67,11 +67,7 @@ def classify_response(response: dict[str, Any] | None) -> ResponseClassification
             types.append(t)
         if t == "function_call":
             function_calls_count += 1
-            if (
-                isinstance(item.get("name"), str)
-                and item.get("name")
-                and isinstance(item.get("arguments"), str)
-            ):
+            if isinstance(item.get("name"), str) and item.get("name") and isinstance(item.get("arguments"), str):
                 has_structured = True
         elif t == "message":
             for text in _text_parts(item):

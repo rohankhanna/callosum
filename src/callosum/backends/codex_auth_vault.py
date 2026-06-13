@@ -13,6 +13,7 @@ to run on every CI sweep so the fallback stays working. Behavior
 changes that affect this backend require updating those tests, same
 as for any active backend.
 """
+
 from __future__ import annotations
 
 import json
@@ -152,9 +153,7 @@ class CodexAuthVaultBackend:
         # Most recent quota snapshot observed from upstream response headers.
         # Becomes `quota_before` on the next call so the logging layer can
         # compute Δquota for a request.
-        self._last_quota: Any = (
-            None  # CodexQuotaSnapshot | None, loose typed to avoid import cycle noise
-        )
+        self._last_quota: Any = None  # CodexQuotaSnapshot | None, loose typed to avoid import cycle noise
         # Offline/network-failure tracking. When responses() or
         # responses_stream() raise transport-layer errors (httpx.HTTPError —
         # ConnectError, ConnectTimeout, NameResolutionError, etc.) we
@@ -214,22 +213,20 @@ class CodexAuthVaultBackend:
         import routing.protocols only on first call to this method).
         """
         from callosum.routing.protocols import CellCapabilities
+
         md = self._model_metadata.get(model)
         # Codex's typical max context. Updated only if a model metadata
         # record explicitly says otherwise.
-        ctx = (md.context_window if md and md.context_window else 256_000)
+        ctx = md.context_window if md and md.context_window else 256_000
         # Modalities: ModelMetadata.input_modalities is a tuple of strings
         # already normalized to {"text", "image", "audio", ...} by
         # _extract_model_catalog. Default to text-only when absent.
-        modalities = (
-            frozenset(md.input_modalities) if md and md.input_modalities
-            else frozenset({"text"})
-        )
+        modalities = frozenset(md.input_modalities) if md and md.input_modalities else frozenset({"text"})
         return CellCapabilities(
             context_window=ctx,
             modalities=modalities,
             supports_tools=True,  # Codex Responses API supports tools.
-            cost_rank=10,         # Remote — high cost relative to local (rank 0).
+            cost_rank=10,  # Remote — high cost relative to local (rank 0).
         )
 
     async def refresh_advertised_models(self, *, now: float | None = None) -> None:
@@ -239,10 +236,7 @@ class CodexAuthVaultBackend:
         copy is younger than `models_refresh_s`.
         """
         ts = now if now is not None else time.time()
-        if (
-            self._dynamic_advertised_models is not None
-            and ts - self._models_fetched_at < self._models_refresh_s
-        ):
+        if self._dynamic_advertised_models is not None and ts - self._models_fetched_at < self._models_refresh_s:
             return
         try:
             tokens = await self._vault.current()
@@ -321,9 +315,7 @@ class CodexAuthVaultBackend:
         """
         self._consecutive_transport_failures += 1
         if self._consecutive_transport_failures >= self._transport_failure_threshold:
-            self._transport_cooldown_until_ts = (
-                time.time() + self._transport_cooldown_seconds
-            )
+            self._transport_cooldown_until_ts = time.time() + self._transport_cooldown_seconds
 
     def _on_transport_success(self) -> None:
         """Successful HTTP round-trip — clear the offline indicators so this
@@ -346,10 +338,7 @@ class CodexAuthVaultBackend:
         #
         # Fallback to the persisted snapshot only when we have no fresh
         # quota reading yet (cold start before the first call returns).
-        if (
-            self._last_quota is not None
-            and self._last_quota.weekly_used_percent is not None
-        ):
+        if self._last_quota is not None and self._last_quota.weekly_used_percent is not None:
             weekly_exhausted = self._last_quota.weekly_used_percent >= 99
         else:
             weekly_exhausted = self._usage.weekly_exhausted
@@ -364,14 +353,10 @@ class CodexAuthVaultBackend:
         snap_cooldown = self._usage.cooldown_until_ts
         effective_cooldown = snap_cooldown
         if self._transport_cooldown_until_ts > now and (
-            effective_cooldown is None
-            or self._transport_cooldown_until_ts > effective_cooldown
+            effective_cooldown is None or self._transport_cooldown_until_ts > effective_cooldown
         ):
             effective_cooldown = self._transport_cooldown_until_ts
-        if (
-            weekly_exhausted == self._usage.weekly_exhausted
-            and effective_cooldown == self._usage.cooldown_until_ts
-        ):
+        if weekly_exhausted == self._usage.weekly_exhausted and effective_cooldown == self._usage.cooldown_until_ts:
             return self._usage
         return UsageSnapshot(
             remaining_fraction=self._usage.remaining_fraction,
@@ -383,9 +368,7 @@ class CodexAuthVaultBackend:
     async def quota_snapshot(self) -> Any:  # CodexQuotaSnapshot | None
         return self._last_quota
 
-    async def chat_completions(
-        self, body: dict[str, Any], handle: CallHandle | None = None
-    ) -> dict[str, Any]:
+    async def chat_completions(self, body: dict[str, Any], handle: CallHandle | None = None) -> dict[str, Any]:
         requested_model = _require_model(body)
         responses_payload = _chat_to_responses_request(body, stream=False)
         # The chat path is implemented as a translated /responses call; pass
@@ -439,9 +422,7 @@ class CodexAuthVaultBackend:
         yield frame({}, finish_reason)
         yield b"data: [DONE]\n\n"
 
-    async def responses(
-        self, body: dict[str, Any], handle: CallHandle | None = None
-    ) -> dict[str, Any]:
+    async def responses(self, body: dict[str, Any], handle: CallHandle | None = None) -> dict[str, Any]:
         # Codex Responses API now requires `stream: true` for ALL requests
         # (returns 400 "Stream must be set to true" otherwise). For callers
         # that want a non-streaming dict response, we send stream=true to
@@ -451,12 +432,8 @@ class CodexAuthVaultBackend:
             handle.quota_before = self._last_quota
         streaming_body = {**body, "stream": True}
         for attempt in (1, 2):
-            tokens = (
-                await self._vault.current() if attempt == 1 else await self._vault.force_refresh()
-            )
-            headers = self._build_headers(
-                tokens.access_token, tokens.account_id, accept_event_stream=True
-            )
+            tokens = await self._vault.current() if attempt == 1 else await self._vault.force_refresh()
+            headers = self._build_headers(tokens.access_token, tokens.account_id, accept_event_stream=True)
             try:
                 stream_ctx = self._client.stream(
                     "POST",
@@ -500,21 +477,15 @@ class CodexAuthVaultBackend:
         # Unreachable: loop either returns or raises on attempt 2.
         raise BackendError(classification="auth_invalid", message="auth retry exhausted")
 
-    async def responses_stream(
-        self, body: dict[str, Any], handle: CallHandle | None = None
-    ) -> AsyncIterator[bytes]:
+    async def responses_stream(self, body: dict[str, Any], handle: CallHandle | None = None) -> AsyncIterator[bytes]:
         if handle is not None:
             handle.quota_before = self._last_quota
         # Open the stream; on upstream 401 in the response headers, close and
         # restart with refreshed tokens. We can only retry before any chunk
         # has been yielded — once streaming starts, we're committed.
         for attempt in (1, 2):
-            tokens = (
-                await self._vault.current() if attempt == 1 else await self._vault.force_refresh()
-            )
-            headers = self._build_headers(
-                tokens.access_token, tokens.account_id, accept_event_stream=True
-            )
+            tokens = await self._vault.current() if attempt == 1 else await self._vault.force_refresh()
+            headers = self._build_headers(tokens.access_token, tokens.account_id, accept_event_stream=True)
             try:
                 stream_ctx = self._client.stream(
                     "POST",
@@ -682,26 +653,20 @@ def _extract_model_catalog(
         modalities_raw = item.get("input_modalities")
         modalities: tuple[str, ...] = ()
         if isinstance(modalities_raw, list):
-            modalities = tuple(
-                m for m in modalities_raw if isinstance(m, str) and m
-            )
+            modalities = tuple(m for m in modalities_raw if isinstance(m, str) and m)
 
         # Build the metadata record — every field optional except slug.
         metadata[slug] = ModelMetadata(
             slug=slug,
-            display_name=item.get("display_name")
-                if isinstance(item.get("display_name"), str) else None,
-            description=item.get("description")
-                if isinstance(item.get("description"), str) else None,
+            display_name=item.get("display_name") if isinstance(item.get("display_name"), str) else None,
+            description=item.get("description") if isinstance(item.get("description"), str) else None,
             context_window=context_windows.get(slug),
-            supported_in_api=item.get("supported_in_api")
-                if isinstance(item.get("supported_in_api"), bool) else None,
-            visibility=item.get("visibility")
-                if isinstance(item.get("visibility"), str) else None,
-            priority=item.get("priority")
-                if isinstance(item.get("priority"), int) else None,
+            supported_in_api=item.get("supported_in_api") if isinstance(item.get("supported_in_api"), bool) else None,
+            visibility=item.get("visibility") if isinstance(item.get("visibility"), str) else None,
+            priority=item.get("priority") if isinstance(item.get("priority"), int) else None,
             default_reasoning_level=item.get("default_reasoning_level")
-                if isinstance(item.get("default_reasoning_level"), str) else None,
+            if isinstance(item.get("default_reasoning_level"), str)
+            else None,
             supported_reasoning_levels=levels,
             input_modalities=modalities,
         )
@@ -914,6 +879,4 @@ def _log_cooldown_set(backend_id: str, cooldown_until: float, quota: Any) -> Non
     else:
         reason = "rate limited"
 
-    logger.info(
-        f"[{backend_id}] cooldown set — {reason}, resumes {recovery_dt.isoformat()} ({duration_str})"
-    )
+    logger.info(f"[{backend_id}] cooldown set — {reason}, resumes {recovery_dt.isoformat()} ({duration_str})")

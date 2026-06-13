@@ -61,15 +61,7 @@ def test_extract_complexity_class_strips_non_numeric_brace_markers() -> None:
 
 def test_extract_and_strip_complexity_modifies_response_dict() -> None:
     """Extract and strip properly modifies the response dict structure."""
-    response = {
-        "choices": [
-            {
-                "message": {
-                    "content": "{{{2}}} This is moderate complexity"
-                }
-            }
-        ]
-    }
+    response = {"choices": [{"message": {"content": "{{{2}}} This is moderate complexity"}}]}
     complexity_class, modified = _extract_and_strip_complexity(response)
     assert complexity_class == 2
     assert modified["choices"][0]["message"]["content"] == "This is moderate complexity"
@@ -77,15 +69,7 @@ def test_extract_and_strip_complexity_modifies_response_dict() -> None:
 
 def test_extract_and_strip_complexity_handles_missing_marker() -> None:
     """When no marker is found, return None and unchanged response."""
-    response = {
-        "choices": [
-            {
-                "message": {
-                    "content": "Just a normal response"
-                }
-            }
-        ]
-    }
+    response = {"choices": [{"message": {"content": "Just a normal response"}}]}
     complexity_class, modified = _extract_and_strip_complexity(response)
     assert complexity_class is None
     assert modified["choices"][0]["message"]["content"] == "Just a normal response"
@@ -155,7 +139,7 @@ class TestStreamingComplexityExtraction:
         sse_data = (
             b'data: {"choices":[{"delta":{"role":"assistant","content":"{{{1}}} hello"}}]}\n\n'
             b'data: {"choices":[{"delta":{"content":" world"}}]}\n\n'
-            b'data: [DONE]\n\n'
+            b"data: [DONE]\n\n"
         )
         result = await self._extract_from_source(sse_data)
         result_str = result.decode("utf-8")
@@ -171,7 +155,7 @@ class TestStreamingComplexityExtraction:
         sse_data = (
             b'data: {"choices":[{"delta":{"role":"assistant","content":"hello"}}]}\n\n'
             b'data: {"choices":[{"delta":{"content":" world"}}]}\n\n'
-            b'data: [DONE]\n\n'
+            b"data: [DONE]\n\n"
         )
         result = await self._extract_from_source(sse_data)
         result_str = result.decode("utf-8")
@@ -187,7 +171,7 @@ class TestStreamingComplexityExtraction:
             b'data: {"type":"response.output_text.delta","delta":"{{{2}}} hello"}\n\n'
             b'data: {"type":"response.output_text.delta","delta":" world"}\n\n'
             b'data: {"type":"response.completed"}\n\n'
-            b'data: [DONE]\n\n'
+            b"data: [DONE]\n\n"
         )
         result = await self._extract_from_source(sse_data)
         result_str = result.decode("utf-8")
@@ -207,7 +191,7 @@ class TestStreamingComplexityExtraction:
             b'data: {"type":"response.created","id":"resp-s"}\n\n'
             b'data: {"type":"response.output_text.delta","delta":"hello"}\n\n'
             b'data: {"type":"response.completed"}\n\n'
-            b'data: [DONE]\n\n'
+            b"data: [DONE]\n\n"
         )
         result = await self._extract_from_source(sse_data)
         result_str = result.decode("utf-8")
@@ -222,7 +206,7 @@ class TestStreamingComplexityExtraction:
             b'data: {"type":"response.created"}\n'
             b'data: {"type":"response.output_text.delta","delta":"{{{3}}} first"}\n'
             b'data: {"type":"response.output_text.delta","delta":" second"}\n'
-            b'data: [DONE]\n\n'
+            b"data: [DONE]\n\n"
         )
         result = await self._extract_from_source(sse_data)
         result_str = result.decode("utf-8")
@@ -241,7 +225,7 @@ class TestStreamingComplexityExtraction:
         """Malformed JSON: extraction stops but stream continues."""
         sse_data = (
             b'data: {"type":"response.output_text.delta","delta":"{{{1}}} hello"}\n\n'
-            b'data: {broken json\n\n'
+            b"data: {broken json\n\n"
             b'data: {"type":"response.output_text.delta","delta":" world"}\n\n'
         )
         result = await self._extract_from_source(sse_data)
@@ -264,7 +248,7 @@ class TestStreamingComplexityExtraction:
         """[DONE] marker causes extraction to stop checking."""
         sse_data = (
             b'data: {"type":"response.output_text.delta","delta":"{{{2}}} first"}\n\n'
-            b'data: [DONE]\n\n'
+            b"data: [DONE]\n\n"
             b'data: {"type":"response.output_text.delta","delta":"{{{3}}} should_not_extract"}\n\n'
         )
         result = await self._extract_from_source(sse_data)
@@ -301,7 +285,7 @@ class TestStreamingComplexityExtraction:
             b'data: {"choices":[{"delta":{"content":"2"}}]}\n\n',
             b'data: {"choices":[{"delta":{"content":"}}}"}}]}\n\n',
             b'data: {"choices":[{"delta":{"content":" hello"}}]}\n\n',
-            b'data: [DONE]\n\n',
+            b"data: [DONE]\n\n",
         ]
         result_str = (await self._extract_from_event_sequence(events)).decode("utf-8")
         assert "{{{" not in result_str
@@ -316,7 +300,7 @@ class TestStreamingComplexityExtraction:
             b'data: {"type":"response.output_text.delta","delta":"3"}\n\n',
             b'data: {"type":"response.output_text.delta","delta":"}}}"}\n\n',
             b'data: {"type":"response.output_text.delta","delta":" world"}\n\n',
-            b'data: [DONE]\n\n',
+            b"data: [DONE]\n\n",
         ]
         result_str = (await self._extract_from_event_sequence(events)).decode("utf-8")
         assert "{{{" not in result_str
@@ -330,7 +314,7 @@ class TestStreamingComplexityExtraction:
         async def source():
             yield b'data: {"choices":[{"delta":{"content":"{{{1}'
             yield b'}} hello"}}]}\n\n'
-            yield b'data: [DONE]\n\n'
+            yield b"data: [DONE]\n\n"
 
         result_chunks = []
         async for chunk in _extract_complexity_from_stream(source()):
@@ -346,7 +330,7 @@ class TestStreamingComplexityExtraction:
             b'data: {"choices":[{"delta":{"content":"2"}}]}\n\n',
             b'data: {"choices":[{"delta":{"content":"\\n\\n"}}]}\n\n',
             b'data: {"choices":[{"delta":{"content":"I checked the things."}}]}\n\n',
-            b'data: [DONE]\n\n',
+            b"data: [DONE]\n\n",
         ]
         result_str = (await self._extract_from_event_sequence(events)).decode("utf-8")
         # The bare leading "2" + blank line should be gone, but the real answer remains.
@@ -371,7 +355,7 @@ class TestStreamingComplexityExtraction:
             b'data: {"type":"response.output_text.delta","delta":"3"}\n\n',
             b'data: {"type":"response.output_text.delta","delta":"\\n\\n"}\n\n',
             b'data: {"type":"response.output_text.delta","delta":"The answer is here."}\n\n',
-            b'data: [DONE]\n\n',
+            b"data: [DONE]\n\n",
         ]
         result_str = (await self._extract_from_event_sequence(events)).decode("utf-8")
         assert "The answer is here." in result_str
@@ -391,7 +375,7 @@ class TestStreamingComplexityExtraction:
         events = [
             b'data: {"choices":[{"delta":{"role":"assistant","content":""}}]}\n\n',
             b'data: {"choices":[{"delta":{"content":"2 minutes is the limit"}}]}\n\n',
-            b'data: [DONE]\n\n',
+            b"data: [DONE]\n\n",
         ]
         result_str = (await self._extract_from_event_sequence(events)).decode("utf-8")
         visible = ""
@@ -490,6 +474,7 @@ class TestTrailingMarkerStream:
         async def source():
             for ev in events:
                 yield ev
+
         chunks = []
         async for chunk in _strip_trailing_complexity_marker(source()):
             chunks.append(chunk)
@@ -520,7 +505,7 @@ class TestTrailingMarkerStream:
             b'data: {"choices":[{"delta":{"content":"Step A: check\\n"}}]}\n\n',
             b'data: {"choices":[{"delta":{"content":"Step B: confirm."}}]}\n\n',
             b'data: {"choices":[{"delta":{"content":"\\n\\n{{{/2}}}"}}]}\n\n',
-            b'data: [DONE]\n\n',
+            b"data: [DONE]\n\n",
         ]
         visible = self._visible_chat(await self._run(events))
         assert visible == "Step A: check\nStep B: confirm.\n\n"
@@ -531,7 +516,7 @@ class TestTrailingMarkerStream:
             b'data: {"type":"response.output_text.delta","delta":"Here is the brief.\\n\\n"}\n\n',
             b'data: {"type":"response.output_text.delta","delta":"{{{/2}}}"}\n\n',
             b'data: {"type":"response.completed"}\n\n',
-            b'data: [DONE]\n\n',
+            b"data: [DONE]\n\n",
         ]
         visible = self._visible_chat(await self._run(events))
         assert visible == "Here is the brief.\n\n"
@@ -544,7 +529,7 @@ class TestTrailingMarkerStream:
             b'data: {"choices":[{"delta":{"content":"{{{"}}]}\n\n',
             b'data: {"choices":[{"delta":{"content":"/2"}}]}\n\n',
             b'data: {"choices":[{"delta":{"content":"}}}"}}]}\n\n',
-            b'data: [DONE]\n\n',
+            b"data: [DONE]\n\n",
         ]
         visible = self._visible_chat(await self._run(events))
         assert "{{{" not in visible and "}}}" not in visible
@@ -553,7 +538,7 @@ class TestTrailingMarkerStream:
     async def test_no_trailing_marker_passthrough(self) -> None:
         events = [
             b'data: {"choices":[{"delta":{"content":"Just a plain answer."}}]}\n\n',
-            b'data: [DONE]\n\n',
+            b"data: [DONE]\n\n",
         ]
         visible = self._visible_chat(await self._run(events))
         assert visible == "Just a plain answer."
@@ -563,7 +548,7 @@ class TestTrailingMarkerStream:
         events = [
             b'data: {"choices":[{"delta":{"content":"See {{{node_id}}}"}}]}\n\n',
             b'data: {"choices":[{"delta":{"content":" for details."}}]}\n\n',
-            b'data: [DONE]\n\n',
+            b"data: [DONE]\n\n",
         ]
         visible = self._visible_chat(await self._run(events))
         assert visible == "See {{{node_id}}} for details."
@@ -616,7 +601,7 @@ class TestDoneEventScrubbing:
     async def test_output_text_done_text_field_scrubbed(self) -> None:
         events = [
             b'data: {"type":"response.output_text.done","text":"{{{2}}}\\nHello world."}\n\n',
-            b'data: [DONE]\n\n',
+            b"data: [DONE]\n\n",
         ]
         result = await self._run(events)
         assert "{{{2}}}" not in result
@@ -625,7 +610,7 @@ class TestDoneEventScrubbing:
     async def test_content_part_done_nested_text_field_scrubbed(self) -> None:
         events = [
             b'data: {"type":"response.content_part.done","part":{"type":"output_text","text":"{{{3}}}\\nThe answer."}}\n\n',
-            b'data: [DONE]\n\n',
+            b"data: [DONE]\n\n",
         ]
         result = await self._run(events)
         assert "{{{3}}}" not in result
@@ -634,7 +619,7 @@ class TestDoneEventScrubbing:
     async def test_output_item_done_deep_nested_text_field_scrubbed(self) -> None:
         events = [
             b'data: {"type":"response.output_item.done","item":{"id":"msg_x","content":[{"type":"output_text","text":"{{{1}}}\\nResponse here"}]}}\n\n',
-            b'data: [DONE]\n\n',
+            b"data: [DONE]\n\n",
         ]
         result = await self._run(events)
         assert "{{{1}}}" not in result
@@ -643,7 +628,7 @@ class TestDoneEventScrubbing:
     async def test_trailing_closing_tag_in_done_event_scrubbed(self) -> None:
         events = [
             b'data: {"type":"response.output_text.done","text":"Done.\\n\\n{{{/2}}}"}\n\n',
-            b'data: [DONE]\n\n',
+            b"data: [DONE]\n\n",
         ]
         result = await self._run(events)
         assert "{{{" not in result
@@ -653,13 +638,13 @@ class TestDoneEventScrubbing:
         events = [
             b'data: {"type":"response.output_text.delta","delta":"hello"}\n\n',
             b'data: {"type":"response.function_call_arguments.delta","delta":"{\\"key\\":1}"}\n\n',
-            b'data: [DONE]\n\n',
+            b"data: [DONE]\n\n",
         ]
         result = await self._run(events)
         # delta events left untouched by this pass (separate filters scrub them)
         assert '"delta":"hello"' in result
         # function-call JSON braces preserved (the escaped form survives untouched)
-        assert "\\\"key\\\"" in result
+        assert '\\"key\\"' in result
 
 
 def test_output_text_done_text_field_scrubbed() -> None:

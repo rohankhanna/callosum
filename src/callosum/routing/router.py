@@ -85,9 +85,7 @@ class Router:
         self._selector = selector
         self._filter = capability_filter
 
-    async def route(
-        self, body: dict[str, Any], cells: list[Cell]
-    ) -> RoutingDecision:
+    async def route(self, body: dict[str, Any], cells: list[Cell]) -> RoutingDecision:
         """Run the pipeline once for an incoming request body.
 
         `cells` is the live, routability-filtered cell grid from the
@@ -112,9 +110,7 @@ class Router:
         # _window_fit_factor docstring for the rationale (proxy estimate
         # is unreliable; upstream is source of truth for actual overflow).
         scaled_predictions = {
-            c: predictions[c] * _window_fit_factor(
-                capabilities_map[c].context_window, features.tokens
-            )
+            c: predictions[c] * _window_fit_factor(capabilities_map[c].context_window, features.tokens)
             for c in compatible
         }
         # When the window-fit scaling pushes EVERY cell below the
@@ -137,6 +133,7 @@ class Router:
             )
         else:
             chosen = self._selector.select(scaled_predictions, capabilities_map)
+
         # Candidate ordering for cell-retry: primary first, then the rest
         # ranked by scaled prediction (so retries also prefer fitting
         # cells), cost as tiebreaker. Dispatch only retries on 5xx, so
@@ -153,10 +150,7 @@ class Router:
             # a selection-time bias, not a quality claim. Logging the
             # raw probabilities keeps the predictor's calibration
             # readable downstream.
-            predictions={
-                f"{c.model} {c.reasoning_effort}": p
-                for c, p in predictions.items()
-            },
+            predictions={f"{c.model} {c.reasoning_effort}": p for c, p in predictions.items()},
             candidates=(chosen, *rest),
             predictor_id=self._predictor.id,
         )

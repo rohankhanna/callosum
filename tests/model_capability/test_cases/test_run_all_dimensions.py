@@ -30,9 +30,7 @@ from callosum.capability.runner import run_dimensions
 
 
 @pytest.mark.model_probe
-def test_run_all_dimensions_per_cell(
-    callosum_client: httpx.Client, cells_to_probe: list[str]
-) -> None:
+def test_run_all_dimensions_per_cell(callosum_client: httpx.Client, cells_to_probe: list[str]) -> None:
     """Iterate every advertised cell, running every registered dimension
     against it. Findings persist as side effects; the test passes as
     long as the runner completes without throwing.
@@ -45,9 +43,7 @@ def test_run_all_dimensions_per_cell(
     for cell in cells_to_probe:
         served_by: str | None = None
 
-        async def _call_responses(
-            body: dict[str, Any], _cell: str = cell
-        ) -> dict[str, Any]:
+        async def _call_responses(body: dict[str, Any], _cell: str = cell) -> dict[str, Any]:
             """Closure over httpx client and the current cell. Posts
             to /admin/cell-call (which bypasses the router) so the
             probe lands on the intended cell deterministically.
@@ -66,14 +62,10 @@ def test_run_all_dimensions_per_cell(
             outcome = r.json()
             served_by = outcome.get("served_by") or served_by
             if outcome.get("status") != "ok":
-                raise RuntimeError(
-                    f"cell-call failed: {outcome.get('error')}"
-                )
+                raise RuntimeError(f"cell-call failed: {outcome.get('error')}")
             response = outcome.get("response")
             if not isinstance(response, dict):
-                raise RuntimeError(
-                    "cell-call returned no response body"
-                )
+                raise RuntimeError("cell-call returned no response body")
             return response
 
         asyncio.run(

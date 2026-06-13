@@ -44,9 +44,7 @@ def _make_vault(path: Path, *, transport: httpx.MockTransport | None = None) -> 
     return AuthVault(path=path, transport=transport)
 
 
-def _sse_response(
-    response_payload: dict, *, status: int = 200, headers: dict | None = None
-) -> httpx.Response:
+def _sse_response(response_payload: dict, *, status: int = 200, headers: dict | None = None) -> httpx.Response:
     """Build an SSE response equivalent to a non-streaming JSON 200.
 
     Codex Responses API now requires `stream: true` always, so the backend
@@ -315,9 +313,7 @@ async def test_rate_limited_response_classifies_and_records_cooldown(tmp_path: P
     )
     try:
         with pytest.raises(BackendError) as excinfo:
-            await backend.chat_completions(
-                {"model": "model-a0d0", "messages": [{"role": "user", "content": "hi"}]}
-            )
+            await backend.chat_completions({"model": "model-a0d0", "messages": [{"role": "user", "content": "hi"}]})
         assert excinfo.value.classification == "rate_limited"
         snapshot = await backend.usage_snapshot()
         assert snapshot.cooldown_until_ts is not None
@@ -349,9 +345,7 @@ async def test_auth_invalid_triggers_when_upstream_401(tmp_path: Path) -> None:
     )
     try:
         with pytest.raises(BackendError) as excinfo:
-            await backend.chat_completions(
-                {"model": "model-a0d0", "messages": [{"role": "user", "content": "hi"}]}
-            )
+            await backend.chat_completions({"model": "model-a0d0", "messages": [{"role": "user", "content": "hi"}]})
         assert excinfo.value.classification == "auth_invalid"
     finally:
         await backend.aclose()
@@ -607,9 +601,7 @@ async def test_refresh_advertised_models_updates_cache_from_200(tmp_path: Path) 
         await backend.refresh_advertised_models()
         # After refresh: dynamic set replaces static. Includes a model the
         # operator never wrote into TOML — that's the whole point.
-        assert backend.advertised_models == frozenset(
-            {"model-a0e7", "model-a0c3", "model-a0b3"}
-        )
+        assert backend.advertised_models == frozenset({"model-a0e7", "model-a0c3", "model-a0b3"})
     finally:
         await backend.aclose()
 
@@ -800,9 +792,7 @@ async def test_refresh_advertised_models_minimal_legacy_shape_still_works(
     vault = _make_vault(auth_path)
 
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200, json={"models": [{"slug": "model-a0d8", "context_length": 100000}]}
-        )
+        return httpx.Response(200, json={"models": [{"slug": "model-a0d8", "context_length": 100000}]})
 
     backend = CodexAuthVaultBackend(
         id="vault-a",
@@ -934,9 +924,7 @@ async def test_weekly_exhausted_unsets_when_current_quota_low(tmp_path: Path) ->
         # First real upstream call observes the actual quota: 44%.
         backend._last_quota = _make_quota(weekly_used_percent=44)  # type: ignore[attr-defined]
         snap = await backend.usage_snapshot()
-        assert snap.weekly_exhausted is False, (
-            "weekly_exhausted should clear when current quota shows low usage"
-        )
+        assert snap.weekly_exhausted is False, "weekly_exhausted should clear when current quota shows low usage"
     finally:
         await backend.aclose()
 
@@ -944,9 +932,7 @@ async def test_weekly_exhausted_unsets_when_current_quota_low(tmp_path: Path) ->
 # ---------- dynamic codex client_version resolution -------------------------
 
 
-def test_client_version_reads_from_codex_version_json(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_client_version_reads_from_codex_version_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """When ~/.codex/version.json exists with a `latest_version` string, the
     helper returns that value (not the hardcoded default).
     """
@@ -960,9 +946,7 @@ def test_client_version_reads_from_codex_version_json(
     assert _resolve_codex_client_version() == "0.999.0"
 
 
-def test_client_version_falls_back_when_file_missing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_client_version_falls_back_when_file_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """No ~/.codex/version.json (and no env override) → hardcoded default."""
     monkeypatch.delenv("CODEX_CLIENT_VERSION", raising=False)
     home = tmp_path / "home"
@@ -981,9 +965,7 @@ def test_client_version_env_override_wins(tmp_path: Path, monkeypatch: pytest.Mo
     assert _resolve_codex_client_version() == "9.9.9-pinned"
 
 
-def test_client_version_falls_back_when_file_malformed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_client_version_falls_back_when_file_malformed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Malformed JSON or missing `latest_version` field → hardcoded default."""
     monkeypatch.delenv("CODEX_CLIENT_VERSION", raising=False)
     home = tmp_path / "home"

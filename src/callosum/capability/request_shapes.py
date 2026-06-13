@@ -83,9 +83,7 @@ _CODEX_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "name": "git_status",
-        "description": (
-            "Return the current branch and list of modified/untracked files."
-        ),
+        "description": ("Return the current branch and list of modified/untracked files."),
         "parameters": {
             "type": "object",
             "properties": {},
@@ -221,30 +219,36 @@ def tool_call_with_context_body(target_user_chars: int) -> dict[str, Any]:
             f"Tagged with index {turn_idx} so the model can verify "
             "context continuity later if it wants to."
         )
-        turns.append({
-            "type": "message",
-            "role": "user" if turn_idx % 2 == 1 else "assistant",
-            "content": [{
-                "type": "input_text" if turn_idx % 2 == 1 else "output_text",
-                "text": text,
-            }],
-        })
+        turns.append(
+            {
+                "type": "message",
+                "role": "user" if turn_idx % 2 == 1 else "assistant",
+                "content": [
+                    {
+                        "type": "input_text" if turn_idx % 2 == 1 else "output_text",
+                        "text": text,
+                    }
+                ],
+            }
+        )
         accumulated += len(text)
     # Final user message — the actual ask that should trigger a tool call.
-    turns.append({
-        "type": "message",
-        "role": "user",
-        "content": [
-            {
-                "type": "input_text",
-                "text": (
-                    "OK, given everything we discussed above — I need "
-                    "you to check the current git branch and uncommitted "
-                    "changes. Inspect with a tool, don't guess."
-                ),
-            }
-        ],
-    })
+    turns.append(
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": (
+                        "OK, given everything we discussed above — I need "
+                        "you to check the current git branch and uncommitted "
+                        "changes. Inspect with a tool, don't guess."
+                    ),
+                }
+            ],
+        }
+    )
     return {
         "model": "",
         "instructions": _CODEX_INSTRUCTIONS,

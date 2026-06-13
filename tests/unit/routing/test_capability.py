@@ -52,9 +52,7 @@ def test_filter_drops_cell_without_required_modality() -> None:
         vision: _caps(modalities=("text", "image")),
     }
     f = CapabilityFilter(capabilities_of=caps.__getitem__)
-    out = f.filter(
-        [text_only, vision], _features(modalities=("text", "image"))
-    )
+    out = f.filter([text_only, vision], _features(modalities=("text", "image")))
     assert vision in out
     assert text_only not in out
 
@@ -120,9 +118,7 @@ def test_at_scale_gate_excludes_failing_cell_above_threshold() -> None:
         at_scale_fails_for=lambda m: m == "fails-at-scale",
         at_scale_chars_threshold=10_000,
     )
-    out = f.filter(
-        [failing, healthy], _at_scale_features(chars=20_000)
-    )
+    out = f.filter([failing, healthy], _at_scale_features(chars=20_000))
     assert healthy in out
     assert failing not in out
 
@@ -154,9 +150,7 @@ def test_at_scale_gate_inert_when_tools_not_needed() -> None:
         at_scale_fails_for=lambda m: m == "fails-at-scale",
         at_scale_chars_threshold=10_000,
     )
-    out = f.filter(
-        [failing], _at_scale_features(chars=100_000, needs_tools=False)
-    )
+    out = f.filter([failing], _at_scale_features(chars=100_000, needs_tools=False))
     assert failing in out
 
 

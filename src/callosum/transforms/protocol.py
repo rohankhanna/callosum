@@ -89,9 +89,7 @@ class Transform(Protocol):
         and ctx.capability_profile.findings as needed."""
         ...
 
-    def transform_request(
-        self, body: dict[str, Any], ctx: TransformContext
-    ) -> dict[str, Any]:
+    def transform_request(self, body: dict[str, Any], ctx: TransformContext) -> dict[str, Any]:
         """Pre-process the request body. Return the body unchanged
         when no work is needed (DO NOT return None — that's reserved
         for "drop the request" which isn't yet supported). The body
@@ -99,9 +97,7 @@ class Transform(Protocol):
         returning a new dict is the safer pattern."""
         ...
 
-    def transform_response(
-        self, body: dict[str, Any], ctx: TransformContext
-    ) -> dict[str, Any]:
+    def transform_response(self, body: dict[str, Any], ctx: TransformContext) -> dict[str, Any]:
         """Post-process the response body. Same contract as
         transform_request."""
         ...
@@ -126,12 +122,8 @@ class TransformBase:
     def applies_to(self, ctx: TransformContext) -> bool:
         return False
 
-    def transform_request(
-        self, body: dict[str, Any], ctx: TransformContext
-    ) -> dict[str, Any]:
+    def transform_request(self, body: dict[str, Any], ctx: TransformContext) -> dict[str, Any]:
         return body
 
-    def transform_response(
-        self, body: dict[str, Any], ctx: TransformContext
-    ) -> dict[str, Any]:
+    def transform_response(self, body: dict[str, Any], ctx: TransformContext) -> dict[str, Any]:
         return body

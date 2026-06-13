@@ -71,8 +71,7 @@ def _make_db(tmp_path: Path, *, session_id: str | None = "sess-abc123") -> Path:
         "requested_model, session_id, status, latency_ms, prompt_tokens, "
         "completion_tokens) "
         "VALUES (?,?,?,?,?,?,?,?,?,?)",
-        (42, 1780000000.5, "model-a0a9", "default",
-         "model-a0e8", session_id, 200, 38267, 8421, 270),
+        (42, 1780000000.5, "model-a0a9", "default", "model-a0e8", session_id, 200, 38267, 8421, 270),
     )
     conn.commit()
     conn.close()
@@ -281,8 +280,7 @@ def test_slow_subscriber_drops_events_not_block(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("status,expected", [(200, 200), (500, 500), (None, 0)])
-def test_status_defaults_to_zero_when_null(tmp_path: Path, status: int | None,
-                                           expected: int) -> None:
+def test_status_defaults_to_zero_when_null(tmp_path: Path, status: int | None, expected: int) -> None:
     """status is NOT NULL in the real schema, but defensive coercion
     keeps the payload contract intact even if the column ever changes."""
     db = tmp_path / "requests.sqlite"

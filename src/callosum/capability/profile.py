@@ -30,9 +30,7 @@ from callosum.capability.weight_identity import WeightIdentity
 # system has learned about models. Path resolution walks up from this
 # file (src/callosum/capability/profile.py) to repo root, then down
 # to logs/capability_profiles/.
-DEFAULT_PROFILE_DIR = (
-    Path(__file__).resolve().parents[3] / "logs" / "capability_profiles"
-)
+DEFAULT_PROFILE_DIR = Path(__file__).resolve().parents[3] / "logs" / "capability_profiles"
 
 
 FindingStatus = Literal["pass", "fail", "error", "skipped"]
@@ -121,9 +119,7 @@ class CapabilityProfile:
                         dimension=str(payload.get("dimension", dim)),
                         status=payload.get("status", "error"),
                         summary=str(payload.get("summary", "")),
-                        evidence=dict(payload.get("evidence", {}))
-                        if isinstance(payload.get("evidence"), dict)
-                        else {},
+                        evidence=dict(payload.get("evidence", {})) if isinstance(payload.get("evidence"), dict) else {},
                         adapter_hint=payload.get("adapter_hint"),
                         latency_ms=payload.get("latency_ms"),
                     )
@@ -143,9 +139,9 @@ class CapabilityProfile:
                         source=source,
                         runtime=runtime,
                         quantization=raw_wi.get("quantization")
-                        if isinstance(raw_wi.get("quantization"), str) else None,
-                        family=raw_wi.get("family")
-                        if isinstance(raw_wi.get("family"), str) else None,
+                        if isinstance(raw_wi.get("quantization"), str)
+                        else None,
+                        family=raw_wi.get("family") if isinstance(raw_wi.get("family"), str) else None,
                     )
             except (TypeError, ValueError):
                 weight_identity = None

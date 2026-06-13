@@ -79,9 +79,7 @@ def test_revoke_other_users_key_is_rejected(tmp_path: Path) -> None:
     db = _open(tmp_path)
     alice = db.insert_user(username="alice", password_hash="x", created_at=1.0)
     mallory = db.insert_user(username="mallory", password_hash="x", created_at=1.0)
-    key_id = db.insert_api_key(
-        user_id=alice, key_hash="kh", key_prefix="zzzz1111", label=None, created_at=2.0
-    )
+    key_id = db.insert_api_key(user_id=alice, key_hash="kh", key_prefix="zzzz1111", label=None, created_at=2.0)
     assert db.revoke_api_key(key_id=key_id, user_id=mallory, revoked_at=5.0) is False
     # Alice's key is still active.
     assert db.list_api_keys(alice)[0].revoked_at is None
@@ -91,9 +89,7 @@ def test_revoke_other_users_key_is_rejected(tmp_path: Path) -> None:
 def test_touch_api_key_updates_last_used_at(tmp_path: Path) -> None:
     db = _open(tmp_path)
     user_id = db.insert_user(username="bob", password_hash="x", created_at=1.0)
-    key_id = db.insert_api_key(
-        user_id=user_id, key_hash="kh", key_prefix="xxxx0000", label=None, created_at=2.0
-    )
+    key_id = db.insert_api_key(user_id=user_id, key_hash="kh", key_prefix="xxxx0000", label=None, created_at=2.0)
     assert db.list_api_keys(user_id)[0].last_used_at is None
     db.touch_api_key(key_id=key_id, now=42.0)
     assert db.list_api_keys(user_id)[0].last_used_at == 42.0

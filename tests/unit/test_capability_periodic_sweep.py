@@ -57,9 +57,7 @@ async def test_periodic_sweeper_ticks_after_interval(monkeypatch) -> None:
     await asyncio.sleep(0.18)
     await sweeper.stop()
 
-    assert len(calls) >= 2, (
-        f"expected at least 2 periodic ticks, got {len(calls)}"
-    )
+    assert len(calls) >= 2, f"expected at least 2 periodic ticks, got {len(calls)}"
 
 
 @pytest.mark.asyncio

@@ -182,9 +182,7 @@ def main() -> int:
     parser.add_argument("--batch-size", type=int, default=500)
     parser.add_argument("--max-rows", type=int, default=None)
     args = parser.parse_args()
-    ckpt = args.checkpoint_path or args.db_path.with_suffix(
-        args.db_path.suffix + ".recover_prompt_text.ckpt"
-    )
+    ckpt = args.checkpoint_path or args.db_path.with_suffix(args.db_path.suffix + ".recover_prompt_text.ckpt")
     return run(
         db_path=args.db_path,
         checkpoint_path=ckpt,

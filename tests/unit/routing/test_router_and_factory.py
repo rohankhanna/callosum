@@ -130,9 +130,7 @@ def test_router_raises_when_nothing_compatible() -> None:
         "messages": [
             {
                 "role": "user",
-                "content": [
-                    {"type": "input_video", "video": "..."}
-                ],
+                "content": [{"type": "input_video", "video": "..."}],
             }
         ]
     }

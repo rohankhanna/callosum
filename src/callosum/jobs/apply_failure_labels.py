@@ -93,24 +93,24 @@ def _fetch_batch(
     ).fetchall()
     out: list[tuple[int, dict[str, Any], bytes | None, bytes | None]] = []
     for r in rows:
-        out.append((
-            int(r[0]),
-            {
-                "completion_tokens": r[1],
-                "status": r[2],
-                "classification": r[3],
-                "model": r[4],
-                "reasoning_effort": r[5],
-            },
-            r[6],
-            r[7],
-        ))
+        out.append(
+            (
+                int(r[0]),
+                {
+                    "completion_tokens": r[1],
+                    "status": r[2],
+                    "classification": r[3],
+                    "model": r[4],
+                    "reasoning_effort": r[5],
+                },
+                r[6],
+                r[7],
+            )
+        )
     return out
 
 
-def _write_labels(
-    conn: sqlite3.Connection, items: list[tuple[int, int]]
-) -> None:
+def _write_labels(conn: sqlite3.Connection, items: list[tuple[int, int]]) -> None:
     """Write quality_score for rows that scored -1. Uses
     quality_label_method='implicit_failure_v1' as provenance so future
     label sources can be distinguished in the corpus."""
@@ -118,9 +118,7 @@ def _write_labels(
         return
     with conn:
         conn.executemany(
-            "UPDATE requests SET quality_score = ?, "
-            "quality_label_method = 'implicit_failure_v1' "
-            "WHERE id = ?",
+            "UPDATE requests SET quality_score = ?, quality_label_method = 'implicit_failure_v1' WHERE id = ?",
             [(score, rid) for rid, score in items],
         )
 

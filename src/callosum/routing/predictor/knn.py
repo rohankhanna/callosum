@@ -42,14 +42,13 @@ class KNNPredictor:
         # that don't actually exercise the predictor (e.g. some unit
         # tests that only check protocol shape).
         import numpy as np
+
         self._np = np
         self._embeddings = np.zeros((0, 1), dtype=np.float32)  # placeholder
         self._cell_keys: list[str] = []
         self._outcomes = np.zeros((0,), dtype=np.float32)
 
-    def predict(
-        self, features: PromptFeatures, candidates: list[Cell]
-    ) -> dict[Cell, float]:
+    def predict(self, features: PromptFeatures, candidates: list[Cell]) -> dict[Cell, float]:
         # Cold start (no labels yet) → uniform prior for everyone.
         if features.embedding is None or len(self._cell_keys) == 0:
             return {c: 0.5 for c in candidates}
@@ -70,9 +69,7 @@ class KNNPredictor:
         # O(N log N); only worth the extra branch when we have more
         # than K candidates to choose from.
         top_idx = (  # noqa: SIM108 — kept as if/else for the inline complexity note above
-            np.argsort(-sims)
-            if sims.shape[0] <= self._k
-            else np.argpartition(-sims, self._k)[: self._k]
+            np.argsort(-sims) if sims.shape[0] <= self._k else np.argpartition(-sims, self._k)[: self._k]
         )
         # Group neighbors by which cell they ran on; average outcomes.
         per_cell_sum: dict[str, float] = {}

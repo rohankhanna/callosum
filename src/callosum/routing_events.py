@@ -90,9 +90,7 @@ class _RoutingEventBroadcaster:
         # only events whose payload session_id matches exactly.
         self._queues: list[tuple[asyncio.Queue[dict[str, Any]], str | None]] = []
 
-    def subscribe(
-        self, *, session_id: str | None = None
-    ) -> asyncio.Queue[dict[str, Any]]:
+    def subscribe(self, *, session_id: str | None = None) -> asyncio.Queue[dict[str, Any]]:
         """Subscribe to the event stream.
 
         When `session_id` is provided, only events whose payload
@@ -129,10 +127,7 @@ class _RoutingEventBroadcaster:
             # only events whose session_id matches the filter — used by
             # per-instance sidecars to avoid showing other instances'
             # routing decisions in their HUD.
-            if (
-                filter_session_id is not None
-                and event_session_id != filter_session_id
-            ):
+            if filter_session_id is not None and event_session_id != filter_session_id:
                 continue
             # Slow consumer; we'd rather drop an observability event
             # than backpressure the proxy.
@@ -168,8 +163,7 @@ class _RoutingEventBroadcaster:
             # is 0. When present, the row count includes the final
             # successful attempt, so retry_count = total - 1.
             attempts_row = conn.execute(
-                "SELECT COUNT(*) FROM request_routing_attempts "
-                "WHERE request_id = ?",
+                "SELECT COUNT(*) FROM request_routing_attempts WHERE request_id = ?",
                 (request_id,),
             ).fetchone()
             total_attempts = int(attempts_row[0]) if attempts_row else 0
@@ -193,11 +187,7 @@ class _RoutingEventBroadcaster:
             except Exception:
                 pass
 
-        routing = (
-            self._operator_state.get_routing()
-            if self._operator_state is not None
-            else "auto"
-        )
+        routing = self._operator_state.get_routing() if self._operator_state is not None else "auto"
 
         return {
             "request_id": int(request_id),
@@ -208,14 +198,8 @@ class _RoutingEventBroadcaster:
             "served_context_window": served_context_window,
             "status": int(status) if status is not None else 0,
             "latency_ms": int(latency_ms) if latency_ms is not None else 0,
-            "prompt_tokens": (
-                int(prompt_tokens) if prompt_tokens is not None else None
-            ),
-            "completion_tokens": (
-                int(completion_tokens)
-                if completion_tokens is not None
-                else None
-            ),
+            "prompt_tokens": (int(prompt_tokens) if prompt_tokens is not None else None),
+            "completion_tokens": (int(completion_tokens) if completion_tokens is not None else None),
             "retry_count": retry_count,
             "routing": routing,
         }
@@ -265,8 +249,6 @@ def install_routing_events(
             finally:
                 broadcaster.unsubscribe(q)
 
-        return StreamingResponse(
-            generate(), media_type="text/event-stream"
-        )
+        return StreamingResponse(generate(), media_type="text/event-stream")
 
     usage_log.add_new_request_callback(broadcaster.notify)

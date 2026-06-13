@@ -32,9 +32,7 @@ def rank(
     that backend is no longer viable.
     """
     excluded_ids = excluded or frozenset()
-    viable = [
-        s for s in snapshots if _is_viable(s, model=model, now_ts=now_ts, excluded=excluded_ids)
-    ]
+    viable = [s for s in snapshots if _is_viable(s, model=model, now_ts=now_ts, excluded=excluded_ids)]
     if not viable:
         return None
     if preferred_id is not None:
