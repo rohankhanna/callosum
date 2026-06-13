@@ -12,6 +12,9 @@ functional capability.
 
 from __future__ import annotations
 
+import json
+from typing import Any
+
 import httpx
 import pytest
 
@@ -51,10 +54,12 @@ def test_advertised_models_drops_chat_only_cells() -> None:
     """A chat-only sibling (api_surfaces == ("chat",)) is filtered out
     even when present in the source — the router never picks it, so
     the 502-and-retry waste is avoided."""
-    src = _FakeSource([
-        _entry("model-a0a9", ("chat",)),
-        _entry("model-a0a1", ("responses",)),
-    ])
+    src = _FakeSource(
+        [
+            _entry("model-a0a9", ("chat",)),
+            _entry("model-a0a1", ("responses",)),
+        ]
+    )
     backend = LocalModelRegistryBackend(id="test", source=src)
     advertised = backend.advertised_models
     assert "model-a0a1" in advertised
@@ -64,9 +69,11 @@ def test_advertised_models_drops_chat_only_cells() -> None:
 def test_advertised_models_keeps_cells_with_both_surfaces() -> None:
     """A cell that advertises both surfaces (chat AND responses) is
     serveable on the /v1/responses path and stays advertised."""
-    src = _FakeSource([
-        _entry("dual-surface", ("chat", "responses")),
-    ])
+    src = _FakeSource(
+        [
+            _entry("dual-surface", ("chat", "responses")),
+        ]
+    )
     backend = LocalModelRegistryBackend(id="test", source=src)
     assert "dual-surface" in backend.advertised_models
 
@@ -75,9 +82,11 @@ def test_advertised_models_drops_cells_with_unknown_surfaces() -> None:
     """Defensive: a cell whose api_surfaces doesn't include 'responses'
     (e.g. empty tuple from a malformed registry entry) is filtered out
     rather than silently routed to."""
-    src = _FakeSource([
-        _entry("malformed", ()),
-    ])
+    src = _FakeSource(
+        [
+            _entry("malformed", ()),
+        ]
+    )
     backend = LocalModelRegistryBackend(id="test", source=src)
     assert backend.advertised_models == frozenset()
 
@@ -86,10 +95,12 @@ def test_model_metadata_filtered_same_as_advertised_models() -> None:
     """model_metadata is the cell-grid merger's hook. It must match
     advertised_models in filter behavior — otherwise the grid would
     include cells the router would then refuse to advertise."""
-    src = _FakeSource([
-        _entry("chat-only", ("chat",)),
-        _entry("responses-capable", ("responses",)),
-    ])
+    src = _FakeSource(
+        [
+            _entry("chat-only", ("chat",)),
+            _entry("responses-capable", ("responses",)),
+        ]
+    )
     backend = LocalModelRegistryBackend(id="test", source=src)
     meta = backend.model_metadata
     assert "responses-capable" in meta
@@ -123,6 +134,160 @@ async def test_responses_stream_rejects_oversized_tool_request_before_send() -> 
     assert exc_info.value.status_code == 413
     assert "/v1/responses" not in calls
     await backend.aclose()
+
+
+async def test_chat_completions_stream_translates_responses_native_text_sse() -> None:
+    src = _FakeSource([_entry("responses-capable", ("responses", "chat"))])
+    captured: dict[str, Any] = {}
+    upstream = b"".join(
+        [
+            _responses_event(
+                "response.created",
+                {"response": {"id": "resp_1", "model": "runtime-model"}},
+            ),
+            _responses_event("response.output_text.delta", {"delta": "Hel"}),
+            _responses_event("response.output_text.delta", {"delta": "lo"}),
+            _responses_event(
+                "response.completed",
+                {
+                    "response": {
+                        "id": "resp_1",
+                        "model": "runtime-model",
+                        "status": "completed",
+                        "usage": {
+                            "input_tokens": 3,
+                            "output_tokens": 2,
+                            "total_tokens": 5,
+                        },
+                    }
+                },
+            ),
+        ]
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            content=upstream,
+            headers={"content-type": "text/event-stream"},
+        )
+
+    backend = LocalModelRegistryBackend(
+        id="test",
+        source=src,
+        transport=httpx.MockTransport(handler),
+    )
+    chunks = [
+        c
+        async for c in backend.chat_completions_stream(
+            {
+                "model": "responses-capable",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+            }
+        )
+    ]
+    events = _chat_events(chunks)
+    assert captured["path"] == "/v1/responses"
+    assert captured["body"]["stream"] is True
+    assert captured["body"]["model"] == "responses-capable"
+    assert chunks[-1] == b"data: [DONE]\n\n"
+    assert [e["choices"][0]["delta"] for e in events[:3]] == [
+        {"role": "assistant"},
+        {"content": "Hel"},
+        {"content": "lo"},
+    ]
+    assert events[-1]["choices"][0]["finish_reason"] == "stop"
+    assert events[-1]["usage"] == {
+        "prompt_tokens": 3,
+        "completion_tokens": 2,
+        "total_tokens": 5,
+    }
+    await backend.aclose()
+
+
+async def test_chat_completions_stream_translates_responses_tool_arguments() -> None:
+    src = _FakeSource([_entry("responses-capable", ("responses", "chat"))])
+    upstream = b"".join(
+        [
+            _responses_event(
+                "response.output_item.added",
+                {
+                    "output_index": 0,
+                    "item": {
+                        "type": "function_call",
+                        "call_id": "call_1",
+                        "name": "shell",
+                    },
+                },
+            ),
+            _responses_event(
+                "response.function_call_arguments.delta",
+                {"output_index": 0, "delta": '{"cm'},
+            ),
+            _responses_event(
+                "response.function_call_arguments.delta",
+                {"output_index": 0, "delta": 'd":"ls"}'},
+            ),
+            _responses_event(
+                "response.completed",
+                {"response": {"id": "resp_1", "status": "completed"}},
+            ),
+        ]
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=upstream,
+            headers={"content-type": "text/event-stream"},
+        )
+
+    backend = LocalModelRegistryBackend(
+        id="test",
+        source=src,
+        transport=httpx.MockTransport(handler),
+    )
+    events = _chat_events(
+        [
+            c
+            async for c in backend.chat_completions_stream(
+                {
+                    "model": "responses-capable",
+                    "messages": [{"role": "user", "content": "run ls"}],
+                    "stream": True,
+                }
+            )
+        ]
+    )
+    tool_deltas = [
+        e["choices"][0]["delta"]["tool_calls"][0] for e in events if "tool_calls" in e["choices"][0]["delta"]
+    ]
+    assert tool_deltas[0]["function"] == {"name": "shell", "arguments": ""}
+    assert tool_deltas[1]["function"]["arguments"] == '{"cm'
+    assert tool_deltas[2]["function"]["arguments"] == 'd":"ls"}'
+    assert events[-1]["choices"][0]["finish_reason"] == "stop"
+    await backend.aclose()
+
+
+def _responses_event(event_type: str, payload: dict[str, Any]) -> bytes:
+    data = {"type": event_type, **payload}
+    return f"event: {event_type}\ndata: {json.dumps(data)}\n\n".encode()
+
+
+def _chat_events(chunks: list[bytes]) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for raw_event in b"".join(chunks).split(b"\n\n"):
+        for line in raw_event.split(b"\n"):
+            if not line.startswith(b"data:"):
+                continue
+            data = line[len(b"data:") :].strip()
+            if not data or data == b"[DONE]":
+                continue
+            events.append(json.loads(data))
+    return events
 
 
 async def test_responses_rejects_oversized_tool_request_before_send() -> None:

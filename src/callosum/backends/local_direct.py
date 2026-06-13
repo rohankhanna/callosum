@@ -114,10 +114,7 @@ class LocalModelRegistryBackend:
         wire it here too; once that lands, chat-only cells become
         directly serveable and this filter can be dropped.
         """
-        return frozenset(
-            m.id for m in self._source.models()
-            if "responses" in m.api_surfaces
-        )
+        return frozenset(m.id for m in self._source.models() if "responses" in m.api_surfaces)
 
     @property
     def model_metadata(self) -> dict[str, ModelMetadata]:
@@ -227,9 +224,7 @@ class LocalModelRegistryBackend:
         operator_overrides: dict[str, Any] = {}
         operator_force = False
         if self._operator_state is not None:
-            operator_overrides, operator_force = (
-                self._operator_state.get_inference_overrides(model)
-            )
+            operator_overrides, operator_force = self._operator_state.get_inference_overrides(model)
         return merge_inference_params(
             backend_defaults=backend_defaults,
             operator_overrides=operator_overrides,
@@ -241,11 +236,7 @@ class LocalModelRegistryBackend:
         tools = body.get("tools")
         if not isinstance(tools, list) or not tools:
             return
-        request_bytes = len(
-            json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode(
-                "utf-8"
-            )
-        )
+        request_bytes = len(json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
         if request_bytes <= MAX_LOCAL_TOOL_REQUEST_BYTES:
             return
         raise BackendError(
@@ -275,9 +266,7 @@ class LocalModelRegistryBackend:
         self._reject_oversized_tool_request(out)
         return entry, out
 
-    async def chat_completions(
-        self, body: dict[str, Any], handle: CallHandle | None = None
-    ) -> dict[str, Any]:
+    async def chat_completions(self, body: dict[str, Any], handle: CallHandle | None = None) -> dict[str, Any]:
         entry, out_body = self._outbound(body, stream=False)
         # Native-responses runtimes (e.g. responses_proxy) advertise
         # api_surfaces=("responses","chat") because the LiteLLM gateway
@@ -295,6 +284,7 @@ class LocalModelRegistryBackend:
                 _chat_to_responses_request,
                 _responses_to_chat_response,
             )
+
             responses_body = _chat_to_responses_request(out_body, stream=False)
             # _chat_to_responses_request reads body["model"] for the
             # outgoing payload; out_body already has runtime_model
@@ -307,9 +297,7 @@ class LocalModelRegistryBackend:
             except httpx.HTTPError as exc:
                 self._healthy = False
                 self._last_health_reason = "network"
-                raise BackendError(
-                    classification="transient", message=str(exc)
-                ) from exc
+                raise BackendError(classification="transient", message=str(exc)) from exc
             if handle is not None:
                 handle.upstream_status = response.status_code
                 handle.upstream_headers = dict(response.headers)
@@ -342,24 +330,31 @@ class LocalModelRegistryBackend:
     ) -> AsyncIterator[bytes]:
         entry, out_body = self._outbound(body, stream=True)
         if "responses" in entry.api_surfaces:
-            # Same upstream constraint as chat_completions: the runtime
-            # doesn't natively serve chat-completions streaming for
-            # responses-proxy entries. Translating SSE on the fly (chat
-            # delta events ↔ responses output_item events) is a
-            # heavier refactor; until that lands, surface a clear
-            # BackendError so dispatch retries onto the next cell
-            # rather than hanging until timeout. Mirrors how
-            # responses_stream handles chat-only cells.
-            raise BackendError(
-                classification="transient",
-                message=(
-                    f"streaming chat-completions for {entry.id!r} requires "
-                    "chat→responses SSE translation; not yet wired in "
-                    "LocalModelRegistryBackend. Use non-stream chat_completions, "
-                    "call responses_stream directly, or route via the "
-                    "LiteLLM gateway translator."
-                ),
-            )
+            from callosum.backends.codex_auth_vault import _chat_to_responses_request
+
+            responses_body = _chat_to_responses_request(out_body, stream=True)
+            try:
+                async with self._client.stream(
+                    "POST",
+                    f"{entry.endpoint.rstrip('/')}/v1/responses",
+                    json=responses_body,
+                ) as response:
+                    if handle is not None:
+                        handle.upstream_status = response.status_code
+                        handle.upstream_headers = dict(response.headers)
+                    if response.status_code >= 400:
+                        await response.aread()
+                        raise error_from_response(response)
+                    async for chunk in _responses_sse_to_chat_sse(
+                        response.aiter_lines(),
+                        model=str(body.get("model", entry.runtime_model)),
+                    ):
+                        yield chunk
+                return
+            except httpx.HTTPError as exc:
+                self._healthy = False
+                self._last_health_reason = "network"
+                raise BackendError(classification="transient", message=str(exc)) from exc
         try:
             async with self._client.stream(
                 "POST",
@@ -379,9 +374,7 @@ class LocalModelRegistryBackend:
             self._last_health_reason = "network"
             raise BackendError(classification="transient", message=str(exc)) from exc
 
-    async def responses(
-        self, body: dict[str, Any], handle: CallHandle | None = None
-    ) -> dict[str, Any]:
+    async def responses(self, body: dict[str, Any], handle: CallHandle | None = None) -> dict[str, Any]:
         """Responses API surface. When the resolved model advertises
         "responses" natively, POST there; otherwise translate to
         chat-completions and translate back (same path as the legacy
@@ -419,9 +412,7 @@ class LocalModelRegistryBackend:
         chat_response = await self.chat_completions(chat_body, handle)
         return _chat_to_responses_response(chat_response)
 
-    async def responses_stream(
-        self, body: dict[str, Any], handle: CallHandle | None = None
-    ) -> AsyncIterator[bytes]:
+    async def responses_stream(self, body: dict[str, Any], handle: CallHandle | None = None) -> AsyncIterator[bytes]:
         """Streaming responses. Native if the model supports it;
         otherwise we'd need a chat→responses stream translator (defer
         to a later commit — most ollama-served models use chat)."""
@@ -475,3 +466,187 @@ class LocalModelRegistryBackend:
                 "LiteLLMGatewayBackend translator)."
             ),
         )
+
+
+async def _responses_sse_to_chat_sse(lines: AsyncIterator[str], *, model: str) -> AsyncIterator[bytes]:
+    """Translate Responses-API SSE into OpenAI chat-completions SSE.
+
+    Local responses-proxy cells expose `/v1/responses`, while callers on
+    `/v1/chat/completions` expect chat chunk frames. This adapter keeps
+    text and function-call argument deltas streaming as they arrive and
+    emits a terminal chat chunk plus `[DONE]` when the Responses stream
+    completes.
+    """
+
+    created = int(time.time())
+    completion_id = "chatcmpl-local"
+    sent_role = False
+    finish_reason = "stop"
+    tool_call_names: dict[int, str] = {}
+    tool_call_ids: dict[int, str] = {}
+    output_index_to_tool_index: dict[int, int] = {}
+
+    def frame(
+        delta: dict[str, Any],
+        *,
+        finish: str | None = None,
+        usage: dict[str, Any] | None = None,
+    ) -> bytes:
+        payload: dict[str, Any] = {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": delta,
+                    "finish_reason": finish,
+                }
+            ],
+        }
+        if usage is not None:
+            payload["usage"] = usage
+        return f"data: {json.dumps(payload)}\n\n".encode()
+
+    def ensure_role() -> bytes | None:
+        nonlocal sent_role
+        if sent_role:
+            return None
+        sent_role = True
+        return frame({"role": "assistant"})
+
+    data_lines: list[str] = []
+
+    async for line in lines:
+        if not line:
+            if not data_lines:
+                continue
+            payload_str = "".join(data_lines)
+            data_lines = []
+            if payload_str == "[DONE]":
+                break
+            try:
+                event = json.loads(payload_str)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            response = event.get("response")
+            if isinstance(response, dict):
+                if isinstance(response.get("id"), str) and response["id"]:
+                    completion_id = response["id"]
+                if isinstance(response.get("model"), str) and response["model"]:
+                    model = response["model"]
+            event_type = event.get("type")
+            if event_type == "response.output_item.added":
+                item = event.get("item")
+                if not isinstance(item, dict) or item.get("type") != "function_call":
+                    continue
+                output_index = event.get("output_index")
+                if not isinstance(output_index, int):
+                    continue
+                tool_index = len(output_index_to_tool_index)
+                output_index_to_tool_index[output_index] = tool_index
+                raw_name = item.get("name")
+                raw_call_id = item.get("call_id")
+                name = raw_name if isinstance(raw_name, str) else ""
+                call_id = raw_call_id if isinstance(raw_call_id, str) else ""
+                tool_call_names[tool_index] = name
+                tool_call_ids[tool_index] = call_id
+                role = ensure_role()
+                if role is not None:
+                    yield role
+                yield frame(
+                    {
+                        "tool_calls": [
+                            {
+                                "index": tool_index,
+                                "id": call_id,
+                                "type": "function",
+                                "function": {"name": name, "arguments": ""},
+                            }
+                        ]
+                    }
+                )
+            elif event_type == "response.output_text.delta":
+                delta = event.get("delta")
+                if not isinstance(delta, str) or not delta:
+                    continue
+                role = ensure_role()
+                if role is not None:
+                    yield role
+                yield frame({"content": delta})
+            elif event_type == "response.function_call_arguments.delta":
+                delta = event.get("delta")
+                if not isinstance(delta, str):
+                    continue
+                output_index = event.get("output_index")
+                maybe_tool_index = (
+                    output_index_to_tool_index.get(output_index) if isinstance(output_index, int) else None
+                )
+                if maybe_tool_index is None:
+                    tool_index = len(output_index_to_tool_index)
+                    if isinstance(output_index, int):
+                        output_index_to_tool_index[output_index] = tool_index
+                else:
+                    tool_index = maybe_tool_index
+                role = ensure_role()
+                if role is not None:
+                    yield role
+                yield frame(
+                    {
+                        "tool_calls": [
+                            {
+                                "index": tool_index,
+                                "id": tool_call_ids.get(tool_index, ""),
+                                "type": "function",
+                                "function": {
+                                    "name": tool_call_names.get(tool_index, ""),
+                                    "arguments": delta,
+                                },
+                            }
+                        ]
+                    }
+                )
+            elif event_type == "response.completed":
+                usage = None
+                if isinstance(response, dict):
+                    raw_usage = response.get("usage")
+                    if isinstance(raw_usage, dict):
+                        usage = _responses_usage_to_chat_usage(raw_usage)
+                    status = response.get("status")
+                    if status == "cancelled":
+                        finish_reason = "stop"
+                    elif status == "incomplete":
+                        finish_reason = "length"
+                role = ensure_role()
+                if role is not None:
+                    yield role
+                yield frame({}, finish=finish_reason, usage=usage)
+                yield b"data: [DONE]\n\n"
+                return
+            continue
+        if line.startswith("data:"):
+            data_lines.append(line[5:].strip())
+
+    role = ensure_role()
+    if role is not None:
+        yield role
+    yield frame({}, finish=finish_reason)
+    yield b"data: [DONE]\n\n"
+
+
+def _responses_usage_to_chat_usage(usage: dict[str, Any]) -> dict[str, Any]:
+    input_tokens = usage.get("input_tokens", usage.get("prompt_tokens", 0))
+    output_tokens = usage.get("output_tokens", usage.get("completion_tokens", 0))
+    total_tokens = usage.get("total_tokens")
+    if not isinstance(total_tokens, int):
+        total_tokens = (
+            input_tokens + output_tokens if isinstance(input_tokens, int) and isinstance(output_tokens, int) else 0
+        )
+    return {
+        "prompt_tokens": input_tokens if isinstance(input_tokens, int) else 0,
+        "completion_tokens": output_tokens if isinstance(output_tokens, int) else 0,
+        "total_tokens": total_tokens,
+    }
