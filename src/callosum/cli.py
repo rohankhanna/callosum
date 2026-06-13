@@ -22,18 +22,20 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 from urllib import error, request
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8765"
+DEFAULT_SYSTEMD_UNIT = "system-dependency-callosum.service"
 
 
 def _admin_token() -> str:
     """Resolve the admin token. Order:
-      1. CALLOSUM_ADMIN_TOKEN env var
-      2. ~/.config/callosum/admin_token file (written by the proxy on first start)
+    1. CALLOSUM_ADMIN_TOKEN env var
+    2. ~/.config/callosum/admin_token file (written by the proxy on first start)
     """
     env = os.environ.get("CALLOSUM_ADMIN_TOKEN")
     if env:
@@ -79,10 +81,7 @@ def _request(
         body_text = e.read().decode("utf-8", errors="replace")
         sys.exit(f"callosum CLI: HTTP {e.code} from {url}\n{body_text}")
     except error.URLError as e:
-        sys.exit(
-            f"callosum CLI: cannot reach {url} ({e.reason}). "
-            "Is the proxy running?"
-        )
+        sys.exit(f"callosum CLI: cannot reach {url} ({e.reason}). Is the proxy running?")
     if not payload:
         return None
     try:
@@ -283,11 +282,41 @@ def cmd_probe_tools(args: argparse.Namespace) -> int:
     # cell. 26B-class local models on CPU/single-GPU can take 60s+ each.
     # 30 min ceiling is generous enough for a 10-cell pool of slow
     # local models without ever spinning forever.
-    result = _request(
-        "POST", "/admin/probe-tools", body, timeout=1800.0
-    )
+    result = _request("POST", "/admin/probe-tools", body, timeout=1800.0)
     _print(result)
     return 0
+
+
+def _run_service_command(argv: list[str]) -> int:
+    try:
+        return subprocess.run(argv, check=False).returncode
+    except FileNotFoundError:
+        sys.exit(f"callosum CLI: command not found: {argv[0]}")
+
+
+def cmd_service_status(args: argparse.Namespace) -> int:
+    return _run_service_command(["systemctl", "--user", "status", args.unit])
+
+
+def cmd_service_logs(args: argparse.Namespace) -> int:
+    argv = ["journalctl", "--user", "-u", args.unit, "--no-pager"]
+    if args.follow:
+        argv.append("-f")
+    if args.lines is not None:
+        argv.extend(["-n", str(args.lines)])
+    return _run_service_command(argv)
+
+
+def cmd_service_restart(args: argparse.Namespace) -> int:
+    return _run_service_command(["systemctl", "--user", "restart", args.unit])
+
+
+def cmd_service_stop(args: argparse.Namespace) -> int:
+    return _run_service_command(["systemctl", "--user", "stop", args.unit])
+
+
+def cmd_service_start(args: argparse.Namespace) -> int:
+    return _run_service_command(["systemctl", "--user", "start", args.unit])
 
 
 # ---------- parser -----------------------------------------------------
@@ -328,6 +357,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     help surface.
     """
     from callosum.__main__ import serve_with_args
+
     serve_with_args(args)
     return 0
 
@@ -348,7 +378,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve = sub.add_parser(
         "serve",
         help="Start the callosum proxy daemon (FastAPI + uvicorn). "
-             "Loads config, opens backends, binds the configured port.",
+        "Loads config, opens backends, binds the configured port.",
         description=(
             "Start the callosum proxy daemon (FastAPI + uvicorn). "
             "Loads config from ~/.config/callosum/config.toml (or "
@@ -359,6 +389,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     from pathlib import Path as _Path
+
     p_serve.add_argument(
         "--config",
         type=_Path,
@@ -380,15 +411,14 @@ def build_parser() -> argparse.ArgumentParser:
     s = pp.add_parser(
         "set",
         help="Set inference parameters for one model. Accepts key=value pairs "
-             "(values auto-cast to bool/int/float/string).",
+        "(values auto-cast to bool/int/float/string).",
     )
     s.add_argument("model")
-    s.add_argument("params", nargs="+", help='e.g. think=false temperature=0.0')
+    s.add_argument("params", nargs="+", help="e.g. think=false temperature=0.0")
     s.add_argument(
         "--force",
         action="store_true",
-        help="Authoritative: operator values overwrite client request body. "
-             "Default false (preserve client intent).",
+        help="Authoritative: operator values overwrite client request body. Default false (preserve client intent).",
     )
     s.set_defaults(func=cmd_params_set)
     c = pp.add_parser("clear", help="Remove the override for one model.")
@@ -409,12 +439,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_routing = sub.add_parser(
         "routing",
         help="Backend routing mode (auto / offline / local-only / "
-             "remote-only). Distinct from `callosum-ctl autonomy` "
-             "which governs dev-loop pipeline autonomy.",
+        "remote-only). Distinct from `callosum-ctl autonomy` "
+        "which governs dev-loop pipeline autonomy.",
     )
     pr = p_routing.add_subparsers(dest="subcommand", required=True)
     pr.add_parser(
-        "get", help="Print the current routing mode.",
+        "get",
+        help="Print the current routing mode.",
     ).set_defaults(func=cmd_routing_get)
     sr = pr.add_parser("set", help="Set the routing mode.")
     sr.add_argument(
@@ -434,8 +465,7 @@ def build_parser() -> argparse.ArgumentParser:
     ).set_defaults(func=cmd_autonomy_show)
     pa.add_parser(
         "promote",
-        help="Advance one rung if clean_streak meets threshold; "
-             "errors with the missing condition otherwise.",
+        help="Advance one rung if clean_streak meets threshold; errors with the missing condition otherwise.",
     ).set_defaults(func=cmd_autonomy_promote)
     ad = pa.add_parser(
         "demote",
@@ -445,13 +475,13 @@ def build_parser() -> argparse.ArgumentParser:
     ad.set_defaults(func=cmd_autonomy_demote)
     aset = pa.add_parser(
         "set",
-        help="Force-set the level (e.g. for emergency reset to L1=1). "
-             "Resets streak and ops counters at the new level.",
+        help="Force-set the level (e.g. for emergency reset to L1=1). Resets streak and ops counters at the new level.",
     )
     aset.add_argument(
-        "level", type=int, choices=[1, 2, 3, 4, 5],
-        help="1=manual, 2=auto-invoke, 3=auto-merge+soak, "
-             "4=sunset, 5=architecture",
+        "level",
+        type=int,
+        choices=[1, 2, 3, 4, 5],
+        help="1=manual, 2=auto-invoke, 3=auto-merge+soak, 4=sunset, 5=architecture",
     )
     aset.add_argument("--reason", help="Free-form note recorded in history.")
     aset.set_defaults(func=cmd_autonomy_set)
@@ -462,13 +492,12 @@ def build_parser() -> argparse.ArgumentParser:
     pa.add_parser(
         "audit",
         help="Recent dev-loop actions: invoke / merge / soak outcomes. "
-             "This is what Tier C's weekly self-assessment reads.",
+        "This is what Tier C's weekly self-assessment reads.",
     ).set_defaults(func=cmd_autonomy_audit)
 
     p_ret = sub.add_parser(
         "retention",
-        help="Tier G state retention: archive-and-delete old rows / "
-             "branches / files per policy.",
+        help="Tier G state retention: archive-and-delete old rows / branches / files per policy.",
     )
     pr = p_ret.add_subparsers(dest="subcommand", required=True)
     pr.add_parser(
@@ -481,21 +510,20 @@ def build_parser() -> argparse.ArgumentParser:
     ).set_defaults(func=cmd_retention_status)
     pr.add_parser(
         "preview",
-        help="Dry-run: report what would be archived/deleted without "
-             "modifying anything.",
+        help="Dry-run: report what would be archived/deleted without modifying anything.",
     ).set_defaults(func=cmd_retention_preview)
     pr.add_parser(
         "run",
         help="Execute retention: archive matching rows to a tarball "
-             "under the archive dir, then delete them from the live "
-             "table. Intended to be invoked weekly from cron.",
+        "under the archive dir, then delete them from the live "
+        "table. Intended to be invoked weekly from cron.",
     ).set_defaults(func=cmd_retention_run)
 
     p_sa = sub.add_parser(
         "self-assessment",
         help="Tier C automation agent self-assessment: weekly metrics over "
-             "the autonomy audit log + usage log; auto-demotes on "
-             "bad signals, suggests promotion on clean.",
+        "the autonomy audit log + usage log; auto-demotes on "
+        "bad signals, suggests promotion on clean.",
     )
     ps = p_sa.add_subparsers(dest="subcommand", required=True)
     ps.add_parser(
@@ -505,14 +533,14 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_parser(
         "preview",
         help="Dry-run: compute metrics + decision without persisting "
-             "or firing demote. Safe to run idly to inspect what the "
-             "next real cycle would do.",
+        "or firing demote. Safe to run idly to inspect what the "
+        "next real cycle would do.",
     ).set_defaults(func=cmd_self_assessment_preview)
     ps.add_parser(
         "run",
         help="Execute one self-assessment cycle. Persists a row, may "
-             "auto-demote, writes a feedback artifact. Intended to be "
-             "invoked weekly from cron.",
+        "auto-demote, writes a feedback artifact. Intended to be "
+        "invoked weekly from cron.",
     ).set_defaults(func=cmd_self_assessment_run)
 
     p_probe = sub.add_parser(
@@ -527,9 +555,55 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_probe.set_defaults(func=cmd_probe_tools)
 
+    p_service = sub.add_parser(
+        "service",
+        help="Manage the systemd user service that runs Callosum.",
+    )
+    p_service.add_argument(
+        "--unit",
+        default=DEFAULT_SYSTEMD_UNIT,
+        help=f"systemd user unit name (default: {DEFAULT_SYSTEMD_UNIT}).",
+    )
+    psrv = p_service.add_subparsers(dest="subcommand", required=True)
+    psrv.add_parser(
+        "status",
+        help="Show systemd status for the managed Callosum service.",
+    ).set_defaults(func=cmd_service_status)
+    logs = psrv.add_parser(
+        "logs",
+        help="Show journal logs for the managed Callosum service.",
+    )
+    logs.add_argument(
+        "--follow",
+        "-f",
+        action="store_true",
+        help="Follow new log lines until interrupted.",
+    )
+    logs.add_argument(
+        "-n",
+        "--lines",
+        type=int,
+        default=None,
+        help="Number of recent log lines to show.",
+    )
+    logs.set_defaults(func=cmd_service_logs)
+    psrv.add_parser(
+        "restart",
+        help="Restart the managed Callosum service.",
+    ).set_defaults(func=cmd_service_restart)
+    psrv.add_parser(
+        "stop",
+        help="Stop the managed Callosum service.",
+    ).set_defaults(func=cmd_service_stop)
+    psrv.add_parser(
+        "start",
+        help="Start the managed Callosum service.",
+    ).set_defaults(func=cmd_service_start)
+
     # Auth-rotate wizard. Wired here so the help surface lists it
     # alongside the other operator commands.
     from callosum.auth_rotate import add_subparser as _add_auth_rotate
+
     _add_auth_rotate(sub)
 
     return parser
