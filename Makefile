@@ -15,10 +15,10 @@ format-check:
 	uv run ruff format --check .
 
 type:
-	uv run mypy src/codex_proxy
+	uv run mypy src/callosum
 
 test:
 	uv run pytest
 
 serve:
-	uv run codex-proxy
+	uv run callosum serve
