@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi.testclient import TestClient
+import httpx
+import pytest
 
 from callosum.app import create_app
 from callosum.cell_grid import DEFAULT_MODELS, REASONING_LEVELS, build_cells
@@ -20,11 +23,19 @@ def _backend() -> InMemoryFakeBackend:
     )
 
 
-def test_auto_learning_rewrites_body_and_logs_router_columns(tmp_path: Path) -> None:
+@asynccontextmanager
+async def _client(**kwargs: object) -> AsyncIterator[httpx.AsyncClient]:
+    transport = httpx.ASGITransport(app=create_app(**kwargs))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        yield client
+
+
+@pytest.mark.asyncio
+async def test_auto_learning_rewrites_body_and_logs_router_columns(tmp_path: Path) -> None:
     log = UsageLog(tmp_path / "u.sqlite")
     backend = _backend()
-    with TestClient(create_app(backends=[backend], usage_log=log)) as client:
-        response = client.post(
+    async with _client(backends=[backend], usage_log=log) as client:
+        response = await client.post(
             "/v1/responses",
             json={"model": "auto-learning", "input": []},
         )
@@ -52,14 +63,15 @@ def test_auto_learning_rewrites_body_and_logs_router_columns(tmp_path: Path) -> 
     assert reasoning in REASONING_LEVELS
 
 
-def test_synthetic_virtual_model_tags_rows_separately(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_synthetic_virtual_model_tags_rows_separately(tmp_path: Path) -> None:
     # `auto-learning-synthetic` should rewrite to a real cell AND log
     # routing_mode='auto-learning-synthetic' so synthetic rows don't double-
     # count organic coverage.
     log = UsageLog(tmp_path / "u.sqlite")
     backend = _backend()
-    with TestClient(create_app(backends=[backend], usage_log=log)) as client:
-        r = client.post(
+    async with _client(backends=[backend], usage_log=log) as client:
+        r = await client.post(
             "/v1/responses",
             json={"model": "auto-learning-synthetic", "input": []},
         )
@@ -75,7 +87,8 @@ def test_synthetic_virtual_model_tags_rows_separately(tmp_path: Path) -> None:
     assert reasoning in REASONING_LEVELS
 
 
-def test_synthetic_and_organic_are_logged_as_distinct_routing_modes(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_synthetic_and_organic_are_logged_as_distinct_routing_modes(tmp_path: Path) -> None:
     # Fire one organic + one synthetic. Both go through the same recommender,
     # but the request log must preserve which virtual-model name the client
     # sent so synthetic-tier velocity can be measured separately from organic
@@ -83,9 +96,9 @@ def test_synthetic_and_organic_are_logged_as_distinct_routing_modes(tmp_path: Pa
     # cheap cell — so they'll match on (model, effort) but differ in routing_mode.
     log = UsageLog(tmp_path / "u.sqlite")
     backend = _backend()
-    with TestClient(create_app(backends=[backend], usage_log=log)) as client:
-        client.post("/v1/responses", json={"model": "auto-learning", "input": []})
-        client.post("/v1/responses", json={"model": "auto-learning-synthetic", "input": []})
+    async with _client(backends=[backend], usage_log=log) as client:
+        await client.post("/v1/responses", json={"model": "auto-learning", "input": []})
+        await client.post("/v1/responses", json={"model": "auto-learning-synthetic", "input": []})
 
     conn = sqlite3.connect(tmp_path / "u.sqlite")
     rows = conn.execute("SELECT routing_mode, model, reasoning_effort FROM requests ORDER BY id").fetchall()
@@ -97,7 +110,8 @@ def test_synthetic_and_organic_are_logged_as_distinct_routing_modes(tmp_path: Pa
     assert organic[0][1:] == synthetic[0][1:]
 
 
-def test_explicit_model_request_routes_through_router(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_explicit_model_request_routes_through_router(tmp_path: Path) -> None:
     """All requests route through the learning router now — explicit-model
     requests included. routing_mode records the originally-requested name
     (for provenance); model/reasoning_effort record what the router
@@ -105,8 +119,8 @@ def test_explicit_model_request_routes_through_router(tmp_path: Path) -> None:
     capability filter leaves model-a0e7 cells, cost selector picks one."""
     log = UsageLog(tmp_path / "u.sqlite")
     backend = _backend()
-    with TestClient(create_app(backends=[backend], usage_log=log)) as client:
-        response = client.post(
+    async with _client(backends=[backend], usage_log=log) as client:
+        response = await client.post(
             "/v1/responses",
             json={"model": "model-a0e7", "input": [], "reasoning": {"effort": "high"}},
         )

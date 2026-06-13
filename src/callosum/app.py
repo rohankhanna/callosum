@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from callosum import __version__
 from callosum.auth import (
@@ -3445,12 +3445,12 @@ def _install_web_ui(app: FastAPI) -> None:
     index = _STATIC_DIR / "index.html"
 
     @app.get("/ui", include_in_schema=False)
-    async def ui_root_redirect() -> FileResponse:
-        return FileResponse(index, media_type="text/html")
+    async def ui_root_redirect() -> HTMLResponse:
+        return HTMLResponse(index.read_text(encoding="utf-8"))
 
     @app.get("/ui/", include_in_schema=False)
-    async def ui_root() -> FileResponse:
-        return FileResponse(index, media_type="text/html")
+    async def ui_root() -> HTMLResponse:
+        return HTMLResponse(index.read_text(encoding="utf-8"))
 
 
 def _terminal_http(exc: BackendError) -> HTTPException:
