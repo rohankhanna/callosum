@@ -1,0 +1,87 @@
+@startuml runtime_topology
+' Callosum runtime topology — process/module view plus the self-observation
+' and dev-loop path that can produce transform-only review branches.
+
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName "Helvetica"
+skinparam shadowing false
+skinparam componentStyle rectangle
+skinparam packageStyle rectangle
+skinparam ArrowColor #444444
+skinparam ComponentBorderColor #444444
+skinparam ComponentBackgroundColor #FFE4B5
+skinparam DatabaseBorderColor #444444
+skinparam DatabaseBackgroundColor #E6F3FF
+skinparam FolderBorderColor #444444
+skinparam FolderBackgroundColor #EEF7E6
+
+left to right direction
+
+actor "OpenAI-compatible\nclients" as Clients
+
+package "callosum FastAPI process" as Proxy {
+  component "API surface\n/v1/responses\n/v1/chat/completions" as API
+  component "Router\nfeatures -> capability filter\n-> predictor -> selector" as Router
+  component "Transform registry\nsrc/callosum/transforms/" as Transforms
+  component "Backend dispatch" as Dispatch
+  component "Capability harness\n6h sweeps" as Harness
+  component "Canary + failure registry" as Canary
+}
+
+package "Backends" as Backends {
+  component "Codex auth vaults\nremote Plus/Pro" as Codex
+  component "LocalModelRegistryBackend\npreferred local lanes" as Local
+  component "LiteLLMGatewayBackend\nfallback local gateway" as LiteLLM
+}
+
+database "operator_state.sqlite\nmode, denylist,\nprobe results" as OperatorState
+database "requests.sqlite\nusage log +\nfailure observations" as UsageLog
+folder "logs/capability_profiles/*.json\nmodel research inputs" as Profiles
+database "autonomy.sqlite\nlevel + audit log" as Autonomy
+
+package "scheduled auto-dev loop" as AutoDev {
+  component "systemd timer\ncallosum-dev-loop.timer" as Timer
+  component "Perception snapshot\nprofiles + canary + failures\n+ transform commits" as Perception
+  component "Pre-filter gate\nadapter hint / canary divergence\n/ recent transform failures" as Gate
+  component "External coding agent\nCALLOSUM_DEV_LOOP_AGENT" as Agent
+  component "Scope + test gate\ntransforms only\nruff + pytest" as Verify
+  folder "auto/dev-loop-*\nreview branches" as Branches
+}
+
+Clients --> API : HTTP on 127.0.0.1
+API --> OperatorState : read routing mode\nand denylist
+API --> Router : route request
+Router --> Transforms : apply selected\ncell transforms
+Router --> Dispatch : chosen cell
+Dispatch --> Codex
+Dispatch --> Local
+Dispatch --> LiteLLM
+API --> UsageLog : record request,\nstatus, tokens
+
+Harness --> Dispatch : direct cell probes
+Harness --> OperatorState : read/write probe cache
+Harness --> Profiles : write findings\nand adapter hints
+Canary --> UsageLog : failure observations\nand mode stats
+
+Timer --> Perception : every 6h
+Perception --> Profiles : read
+Perception --> UsageLog : read-only stats
+Perception --> Transforms : recent transform commits
+Perception --> Gate
+Gate --> Autonomy : record skips/failures/successes
+Gate --> Agent : invoke only when\nactionable signal exists
+Agent --> Transforms : allowed edits
+Agent --> Verify
+Verify --> Branches : commit only if\nscope and tests pass
+
+note bottom of Agent
+  The agent cannot push, merge,
+  or edit router/backends/harness.
+end note
+
+note right of Branches
+  Operator reviews and merges
+  manually.
+end note
+
+@enduml

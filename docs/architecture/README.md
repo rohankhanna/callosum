@@ -15,14 +15,10 @@ Regenerate when the source changes.
   streaming, and usage-log write. Mirrors the lifecycle described in
   prose in `ARCHITECTURE.md`. Renders without external dependencies
   (just PlantUML + Java).
-
-The static runtime topology (the box-and-arrows view of which
-processes / modules are involved) is documented as ASCII in
-`ARCHITECTURE.md`. A rendered SVG topology view would benefit from
-Graphviz `dot` as the layout engine for component / rectangle
-diagrams; installing Graphviz is a host-internal change that belongs
-in the dotfiles repo. When that lands, a `runtime_topology.puml`
-source can join this directory.
+- `runtime_topology.puml` — component diagram of the loopback proxy,
+  backend lanes, persistent state, capability harness, and scheduled
+  auto-dev path. This is the quickest visual for understanding where
+  model-research inputs feed the dev loop.
 
 ## Rendering
 
@@ -30,7 +26,9 @@ source can join this directory.
 scripts/render_diagrams.sh
 ```
 
-Output: `docs/architecture/*.svg` next to each `.puml` source.
+Output: `docs/architecture/*.svg` next to each `.puml` source. PNG
+copies can be rendered on demand with the same PlantUML jar using
+`-tpng`.
 
 The script expects PlantUML's single-file jar at
 `~/.local/share/plantuml/plantuml.jar`. If you haven't installed it

@@ -147,13 +147,10 @@ Current diagrams:
   diagram for one request from inbound POST through routing decision,
   backend dispatch, upstream streaming, and usage-log write. Renders
   with PlantUML + Java alone (no Graphviz required).
-
-The static runtime topology (which processes/modules are involved
-and how they wire) is the ASCII view above. A richer rendered
-topology diagram requires Graphviz `dot` as PlantUML's layout engine
-for component-rectangle diagrams; installing Graphviz is a
-host-internal change owned by the dotfiles repo. When that lands,
-`docs/architecture/runtime_topology.puml` can be added.
+- `docs/architecture/runtime_topology.puml` / `.svg` / `.png` —
+  component diagram for the proxy, backend lanes, persisted state,
+  capability harness, canary/failure path, and scheduled auto-dev
+  loop.
 
 See `docs/architecture/README.md` for the full rendering procedure
 and the tooling-choice rationale.
