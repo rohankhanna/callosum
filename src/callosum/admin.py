@@ -34,9 +34,45 @@ from typing import Any
 from fastapi import APIRouter, FastAPI, HTTPException, Request, status
 
 from callosum.autonomy import AutonomyLevel, AutonomyStore, PromotionNotReady
+from callosum.dev_loop.pre_filter import DEFAULT_DEV_LOOP_DONE_DIR
+from callosum.dev_loop.state import (
+    list_pending_review_branches,
+    read_dispatcher_outcome,
+)
 from callosum.operator_state import VALID_ROUTING_MODES, OperatorState
 from callosum.retention import RetentionRunner, result_to_dict
 from callosum.self_assessment import SelfAssessmentRunner
+
+
+def _repo_root_for_branch_listing() -> Path:
+    """Locate the callosum repo so `git for-each-ref` can list
+    auto/dev-loop-* branches. Same derivation as
+    `callosum.dev_loop.cli._repo_root` — this module is at
+    `src/callosum/admin.py`, so the repo is two parents up."""
+    return Path(__file__).resolve().parents[2]
+
+
+def _dev_loop_status_payload() -> dict[str, Any]:
+    """Build the dev_loop section of /admin/status. Read-only — looks
+    at the daily marker, the last-run JSON, and `git for-each-ref` for
+    pending review branches. Never modifies state. Returns a sensible
+    skeleton when nothing has been recorded yet (fresh install)."""
+    from datetime import datetime
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    today_marker = DEFAULT_DEV_LOOP_DONE_DIR / f"{today}.marker"
+
+    last = read_dispatcher_outcome()
+    last_payload: dict[str, Any] | None = None if last is None else last.to_dict()
+
+    branches = list_pending_review_branches(_repo_root_for_branch_listing())
+    return {
+        "today_marker_present": today_marker.exists(),
+        "today_marker_path": str(today_marker),
+        "last_run": last_payload,
+        "pending_review_branches": [b.to_dict() for b in branches],
+        "pending_review_count": len(branches),
+    }
 
 
 def _admin_token_path() -> Path:
@@ -105,6 +141,7 @@ def install_admin_routes(
                 {"model": m, "params": p, "force": f} for m, p, f in operator_state.list_inference_overrides()
             ],
             "denylist": [{"model": m, "reason": r} for m, r in operator_state.list_denied_cells()],
+            "dev_loop": _dev_loop_status_payload(),
         }
 
     @router.get("/params")

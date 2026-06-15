@@ -108,6 +108,65 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_review(args: argparse.Namespace) -> int:
+    """Human-readable summary of dev-loop dispatcher state: last run
+    outcome, today's marker, and any auto/dev-loop-* branches
+    awaiting manual review/merge. The point is to make pending review
+    work visible — `callosum status` returns JSON; this prints a
+    paste-friendly checklist with git commands inline."""
+    payload = _request("GET", "/admin/status")
+    if not isinstance(payload, dict):
+        print("error: unexpected /admin/status payload", file=sys.stderr)
+        return 1
+    dev_loop = payload.get("dev_loop")
+    if not isinstance(dev_loop, dict):
+        print("error: /admin/status missing dev_loop section", file=sys.stderr)
+        return 1
+
+    last = dev_loop.get("last_run")
+    if isinstance(last, dict):
+        ts = last.get("timestamp", "(unknown)")
+        outcome = last.get("outcome", "(unknown)")
+        reason = last.get("reason", "")
+        branch = last.get("branch")
+        head = f"last dispatcher run: {ts} -> {outcome}"
+        if branch:
+            head += f" (branch: {branch})"
+        print(head)
+        if reason:
+            print(f"  reason: {reason}")
+    else:
+        print("last dispatcher run: (never recorded — dispatcher has not fired since visibility surface landed)")
+
+    marker_present = dev_loop.get("today_marker_present")
+    marker_path = dev_loop.get("today_marker_path", "")
+    if marker_present:
+        print(f"today's marker: present ({marker_path}) — dispatcher will skip further fires today")
+    else:
+        print(f"today's marker: ABSENT ({marker_path}) — next dispatcher fire is eligible")
+
+    branches = dev_loop.get("pending_review_branches") or []
+    count = dev_loop.get("pending_review_count", len(branches))
+    print()
+    if not branches:
+        print("pending review branches: 0 (clean queue)")
+        return 0
+    print(f"pending review branches: {count}")
+    print()
+    for b in branches:
+        name = b.get("name", "?")
+        sha = b.get("sha", "?")
+        subject = b.get("subject", "?")
+        age = b.get("age_days", 0.0)
+        print(f"  {name} ({age:.1f}d old)")
+        print(f"    {sha}  {subject}")
+        print(f"    inspect: git log {name} --stat")
+        print(f"    accept:  git checkout main && git merge --no-ff {name}")
+        print(f"    reject:  git branch -D {name}")
+        print()
+    return 0
+
+
 def cmd_params_list(args: argparse.Namespace) -> int:
     _print(_request("GET", "/admin/params"))
     return 0
@@ -401,6 +460,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.set_defaults(func=_cmd_serve)
 
     sub.add_parser("status", help="Print a consolidated operator-state snapshot.").set_defaults(func=cmd_status)
+    sub.add_parser(
+        "review",
+        help="Show last dispatcher run + any pending auto/dev-loop-* branches awaiting manual review.",
+        description=(
+            "Human-readable summary of dev-loop dispatcher state: "
+            "last run outcome with timestamp + reason, whether today's "
+            "marker has been written, and the full list of "
+            "auto/dev-loop-* branches the dispatcher has created that "
+            "haven't been merged or deleted yet. For each pending "
+            "branch the output includes copy-paste git commands to "
+            "inspect / accept / reject."
+        ),
+    ).set_defaults(func=cmd_review)
 
     p_params = sub.add_parser("params", help="Per-cell inference parameter overrides.")
     pp = p_params.add_subparsers(dest="subcommand", required=True)
