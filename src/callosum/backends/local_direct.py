@@ -33,8 +33,9 @@ from typing import Any, cast
 import httpx
 
 from callosum.backend import BackendKind, CallHandle, HealthStatus, UsageSnapshot
-from callosum.backends._http import error_from_response
+from callosum.backends._http import error_from_response, stall_guarded
 from callosum.cell_grid import ModelMetadata
+from callosum.config import LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S, LOCAL_STREAM_IDLE_TIMEOUT_S
 from callosum.errors import BackendError
 from callosum.local import LocalModelRegistrySource, ModelEntry
 from callosum.operator_state import (
@@ -49,7 +50,6 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_CALL_TIMEOUT_S = 300.0  # Cold-load latency for big models can exceed 60s
-MAX_LOCAL_TOOL_REQUEST_BYTES = 50_000
 LOCAL_PRIORITY_OFFSET = 10_000  # local cells sort after Codex cells in the grid
 
 
@@ -232,23 +232,6 @@ class LocalModelRegistryBackend:
             client_body=body,
         )
 
-    def _reject_oversized_tool_request(self, body: dict[str, Any]) -> None:
-        tools = body.get("tools")
-        if not isinstance(tools, list) or not tools:
-            return
-        request_bytes = len(json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
-        if request_bytes <= MAX_LOCAL_TOOL_REQUEST_BYTES:
-            return
-        raise BackendError(
-            classification="client_error",
-            status_code=413,
-            message=(
-                "local backend request too large for tool-capable local routing "
-                f"({request_bytes} bytes > {MAX_LOCAL_TOOL_REQUEST_BYTES}); "
-                "use remote-only or reduce conversation context"
-            ),
-        )
-
     def _outbound(self, body: dict[str, Any], *, stream: bool) -> tuple[ModelEntry, dict[str, Any]]:
         """Build the request body callosum will send. Resolves the
         local LLM gateway entry, rewrites `model` from the public id (e.g.
@@ -263,7 +246,6 @@ class LocalModelRegistryBackend:
         # `reasoning.effort` is the main one — Codex uses it; ollama/
         # vllm tend to ignore-or-error.
         out.pop("reasoning", None)
-        self._reject_oversized_tool_request(out)
         return entry, out
 
     async def chat_completions(self, body: dict[str, Any], handle: CallHandle | None = None) -> dict[str, Any]:
@@ -367,7 +349,12 @@ class LocalModelRegistryBackend:
                 if response.status_code >= 400:
                     await response.aread()
                     raise error_from_response(response)
-                async for chunk in response.aiter_bytes():
+                async for chunk in stall_guarded(
+                    response.aiter_bytes(),
+                    first_item_timeout_s=LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S,
+                    idle_timeout_s=LOCAL_STREAM_IDLE_TIMEOUT_S,
+                    what=f"local {entry.id}",
+                ):
                     yield chunk
         except httpx.HTTPError as exc:
             self._healthy = False
@@ -390,7 +377,6 @@ class LocalModelRegistryBackend:
             # id, POST.
             out = self._apply_params({**body, "stream": False})
             out["model"] = entry.runtime_model
-            self._reject_oversized_tool_request(out)
             try:
                 response = await self._client.post(
                     f"{entry.endpoint.rstrip('/')}/v1/responses",
@@ -420,7 +406,6 @@ class LocalModelRegistryBackend:
         if "responses" in entry.api_surfaces:
             out = self._apply_params({**body, "stream": True})
             out["model"] = entry.runtime_model
-            self._reject_oversized_tool_request(out)
             try:
                 async with self._client.stream(
                     "POST",
@@ -443,7 +428,14 @@ class LocalModelRegistryBackend:
                     # any downstream consumer (shadow-eval, future
                     # bandit) loses cost/length signal entirely.
                     # Mirrors codex_auth_vault.responses_stream:510-514.
-                    collector = ResponsesStreamCollector(response.aiter_bytes())
+                    collector = ResponsesStreamCollector(
+                        stall_guarded(
+                            response.aiter_bytes(),
+                            first_item_timeout_s=LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S,
+                            idle_timeout_s=LOCAL_STREAM_IDLE_TIMEOUT_S,
+                            what=f"local {entry.id}",
+                        )
+                    )
                     async for chunk in collector.iter_through():
                         yield chunk
                     if handle is not None:

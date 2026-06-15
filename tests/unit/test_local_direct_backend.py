@@ -18,10 +18,7 @@ from typing import Any
 import httpx
 import pytest
 
-from callosum.backends.local_direct import (
-    MAX_LOCAL_TOOL_REQUEST_BYTES,
-    LocalModelRegistryBackend,
-)
+from callosum.backends.local_direct import LocalModelRegistryBackend
 from callosum.errors import BackendError
 from callosum.local import ModelEntry
 
@@ -107,7 +104,12 @@ def test_model_metadata_filtered_same_as_advertised_models() -> None:
     assert "chat-only" not in meta
 
 
-async def test_responses_stream_rejects_oversized_tool_request_before_send() -> None:
+async def test_responses_stream_forwards_large_tool_request_no_size_cap() -> None:
+    # A large tool request is no longer pre-rejected on a byte count — whether
+    # it fits is the model's context window's call, and a stall is caught
+    # behaviorally by stall_guarded, not by guessing at size. So a big body
+    # must actually reach the upstream (here a 500), surfacing as transient
+    # rather than a 413 raised before send.
     src = _FakeSource([_entry("responses-capable", ("responses",))])
     calls: list[str] = []
 
@@ -124,15 +126,14 @@ async def test_responses_stream_rejects_oversized_tool_request_before_send() -> 
         async for _ in backend.responses_stream(
             {
                 "model": "responses-capable",
-                "input": "x" * MAX_LOCAL_TOOL_REQUEST_BYTES,
+                "input": "x" * 300_000,
                 "stream": True,
                 "tools": [{"type": "function", "function": {"name": "shell"}}],
             }
         ):
             pass
-    assert exc_info.value.classification == "client_error"
-    assert exc_info.value.status_code == 413
-    assert "/v1/responses" not in calls
+    assert exc_info.value.status_code != 413
+    assert "/v1/responses" in calls
     await backend.aclose()
 
 
@@ -290,7 +291,9 @@ def _chat_events(chunks: list[bytes]) -> list[dict[str, Any]]:
     return events
 
 
-async def test_responses_rejects_oversized_tool_request_before_send() -> None:
+async def test_responses_forwards_large_tool_request_no_size_cap() -> None:
+    # Non-stream counterpart: a large tool request reaches upstream instead of
+    # being pre-rejected with 413 on a byte count.
     src = _FakeSource([_entry("responses-capable", ("responses",))])
     calls: list[str] = []
 
@@ -307,11 +310,10 @@ async def test_responses_rejects_oversized_tool_request_before_send() -> None:
         await backend.responses(
             {
                 "model": "responses-capable",
-                "input": "x" * MAX_LOCAL_TOOL_REQUEST_BYTES,
+                "input": "x" * 300_000,
                 "tools": [{"type": "function", "function": {"name": "shell"}}],
             }
         )
-    assert exc_info.value.classification == "client_error"
-    assert exc_info.value.status_code == 413
-    assert "/v1/responses" not in calls
+    assert exc_info.value.status_code != 413
+    assert "/v1/responses" in calls
     await backend.aclose()

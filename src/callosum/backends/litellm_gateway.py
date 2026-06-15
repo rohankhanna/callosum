@@ -34,8 +34,9 @@ from typing import Any, cast
 import httpx
 
 from callosum.backend import BackendKind, CallHandle, HealthStatus, UsageSnapshot
-from callosum.backends._http import error_from_response
+from callosum.backends._http import error_from_response, stall_guarded
 from callosum.cell_grid import ModelMetadata
+from callosum.config import LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S, LOCAL_STREAM_IDLE_TIMEOUT_S
 from callosum.errors import BackendError
 from callosum.operator_state import (
     BACKEND_DEFAULT_INFERENCE_PARAMS,
@@ -57,11 +58,13 @@ DEFAULT_HEALTH_TIMEOUT_S = 2.0
 # lower this via CALLOSUM_LITELLM_TIMEOUT_S; the catalog poll uses
 # DEFAULT_HEALTH_TIMEOUT_S separately and is unaffected.
 DEFAULT_CALL_TIMEOUT_S = 300.0
-# Codex CLI can send very large streaming tool requests once a session has
-# history. Local tool-capable models may accept the socket and then produce no
-# useful bytes until the 300s transport timeout. Fail fast before opening the
-# upstream stream so local-only mode does not look like a loop.
-MAX_LOCAL_TOOL_REQUEST_BYTES = 50_000
+# Large streaming tool requests that make a local model stall (accept the
+# socket, emit nothing) are caught behaviorally by stall_guarded on the
+# streaming read paths below — see callosum.config
+# LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S / LOCAL_STREAM_IDLE_TIMEOUT_S. No byte-size
+# pre-flight cap; whether a request fits is the chosen model's context window's
+# call (soft window-fit in router.py + the at_scale capability gate), not a
+# constant.
 # Priority offset for local cells in the merged cell grid. Remote Codex
 # priorities are small ints (16, 23, etc.); offsetting local by +10_000
 # means local cells sort AFTER Codex cells in the recommender's ranking,
@@ -200,7 +203,6 @@ class LiteLLMGatewayBackend:
     async def chat_completions(self, body: dict[str, Any], handle: CallHandle | None = None) -> dict[str, Any]:
         await self._refresh_catalog_if_stale()
         out_body = self._apply_inference_params(_strip_codex_only_fields({**body, "stream": False}))
-        _reject_oversized_tool_request(out_body)
         # KNOWN LIMITATION (2026-06-09): the LiteLLM gateway's chat-
         # completions hangs indefinitely for certain advertised models
         # whose upstream runtime is a responses-only proxy (model entries
@@ -249,7 +251,6 @@ class LiteLLMGatewayBackend:
     ) -> AsyncIterator[bytes]:
         await self._refresh_catalog_if_stale()
         out_body = self._apply_inference_params(_strip_codex_only_fields({**body, "stream": True}))
-        _reject_oversized_tool_request(out_body)
         try:
             stream_ctx = self._client.stream(
                 "POST",
@@ -264,7 +265,12 @@ class LiteLLMGatewayBackend:
                 if response.status_code >= 400:
                     await response.aread()
                     raise error_from_response(response)
-                async for chunk in response.aiter_bytes():
+                async for chunk in stall_guarded(
+                    response.aiter_bytes(),
+                    first_item_timeout_s=LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S,
+                    idle_timeout_s=LOCAL_STREAM_IDLE_TIMEOUT_S,
+                    what=f"local LLM gateway {out_body.get('model', '')}",
+                ):
                     yield chunk
         except httpx.HTTPError as exc:
             raise BackendError(classification="transient", message=str(exc)) from exc
@@ -339,7 +345,6 @@ class LiteLLMGatewayBackend:
         populate stream_summary on the handle. See `responses_stream`
         docstring for the rationale."""
         out_body = self._apply_inference_params(_strip_codex_only_fields({**body, "stream": True}))
-        _reject_oversized_tool_request(out_body)
         # If the body arrived in Responses-API shape (has `input` instead
         # of `messages`), translate to Chat Completions shape before
         # forwarding. This is the streaming counterpart of what `responses`
@@ -413,7 +418,12 @@ class LiteLLMGatewayBackend:
                 yield _emit("response.created", {"response": base_response})
                 yield _emit("response.in_progress", {"response": base_response})
 
-                async for line in response.aiter_lines():
+                async for line in stall_guarded(
+                    response.aiter_lines(),
+                    first_item_timeout_s=LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S,
+                    idle_timeout_s=LOCAL_STREAM_IDLE_TIMEOUT_S,
+                    what=f"local LLM gateway {upstream_model}",
+                ):
                     if not line:
                         continue
                     if line.startswith("data:"):
@@ -911,24 +921,6 @@ class LiteLLMGatewayBackend:
 #     can honor it. Add new keys as more upstream incompatibilities
 #     surface in real traffic.
 _CODEX_ONLY_BODY_KEYS = ("reasoning", "parallel_tool_calls")
-
-
-def _reject_oversized_tool_request(body: dict[str, Any]) -> None:
-    tools = body.get("tools")
-    if not isinstance(tools, list) or not tools:
-        return
-    request_bytes = len(json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
-    if request_bytes <= MAX_LOCAL_TOOL_REQUEST_BYTES:
-        return
-    raise BackendError(
-        classification="client_error",
-        status_code=413,
-        message=(
-            "local backend request too large for tool-capable local routing "
-            f"({request_bytes} bytes > {MAX_LOCAL_TOOL_REQUEST_BYTES}); "
-            "use remote-only or reduce conversation context"
-        ),
-    )
 
 
 def _strip_codex_only_fields(body: dict[str, Any]) -> dict[str, Any]:

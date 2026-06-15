@@ -246,10 +246,10 @@ def test_4xx_propagates_without_trying_next_cell(monkeypatch: pytest.MonkeyPatch
 def test_413_payload_too_large_propagates_without_trying_next_cell(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Oversized local tool requests are a client/request-shape problem,
-    not a transient routing problem. The local backend guard raises 413;
-    cell-level retry must not walk to another local cell and recreate the
-    multi-attempt local-model burn this guard exists to prevent."""
+    """A 413 from a backend is a client/request-shape problem, not a
+    transient routing problem (e.g. an upstream that rejects an over-context
+    payload). Cell-level retry must not walk to another cell and re-burn the
+    same oversized request."""
     log = UsageLog(tmp_path / "u.sqlite")
     seen = _install_inner_stub(
         monkeypatch,
@@ -257,7 +257,7 @@ def test_413_payload_too_large_propagates_without_trying_next_cell(
         behavior={
             "model-a": HTTPException(
                 status_code=413,
-                detail="local backend request too large for tool-capable local routing",
+                detail="upstream rejected request: payload too large",
             ),
             "model-b": {"served": "b"},
         },
@@ -289,7 +289,7 @@ def test_413_payload_too_large_propagates_without_trying_next_cell(
             0,
             413,
             "failed",
-            "local backend request too large for tool-capable local routing",
+            "upstream rejected request: payload too large",
         )
     ]
 

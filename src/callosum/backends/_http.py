@@ -1,10 +1,67 @@
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
+from typing import TypeVar
+
 import httpx
 
 from callosum.errors import BackendError, classify_http_status
 
 DEFAULT_COOLDOWN_S = 60.0
+
+_T = TypeVar("_T")
+
+
+async def stall_guarded(
+    source: AsyncIterator[_T],
+    *,
+    first_item_timeout_s: float,
+    idle_timeout_s: float,
+    what: str = "local upstream",
+) -> AsyncIterator[_T]:
+    """Re-yield items from a streaming upstream, failing fast if it stalls.
+
+    Wraps any async byte/line iterator (e.g. response.aiter_bytes()) and
+    enforces two deadlines:
+
+      * first_item_timeout_s — max wait for the FIRST item. Sized to cover
+        a local model's cold weight-load plus prefill of a large prompt.
+      * idle_timeout_s — max gap between subsequent items once data is
+        flowing. A working model emits tokens milliseconds apart; a long gap
+        means it has stalled.
+
+    On either deadline this raises BackendError(classification="transient")
+    so the dispatch layer treats it like any other transient upstream failure
+    and retries the next candidate cell (or surfaces a clean 5xx), instead of
+    blocking to the full transport timeout. This is the behavioral replacement
+    for the old size-based pre-flight cap: a request the model can actually
+    serve streams through untouched; only a genuine hang is cut short.
+
+    Cancelling the in-flight __anext__ (what wait_for does on timeout)
+    propagates out through the caller's async with client.stream(...)
+    block, which closes the upstream socket — so the stalled runtime sees the
+    disconnect and can stop generating.
+    """
+    iterator = source.__aiter__()
+    budget = first_item_timeout_s
+    seen_first = False
+    while True:
+        try:
+            item = await asyncio.wait_for(iterator.__anext__(), timeout=budget)
+        except StopAsyncIteration:
+            return
+        except TimeoutError as exc:
+            phase = "before first byte" if not seen_first else "mid-stream"
+            raise BackendError(
+                classification="transient",
+                message=(
+                    f"{what} stalled {phase}: no data for {budget:.0f}s — treating as a hang; routing will fall back"
+                ),
+            ) from exc
+        seen_first = True
+        budget = idle_timeout_s
+        yield item
 
 
 def error_from_response(response: httpx.Response) -> BackendError:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
@@ -17,6 +18,26 @@ from callosum.routing.factory import RoutingConfig
 from callosum.state import StateStore
 
 BackendType = Literal["codex_auth_vault", "credential_proxy"]
+
+# Behavioral stall guard for LOCAL streaming backends. Replaces the old
+# size-based pre-flight cap (MAX_LOCAL_TOOL_REQUEST_BYTES): a hardcoded byte
+# count is the wrong unit — whether a request fits is a function of the chosen
+# model's context window, not a constant, and the codebase already routes on
+# that (soft window-fit in router.py + the empirical `tool_call_at_scale`
+# capability gate in capability.py). The byte cap existed only to fail fast on
+# the OTHER failure mode: some local runtimes accept a large tool request, then
+# emit no bytes until the full transport timeout, so local-only "looks like a
+# loop". We catch that behaviorally instead — give the model a fair budget to
+# start (cold load + prefill), then bound the gap between tokens. A genuine
+# hang fails fast and `transient` (routing falls back to another cell); a large
+# request the model CAN serve just streams. Both env-tunable.
+#
+# FIRST_BYTE: max wait for the first streamed byte (covers cold weight-load +
+# prefill of a big prompt). IDLE: max gap between subsequent bytes once the
+# model is producing (a working model emits tokens ms apart; a long gap means a
+# stall). Tune up for slow hardware / very large prompts.
+LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S = float(os.getenv("CALLOSUM_LOCAL_FIRST_BYTE_TIMEOUT_S", "180"))
+LOCAL_STREAM_IDLE_TIMEOUT_S = float(os.getenv("CALLOSUM_LOCAL_STREAM_IDLE_TIMEOUT_S", "45"))
 
 
 class ServerConfig(BaseModel):
