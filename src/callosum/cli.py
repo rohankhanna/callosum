@@ -1,20 +1,18 @@
 """callosum CLI — operator commands against a running proxy.
 
-The proxy exposes an admin HTTP surface under /admin/*. This CLI is a
-thin client that reads the admin token (from
-~/.config/callosum/admin_token, written on first proxy start) and
-sends JSON requests.
+`callosum serve` starts the daemon. The other subcommands administer a
+running instance: the proxy exposes an admin HTTP surface under
+/admin/*, and this CLI is a thin client that reads the admin token
+(from ~/.config/callosum/admin_token, written on first proxy start)
+and sends JSON requests.
 
-Subcommands:
+Run `callosum -h` for the authoritative, always-current list of
+subcommands — argparse generates it from the parser, so it never drifts
+from the code. The current top-level surface is: serve, status,
+version, review, params, denylist, routing, autonomy, retention,
+self-assessment, probe-tools, service, auth-rotate.
 
-    callosum status
-    callosum params {get|set|clear|list} ...
-    callosum denylist {add|remove|list} ...
-    callosum routing {get|set} ...
-    callosum reload
-
-All output is JSON unless --pretty is given (default: pretty for
-status/list; raw for setters).
+Most output is JSON; `review` / `service` print human-readable text.
 """
 
 from __future__ import annotations
@@ -101,6 +99,64 @@ def _print(obj: Any, *, pretty: bool = True) -> None:
 
 
 # ---------- subcommand handlers -----------------------------------------
+
+
+def cmd_version(args: argparse.Namespace) -> int:
+    """Print the installed version and the git SHA of the source tree this
+    CLI imports from, plus whether that source is a live working tree
+    (editable install) or a copied install.
+
+    This is a staleness probe: a pipx copy made before newer subcommands
+    landed will silently omit them from `-h`. An editable install tracks
+    live source, so in-module edits appear without reinstall; a copied
+    install can drift and needs `pipx install --force` to refresh. Paths
+    are derived from this module's own location — nothing is hardcoded.
+    """
+    import importlib.metadata as _md
+
+    try:
+        version = _md.version("callosum")
+    except _md.PackageNotFoundError:
+        version = "0.1.0"
+
+    src_dir = Path(__file__).resolve().parent
+
+    def _git(*args_: str) -> str | None:
+        try:
+            return (
+                subprocess.check_output(
+                    ["git", "-C", str(src_dir), *args_],
+                    stderr=subprocess.DEVNULL,
+                )
+                .decode()
+                .strip()
+            )
+        except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+            return None
+
+    sha = _git("rev-parse", "--short", "HEAD")
+    if sha is not None:
+        info = {
+            "version": version,
+            "mode": "editable",
+            "source_sha": sha,
+            "source": str(src_dir),
+            "note": "CLI tracks live source; in-module edits appear without reinstall.",
+        }
+    else:
+        repo_root = _git("rev-parse", "--show-toplevel") or "<repo>"
+        info = {
+            "version": version,
+            "mode": "copied",
+            "source_sha": None,
+            "source": str(src_dir),
+            "note": (
+                "CLI is a copied install and can go stale. To track live source: "
+                f"pipx install --force --editable {repo_root}"
+            ),
+        }
+    _print(info)
+    return 0
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -460,6 +516,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.set_defaults(func=_cmd_serve)
 
     sub.add_parser("status", help="Print a consolidated operator-state snapshot.").set_defaults(func=cmd_status)
+    sub.add_parser(
+        "version",
+        help="Print installed version + source git SHA; flags whether the CLI tracks live source.",
+        description=(
+            "Print the installed package version and the git SHA of the "
+            "source tree this CLI imports from, plus whether it is an "
+            "editable install (tracks live source) or a copied install "
+            "(can go stale — e.g. a pipx copy made before newer "
+            "subcommands landed). Use it to confirm `callosum -h` reflects "
+            "the current code."
+        ),
+    ).set_defaults(func=cmd_version)
     sub.add_parser(
         "review",
         help="Show last dispatcher run + any pending auto/dev-loop-* branches awaiting manual review.",

@@ -33,9 +33,21 @@ R -> R : extract_features(body)\n(tokens, modalities, needs_tools)
 R -> CF : filter(cells, features)
 CF --> R : compatible cells
 R -> R : predict(features, compatible)\n(uniform | knn)
-R -> S : select(scaled_predictions, capabilities)
+R -> S : select(scaled_predictions, capabilities)\n(cost_rank = MEASURED weekly-quota\nburn; CostRankProvider overlay)
 S --> R : chosen cell + ranked candidates
 R --> App : RoutingDecision
+
+note right of App
+  Synthetic explorer:
+  if requested_model ==
+  "auto-learning-synthetic",
+  override chosen with the
+  LEAST-sampled candidate
+  (coverage_from_db) so the
+  whole cell grid is sampled.
+  Organic traffic keeps the
+  cost-optimal pick.
+end note
 
 note right of App
   Cell-retry walks
@@ -65,5 +77,7 @@ note right of UL
   notify() → snorkel sidecar
   HUD updates in real time.
 end note
+
+App -> App : CostUsageEstimator.finalize()\n(realized weekly-quota delta;\n0 delta = verifiable=false →\naggregate calibration only)
 
 @enduml

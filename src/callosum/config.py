@@ -164,6 +164,56 @@ class AutoRouterConfig(BaseModel):
     # 4+ swap in BGE embeddings, a k-NN predictor, and the labeler.
     routing: RoutingConfig = Field(default_factory=lambda: RoutingConfig())
 
+    # Arm-level exploration. When enabled, synthetic auto-learning traffic
+    # (requested_model == "auto-learning-synthetic") targets the LEAST-sampled
+    # compatible cell instead of the cost-cheapest one, so coverage
+    # accumulates across the whole (model, reasoning_effort) grid. Organic
+    # traffic is never affected. See callosum.routing.exploration.
+    exploration_enabled: bool = True
+
+    # Dynamic per-model cost_rank derived from MEASURED weekly-quota burn
+    # (weekly_used_percent deltas in the request log), replacing the flat
+    # remote constant. Catalog priority is the cold-start prior; the override
+    # map wins outright. See callosum.routing.cost_model.
+    cost_rank_dynamic_enabled: bool = True
+    # Minimum non-zero-delta observations before a model's measured mean is
+    # trusted (integer-% resolution means most rows log a 0 delta).
+    cost_rank_min_nonzero_samples: int = 10
+    # Only request-log rows newer than this feed the rank (bounds the scan and
+    # tracks the current quota regime). 30 days.
+    cost_rank_window_seconds: int = 2_592_000
+    # Cheapest measured remote model starts here; local cells stay at 0.
+    cost_rank_base: int = 10
+    # How often the rank map is recomputed (kept off the hot path).
+    cost_rank_refresh_seconds: int = 3600
+    # Operator overrides: {model_slug: cost_rank}. Wins over measured + prior.
+    cost_rank_overrides: dict[str, int] = Field(default_factory=dict)
+
+    # Forward cost estimator (): per-request prediction of
+    # ChatGPT weekly-quota burn in weekly_used_percent points, from the same
+    # measured deltas the cost_rank reads. Feeds /status pre-flight ranges and
+    # the routing reward cost term. See callosum.routing.cost_estimator.
+    cost_estimate_enabled: bool = True
+    # Minimum non-zero-delta rows before a cell's/model's measured per-token
+    # burn rate is trusted (integer-% resolution → most rows log a 0 delta).
+    cost_estimate_min_nonzero_samples: int = 10
+    # Only rows newer than this feed the rate (bounds the scan, tracks the
+    # current quota regime). 30 days.
+    cost_estimate_window_seconds: int = 2_592_000
+    # Flat per-token burn used only when the log has no usable measured signal
+    # at all (weekly_used_percent points per token).
+    cost_estimate_fallback_rate: float = 5e-6
+    # How often the per-cell rate map is recomputed (kept off the hot path).
+    cost_estimate_refresh_seconds: int = 3600
+    # Operator overrides: {model_slug: pct_per_token}. Wins over measured + prior.
+    cost_estimate_overrides: dict[str, float] = Field(default_factory=dict)
+    # Shared output-token forecaster (): cold-start global
+    # output:input ratio yields to per-cell measured ratios after this many
+    # observed rows. Consumed by BOTH the cost and time estimators.
+    output_forecast_min_obs: int = 20
+    # Flat output:input ratio used when the log has no measured rows at all.
+    output_forecast_fallback_ratio: float = 1.0
+
 
 class BackendConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")

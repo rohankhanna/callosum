@@ -226,7 +226,11 @@ class CodexAuthVaultBackend:
             context_window=ctx,
             modalities=modalities,
             supports_tools=True,  # Codex Responses API supports tools.
-            cost_rank=10,  # Remote — high cost relative to local (rank 0).
+            # Remote cold-start fallback (> local rank 0). The live ordering
+            # is overlaid per-model from MEASURED weekly-quota burn by
+            # callosum.routing.cost_model.CostRankProvider; this constant is
+            # only used until that provider has data for the model.
+            cost_rank=10,
         )
 
     async def refresh_advertised_models(self, *, now: float | None = None) -> None:

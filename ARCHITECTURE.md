@@ -66,8 +66,36 @@ All paths are under `src/callosum/`.
   on embeddings is the next-generation predictor). `selector/`
   picks one cell from the predicted-and-scored candidate set
   (cost-weighted today). `router.py` orchestrates the pipeline.
-  `probe.py` provides a tool-call verification probe used by
-  `callosum probe-tools` (or the legacy `callosum-ctl probe-tools` alias).
+  `cost_model.py` derives each remote model's `cost_rank` from
+  MEASURED weekly-quota burn (`weekly_used_percent` deltas in the
+  request log) instead of a flat constant — catalog `priority` is
+  only the cold-start prior, and an operator override map wins
+  outright (`CostRankProvider`, overlaid onto backend capabilities in
+  `app.py`). `exploration.py` makes SYNTHETIC auto-learning traffic
+  (`requested_model == "auto-learning-synthetic"`) target the
+  least-sampled compatible cell so coverage accumulates evenly across
+  the grid (the engine that feeds the quality predictor, the measured
+  cost model, and the future contextual bandit); organic traffic keeps
+  the cost/quality-optimal pick. `usage_estimate.py` +
+  `cost_estimator.py` are the FORWARD usage estimators (the twin of the
+  backward-looking `cost_model.py`): `usage_estimate.py` holds the
+  estimator-agnostic contract (`OutputTokenForecast`,
+  `OutputTokenForecaster`, `EstimateInput`, range-first `Estimate`,
+  `UsageEstimator` protocol). The forecaster predicts a request's
+  output-token distribution ONCE (cold-start global output:input ratio
+  yielding to per-cell measured ratios) so the cost AND time estimators
+  consume the same forecast and cannot diverge. `cost_estimator.py`
+  implements the cost half: `usage% ≈ rate × (input + output)` per cell,
+  reading the same `weekly_used_percent` deltas as the cost_rank, local
+  cells taking an explicit `0` branch. The estimate is a range
+  (`p50`→`p95`) consumed pre-flight by `/status` ("≈X%–Y% of weekly
+  quota") and post-hoc — `finalize()` (hooked at the `_log_attempt`
+  logging path) records the realized quota delta, marking a 0 integer-%
+  delta `verifiable=False` so it feeds aggregate calibration only, never
+  a per-request point fit; `aggregate_cost_accuracy()` is the
+  many-rows predicted-vs-actual check. `probe.py` provides a tool-call
+  verification probe used by `callosum probe-tools` (or the legacy
+  `callosum-ctl probe-tools` alias).
 - `backends/` — one module per backend kind. `codex_auth_vault.py`
   rotates Codex Plus/Pro `auth.json` vaults by health and quota.
   `local_direct.py` (`LocalModelRegistryBackend`) is the PREFERRED local
@@ -82,9 +110,24 @@ All paths are under `src/callosum/`.
 - `cell_grid.py` — the (model, reasoning_effort) cell taxonomy and
   the merger that produces the live cell pool from backend
   `advertised_models` and per-backend `model_metadata`.
+- `selectors.py` — client-driven routing selectors. A `callosum:`
+  model id expresses routing intent for a single request: strategy
+  selectors (`callosum:auto` / `callosum:local-only` /
+  `callosum:remote-only`) set the routing engine, and concrete pins
+  (`callosum:remote/<model>:<effort>`, `callosum:local/<model>`) name
+  a specific model. `parse_selector()` runs on the dispatch hot path;
+  a selector overrides the per-request routing value (and, for pins,
+  narrows the cell pool and dispatch pool) **without mutating the
+  global operator mode** — so concurrent clients sharing one proxy
+  don't clobber each other. The canonical `/v1/models` catalog is
+  built from these selectors plus the live remote/local catalogs
+  (raw passthrough ids remain listed for back-compat).
 - `operator_state.py` — SQLite-backed runtime state for operator
   decisions: per-cell inference-param overrides, cell denylist,
   routing mode (`auto` / `offline` / `local-only` / `remote-only`).
+  This mode is the operator-set **default**; a per-request
+  `callosum:` selector (see `selectors.py`) overrides it for that
+  request only.
 - `admin.py` — `/admin/*` HTTP surface, gated by an admin token under
   `~/.config/callosum/admin_token`. The unified `callosum` CLI's
   admin subcommands (`callosum status`, `callosum routing get|set`,

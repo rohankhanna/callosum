@@ -25,15 +25,28 @@ from callosum.auth import (
 )
 from callosum.auth_db import ApiKey, Session
 from callosum.backend import Backend, CallHandle
-from callosum.cell_grid import VIRTUAL_MODELS, Cell, build_cells, live_completion_models
+from callosum.cell_grid import (
+    VIRTUAL_MODELS,
+    Cell,
+    ModelMetadata,
+    build_cells,
+    coverage_from_db,
+    live_completion_models,
+    reasoning_levels_for,
+)
 from callosum.config import AutoRouterConfig
 from callosum.errors import RETRYABLE, BackendError, ErrorClass
 from callosum.fallback import FallbackExecutor, should_attempt_fallback
 from callosum.label_ui import install_label_ui
+from callosum.routing.cost_estimator import CostModelProvider, CostUsageEstimator
+from callosum.routing.cost_model import CostRankProvider
+from callosum.routing.exploration import exploration_order, is_exploration_request
 from callosum.routing.factory import build_router
 from callosum.routing.protocols import CellCapabilities
 from callosum.routing.router import NoCompatibleCellError, Router
+from callosum.routing.usage_estimate import OutputTokenForecaster
 from callosum.selector import select
+from callosum.selectors import SelectorError, is_selector, parse_selector
 from callosum.session import SessionRegistry
 from callosum.usage_log import RoutingAttempt, UsageLog, UsageLogEntry
 
@@ -112,6 +125,18 @@ _CANARY_SCHEDULER: Any = None
 # registry — apply_request on empty is a no-op — so this introduces
 # zero behavior change until concrete transforms are registered.
 _TRANSFORM_REGISTRY: Any = None
+
+# Cost estimator holder. Set by create_app to a CostUsageEstimator (or None
+# when usage logging is off). Consulted by `_log_attempt` to finalize the
+# realized weekly-quota delta post-request with the integer-% verifiable
+# flag (). Same module-level pattern as the registries
+# above; tests can monkey-patch it.
+_COST_ESTIMATOR: Any = None
+
+# Shared output-token forecaster holder (). Set by
+# create_app alongside the cost estimator; published on app.state for
+# in-process consumers and reused by the time estimator.
+_OUTPUT_FORECASTER: Any = None
 
 # Complexity classification instruction appended to auto-learning requests.
 # The model outputs {{{1}}}, {{{2}}}, or {{{3}}} at the start of its response.
@@ -286,9 +311,12 @@ def create_app(
     # per-call-site plumbing. The previous holders are overwritten
     # — tests that build multiple apps see the most-recent ones.
     global _FAILURE_REGISTRY, _CANARY_SCHEDULER, _TRANSFORM_REGISTRY
+    global _COST_ESTIMATOR, _OUTPUT_FORECASTER
     _FAILURE_REGISTRY = failure_registry
     _CANARY_SCHEDULER = canary_scheduler
     _TRANSFORM_REGISTRY = transform_registry
+    _COST_ESTIMATOR = None
+    _OUTPUT_FORECASTER = None
 
     # Extract state_store from the first CodexAuthVaultBackend (for model release tracking)
     state_store: StateStore | None = None
@@ -311,10 +339,7 @@ def create_app(
         without a proxy restart. When a model is retired upstream, it drops
         out of the grid the next time the router consults it.
         """
-        from callosum.cell_grid import (
-            ModelMetadata,
-            build_cells_from_metadata,
-        )
+        from callosum.cell_grid import build_cells_from_metadata
 
         # Merge metadata from every backend that exposes it. Today: Codex
         # auth-vault backends (real upstream metadata) + LiteLLM gateway
@@ -446,7 +471,80 @@ def create_app(
                 cost_rank=10,
             )
 
-        _capabilities_of = _capabilities_of_impl
+        def _remote_catalog_priorities() -> dict[str, int]:
+            """Current catalog priority per remote (Codex) model — the
+            cold-start prior for the measured cost_rank. Local gateway models
+            are excluded; they keep their native rank 0."""
+            out: dict[str, int] = {}
+            for b in backends_list:
+                if getattr(b, "kind", "") == "litellm_gateway":
+                    continue
+                meta = getattr(b, "model_metadata", None) or {}
+                for slug, m in meta.items():
+                    if m.priority is not None:
+                        out[slug] = m.priority
+            return out
+
+        cost_rank_provider: CostRankProvider | None = None
+        if usage_log is not None:
+            cost_rank_provider = CostRankProvider(
+                usage_log.path,
+                catalog_priorities=_remote_catalog_priorities,
+                overrides=auto_cfg.cost_rank_overrides,
+                enabled=auto_cfg.cost_rank_dynamic_enabled,
+                min_nonzero_samples=auto_cfg.cost_rank_min_nonzero_samples,
+                window_seconds=auto_cfg.cost_rank_window_seconds,
+                base_rank=auto_cfg.cost_rank_base,
+                refresh_seconds=auto_cfg.cost_rank_refresh_seconds,
+            )
+
+        def _capabilities_with_cost(cell: Cell) -> CellCapabilities:
+            """Overlay the measured per-model cost_rank onto the backend's
+            declared capabilities. Backends still own context window,
+            modalities, and tool support; the cost ordering becomes
+            data-driven instead of a flat remote constant."""
+            caps = _capabilities_of_impl(cell)
+            if cost_rank_provider is None:
+                return caps
+            rank = cost_rank_provider.rank_for(cell.model, default=caps.cost_rank)
+            if rank == caps.cost_rank:
+                return caps
+            return CellCapabilities(
+                context_window=caps.context_window,
+                modalities=caps.modalities,
+                supports_tools=caps.supports_tools,
+                cost_rank=rank,
+                parameter_count=caps.parameter_count,
+            )
+
+        _capabilities_of = _capabilities_with_cost
+
+        # Forward usage estimators ( cost; the shared
+        # forecaster is reused by the time estimator ). The
+        # forecaster is built once and the cost estimator reads the same
+        # measured-quota substrate as the cost_rank above. Stashed on locals
+        # here; published on app.state after the FastAPI app is constructed.
+        if usage_log is not None and auto_cfg.cost_estimate_enabled:
+            output_forecaster = OutputTokenForecaster(
+                usage_log.path,
+                min_obs=auto_cfg.output_forecast_min_obs,
+                fallback_ratio=auto_cfg.output_forecast_fallback_ratio,
+                window_seconds=auto_cfg.cost_estimate_window_seconds,
+                refresh_seconds=auto_cfg.cost_estimate_refresh_seconds,
+            )
+            cost_model_provider = CostModelProvider(
+                usage_log.path,
+                catalog_priorities=_remote_catalog_priorities,
+                overrides=auto_cfg.cost_estimate_overrides,
+                enabled=auto_cfg.cost_estimate_enabled,
+                min_nonzero_samples=auto_cfg.cost_estimate_min_nonzero_samples,
+                window_seconds=auto_cfg.cost_estimate_window_seconds,
+                fallback_rate=auto_cfg.cost_estimate_fallback_rate,
+                refresh_seconds=auto_cfg.cost_estimate_refresh_seconds,
+            )
+            _OUTPUT_FORECASTER = output_forecaster
+            _COST_ESTIMATOR = CostUsageEstimator(cost_model_provider)
+
         router = build_router(auto_cfg.routing, capabilities_of=_capabilities_of)
 
     smoke_tester = _PeriodicSmokeTester(
@@ -591,6 +689,12 @@ def create_app(
                 auth_service.db.close()
 
     app = FastAPI(title="callosum", version=__version__, lifespan=lifespan)
+
+    # Publish the forward usage estimators for in-process consumers
+    # (/status pre-flight "≈X%–Y% of weekly quota", the routing reward cost
+    # term). None when usage logging or the cost estimator is disabled.
+    app.state.output_forecaster = _OUTPUT_FORECASTER
+    app.state.cost_estimator = _COST_ESTIMATOR
 
     # Install quality labeling UI if usage_log is available
     if usage_log is not None:
@@ -851,14 +955,58 @@ def create_app(
         all_ok = all(r["ok"] for r in results if not r.get("skipped"))
         return {"ok": all_ok, "backends": results}
 
-    def _live_catalog() -> dict[str, Any]:
-        """OpenAI-compatible model list, recomputed on each call from the
-        union of every backend's live advertised_models.
+    def _catalog_model_ids() -> list[str]:
+        """The canonical Callosum catalog ids, recomputed on each call.
+
+        Built from the same backend `advertised_models` + `model_metadata` the
+        cell grid uses, so the catalog and the router agree on what exists:
+
+        - strategy selectors: callosum:auto / local-only / remote-only
+        - remote concrete pins: callosum:remote/<model>:<effort> (one per
+          supported reasoning level, from model_metadata with REASONING_LEVELS
+          fallback)
+        - local concrete pins: callosum:local/<model> (no effort in Phase 1)
+        - raw passthrough ids, still listed + resolvable for back-compat
         """
-        seen: set[str] = set()
+        raw: set[str] = set()
+        remote_models: set[str] = set()
+        local_models: set[str] = set()
+        remote_meta: dict[str, ModelMetadata] = {}
         for backend in backends_list:
+            is_local = getattr(backend, "kind", "") == "litellm_gateway"
             for m in backend.advertised_models:
-                seen.add(m)
+                if m in VIRTUAL_MODELS or is_selector(m):
+                    continue
+                raw.add(m)
+                (local_models if is_local else remote_models).add(m)
+            if not is_local:
+                meta = getattr(backend, "model_metadata", None) or {}
+                for slug, md in meta.items():
+                    existing = remote_meta.get(slug)
+                    # Prefer the record that actually carries reasoning levels.
+                    if existing is None or (
+                        md.supported_reasoning_levels
+                        and not existing.supported_reasoning_levels
+                    ):
+                        remote_meta[slug] = md
+
+        ids: list[str] = [
+            "callosum:auto",
+            "callosum:local-only",
+            "callosum:remote-only",
+        ]
+        for m in sorted(remote_models):
+            for level in reasoning_levels_for(m, remote_meta):
+                ids.append(f"callosum:remote/{m}:{level}")
+        for m in sorted(local_models):
+            ids.append(f"callosum:local/{m}")
+        ids.extend(sorted(raw))
+        return ids
+
+    def _live_catalog() -> dict[str, Any]:
+        """OpenAI-compatible model list: the canonical Callosum catalog
+        (selectors + concrete pins) plus raw passthrough ids for back-compat.
+        """
         now_ts = int(time.time())
         return {
             "object": "list",
@@ -869,7 +1017,7 @@ def create_app(
                     "created": now_ts,
                     "owned_by": "callosum",
                 }
-                for model_id in sorted(seen)
+                for model_id in _catalog_model_ids()
             ],
         }
 
@@ -928,9 +1076,27 @@ def create_app(
 
     @app.get("/v1/models/{model_id:path}")
     async def get_model(model_id: str) -> dict[str, Any]:
-        """OpenAI-compatible single-model lookup. Returns 404 when the model
-        isn't advertised by any backend.
+        """OpenAI-compatible single-model lookup. Resolves `callosum:`
+        selector ids against the canonical catalog; otherwise falls back to
+        raw advertised-model lookup. Returns 404 when unknown.
         """
+        if is_selector(model_id):
+            try:
+                sel = parse_selector(model_id)
+            except SelectorError:
+                sel = None
+            # Strategy selectors are always valid; concrete pins must resolve
+            # to a catalog entry (pinned model+effort actually advertised).
+            if sel is not None and (
+                sel.strategy is not None or model_id in _catalog_model_ids()
+            ):
+                return {
+                    "id": model_id,
+                    "object": "model",
+                    "created": int(time.time()),
+                    "owned_by": "callosum",
+                }
+            raise HTTPException(status_code=404, detail=f"model {model_id!r} not found")
         for backend in backends_list:
             if model_id in backend.advertised_models:
                 return {
@@ -1213,6 +1379,14 @@ async def _dispatch_internal(
     """
     requested_model = _require_model(body)
     requested_reasoning = _extract_reasoning_effort(body)
+    # Client-driven routing selector. A `callosum:` model id expresses routing
+    # intent for THIS request only (strategy engine and/or concrete pin) and
+    # overrides the operator default below without mutating any global state.
+    # None = legacy pass-through (behavior unchanged).
+    try:
+        _selector = parse_selector(requested_model)
+    except SelectorError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     routing_mode = "pass-through"
     # Router provenance for the request log. Populated when the Router
     # makes a decision; stays None for the no-router path (cold-start
@@ -1253,9 +1427,22 @@ async def _dispatch_internal(
         # cannot affect this request's outcome.
         if operator_state is not None:
             _routing = operator_state.get_routing()
+            # Per-request client selector overrides the operator default for
+            # THIS request only (no global mutation). Strategy selectors set the
+            # routing engine; concrete pins additionally constrain the cell pool
+            # below and imply their source's engine.
+            if _selector is not None:
+                if _selector.strategy is not None:
+                    _routing = _selector.strategy
+                elif _selector.source == "remote":
+                    _routing = "remote-only"
+                elif _selector.source == "local":
+                    _routing = "local-only"
             # Map routing mode to effective_routing_mode for the log.
             # Default mapping: 'auto' → 'auto', everything else → forced_*.
             _effective_mode = _routing if _routing == "auto" else f"forced_{_routing.replace('-only', '')}"
+            if _selector is not None:
+                _effective_mode = f"selector_{_selector.strategy or _selector.source}"
             # Quota for the canary scheduler. Walk codex_auth_vault
             # backends, take the highest weekly_used_percent (the
             # most-constrained). None means "unknown" — scheduler
@@ -1308,6 +1495,15 @@ async def _dispatch_internal(
                     )
                 ]
             cells_now = [c for c in cells_now if not operator_state.is_denied(c.model)]
+            # Concrete client pin: narrow the cell pool to the pinned model
+            # (and effort, for remote pins). The source constraint was already
+            # applied above via the selector-derived `_routing`. An empty pool
+            # here surfaces as a clean 503 below (same as any unroutable state),
+            # never a silent fall-through to a different model.
+            if _selector is not None and _selector.pinned_model is not None:
+                cells_now = [c for c in cells_now if c.model == _selector.pinned_model]
+                if _selector.pinned_effort is not None:
+                    cells_now = [c for c in cells_now if c.reasoning_effort == _selector.pinned_effort]
         # Drop cells whose only serving backends are currently unroutable
         # (Codex weekly-exhausted, on cooldown, gateway down). The Router's
         # capability filter further drops cells whose physical capabilities
@@ -1367,6 +1563,27 @@ async def _dispatch_internal(
                 detail=f"no cell can serve this request: {exc}",
             ) from exc
         chosen = decision.cell
+        # Arm-level exploration: synthetic auto-learning traffic deliberately
+        # samples the LEAST-covered compatible cell so coverage accumulates
+        # across the whole cell grid instead of collapsing to the cost-
+        # cheapest one. Organic traffic keeps the router's optimal pick. Only
+        # synthetic requests pay the coverage query — low volume, off the hot
+        # organic path. See callosum.routing.exploration.
+        _ordered_candidates: tuple[Cell, ...] = decision.candidates
+        if (
+            auto_cfg.exploration_enabled
+            and is_exploration_request(requested_model)
+            and usage_log is not None
+            and len(decision.candidates) > 1
+        ):
+            _coverage = coverage_from_db(
+                usage_log.path,
+                list(decision.candidates),
+                routing_mode=requested_model,
+            )
+            _explore = exploration_order(decision.candidates, _coverage)
+            chosen = _explore[0]
+            _ordered_candidates = tuple(_explore)
         body["model"] = chosen.model
         body.setdefault("reasoning", {})["effort"] = chosen.reasoning_effort
         # Per-cell transforms. Empty registry → no-op. Each registered
@@ -1426,11 +1643,24 @@ async def _dispatch_internal(
         # Candidate cells the dispatch layer walks if the primary's
         # backend pool 5xxs. Capped at MAX_CELL_ATTEMPTS so retry
         # latency stays bounded.
-        cell_candidates = decision.candidates[:MAX_CELL_ATTEMPTS]
+        cell_candidates = _ordered_candidates[:MAX_CELL_ATTEMPTS]
         routing_mode = requested_model
     model = _require_model(body)
     pinned = pin_state.get()
     active = _active_pool(backends_list, pinned)
+    # Honor the client selector's source at the dispatch pool too. The cell
+    # filter above constrains which (model, effort) cells are eligible, but the
+    # final backend ranking walks the active pool — when a model is served by
+    # both a local and a remote backend, narrow the pool so the selector's
+    # source wins regardless of catalog overlap. (Operator-mode requests rely
+    # on disjoint local/remote catalogs and are left unchanged.)
+    if _selector is not None:
+        _want_local = _selector.strategy == "local-only" or _selector.source == "local"
+        _want_remote = _selector.strategy == "remote-only" or _selector.source == "remote"
+        if _want_local:
+            active = [b for b in active if getattr(b, "kind", "") == "litellm_gateway"]
+        elif _want_remote:
+            active = [b for b in active if getattr(b, "kind", "") != "litellm_gateway"]
     if forced_backend_id is not None:
         active = [b for b in active if b.id == forced_backend_id]
         if not active:
@@ -2769,6 +2999,39 @@ def _log_attempt(
     request_id = usage_log.record(entry)
     # Store request_id in context for response handlers to access
     _request_id_context.set(request_id)
+    # Finalize the forward cost estimate (): record the
+    # realized weekly-quota delta with the integer-% verifiable flag. A 0
+    # delta is unverifiable (NOT a 0-cost label) and only ever feeds
+    # aggregate calibration. Best-effort; the row is already persisted, so a
+    # finalize hiccup never affects logging.
+    _ce = _COST_ESTIMATOR
+    if _ce is not None and status == 200:
+        try:
+            from callosum.cell_grid import Cell as _Cell
+            from callosum.usage_log import _is_reset_crossover
+
+            qb = handle.quota_before
+            qa = handle.quota_after
+            delta: float | None = None
+            verifiable = False
+            if (
+                qb is not None
+                and qa is not None
+                and qb.weekly_used_percent is not None
+                and qa.weekly_used_percent is not None
+                and not _is_reset_crossover(qb, qa)
+            ):
+                delta = float(qa.weekly_used_percent - qb.weekly_used_percent)
+                verifiable = delta > 0
+            _ce.finalize(
+                request_id,
+                cell=_Cell(model=model, reasoning_effort=entry.reasoning_effort or ""),
+                observed_output_tokens=tokens.completion,
+                observed_value=delta,
+                verifiable=verifiable,
+            )
+        except Exception:
+            logger.debug("cost.finalize failed for request_id=%s", request_id, exc_info=True)
     # Failure observation: if this row represents a failed request,
     # write a structured record so the dev loop and operator
     # dashboards can detect regressions empirically. Best-effort —

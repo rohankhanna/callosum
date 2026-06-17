@@ -138,3 +138,124 @@ async def test_explicit_model_request_routes_through_router(tmp_path: Path) -> N
     # depends on cost ordering — we just assert it IS a grid cell.
     assert model in DEFAULT_MODELS
     assert reasoning in REASONING_LEVELS
+
+
+# ---------- arm-level exploration -----------------------------------------
+
+
+def _served_cells(db: Path, routing_mode: str) -> list[tuple[str, str]]:
+    conn = sqlite3.connect(db)
+    try:
+        return conn.execute(
+            "SELECT model, reasoning_effort FROM requests WHERE routing_mode = ? ORDER BY id",
+            (routing_mode,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
+async def test_synthetic_exploration_spreads_across_cells(tmp_path: Path) -> None:
+    """Synthetic traffic must sample the least-covered cell each time, so a
+    burst of synthetics spreads across the grid instead of collapsing to the
+    single cost-cheapest cell."""
+    db = tmp_path / "u.sqlite"
+    log = UsageLog(db)
+    backend = _backend()
+    async with _client(backends=[backend], usage_log=log) as client:
+        for _ in range(16):
+            r = await client.post(
+                "/v1/responses",
+                json={"model": "auto-learning-synthetic", "input": []},
+            )
+            assert r.status_code == 200
+    served = _served_cells(db, "auto-learning-synthetic")
+    assert len(served) == 16
+    # Round-robin over under-sampled arms => broad coverage, not a collapse.
+    distinct = set(served)
+    assert len(distinct) >= 10
+
+
+@pytest.mark.asyncio
+async def test_organic_traffic_does_not_explore(tmp_path: Path) -> None:
+    """Organic auto traffic keeps the cost-optimal pick — it must NOT spread
+    across cells the way synthetic exploration does."""
+    db = tmp_path / "u.sqlite"
+    log = UsageLog(db)
+    backend = _backend()
+    async with _client(backends=[backend], usage_log=log) as client:
+        for _ in range(8):
+            r = await client.post("/v1/responses", json={"model": "auto-learning", "input": []})
+            assert r.status_code == 200
+    served = _served_cells(db, "auto-learning")
+    assert len(served) == 8
+    # No exploration => every organic request collapses to the same cell.
+    assert len(set(served)) == 1
+
+
+@pytest.mark.asyncio
+async def test_exploration_can_be_disabled(tmp_path: Path) -> None:
+    """With exploration_enabled=False, even synthetic traffic collapses to the
+    cost-cheapest cell (legacy behavior)."""
+    from callosum.config import AutoRouterConfig
+
+    db = tmp_path / "u.sqlite"
+    log = UsageLog(db)
+    backend = _backend()
+    cfg = AutoRouterConfig(exploration_enabled=False)
+    async with _client(backends=[backend], usage_log=log, auto_router_config=cfg) as client:
+        for _ in range(8):
+            r = await client.post(
+                "/v1/responses",
+                json={"model": "auto-learning-synthetic", "input": []},
+            )
+            assert r.status_code == 200
+    served = _served_cells(db, "auto-learning-synthetic")
+    assert len(served) == 8
+    assert len(set(served)) == 1
+
+
+# ---------- measured dynamic cost_rank ------------------------------------
+
+
+def _seed_quota_rows(db: Path, model: str, n: int, *, before: int, after: int) -> None:
+    import time as _time
+
+    now = _time.time()
+    conn = sqlite3.connect(db)
+    try:
+        conn.executemany(
+            "INSERT INTO requests"
+            " (ts_start, ts_end, latency_ms, route, stream, backend_id, status,"
+            "  model, quota_reset_crossover, weekly_used_percent_before,"
+            "  weekly_used_percent_after)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (now - 100, now - 99, 1000, "/v1/responses", 0, "primary", 200, model, 0, before, after)
+                for _ in range(n)
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
+async def test_measured_cost_rank_steers_organic_routing(tmp_path: Path) -> None:
+    """Organic routing should prefer the model that MEASURABLY burns less
+    weekly quota, not a flat-cost arbitrary pick. Seed the request log so one
+    model is demonstrably cheaper, then confirm organic traffic lands there."""
+    db = tmp_path / "u.sqlite"
+    log = UsageLog(db)
+    # model-a0c3 burns +1% per call; model-a0e6 burns +5%. Both clear the
+    # min-nonzero-samples threshold; the rest of the grid stays unmeasured.
+    _seed_quota_rows(db, "model-a0c3", 12, before=10, after=11)
+    _seed_quota_rows(db, "model-a0e6", 12, before=10, after=15)
+    backend = _backend()
+    async with _client(backends=[backend], usage_log=log) as client:
+        r = await client.post("/v1/responses", json={"model": "auto-learning", "input": []})
+        assert r.status_code == 200
+        served = r.json()["model"]
+    # Cheapest measured burn wins under the cold-start (uniform) predictor.
+    assert served == "model-a0c3"
+
