@@ -7,6 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from callosum.backend import UsageSnapshot
+from callosum.codex_quota import CodexQuotaSnapshot
 
 
 class StateStore:
@@ -17,6 +18,7 @@ class StateStore:
 
     def __init__(self, base_dir: Path) -> None:
         self._usage_dir = base_dir / "usage"
+        self._quota_dir = base_dir / "quota"
         self._timing_path = base_dir / "timing.json"
 
     def load_usage(self, backend_id: str) -> UsageSnapshot | None:
@@ -40,6 +42,48 @@ class StateStore:
     def save_usage(self, backend_id: str, snapshot: UsageSnapshot) -> None:
         self._usage_dir.mkdir(parents=True, exist_ok=True)
         path = self._usage_dir / f"{backend_id}.json"
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(asdict(snapshot)))
+        os.replace(tmp, path)
+
+    def load_quota(self, backend_id: str) -> CodexQuotaSnapshot | None:
+        """Reload the last-known Codex quota snapshot so /status survives restarts.
+
+        The live value lives in-memory on the backend and is only refreshed by a
+        routed/probed Codex response. Persisting it here means an operator polling
+        /status sees the last-known quota even after a restart with no traffic.
+        """
+        path = self._quota_dir / f"{backend_id}.json"
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return None
+        try:
+            return CodexQuotaSnapshot(
+                plan_type=data.get("plan_type"),
+                active_limit=data.get("active_limit"),
+                five_hourly_used_percent=data.get("five_hourly_used_percent"),
+                weekly_used_percent=data.get("weekly_used_percent"),
+                five_hourly_window_minutes=data.get("five_hourly_window_minutes"),
+                weekly_window_minutes=data.get("weekly_window_minutes"),
+                five_hourly_reset_at=data.get("five_hourly_reset_at"),
+                weekly_reset_at=data.get("weekly_reset_at"),
+                five_hourly_reset_after_seconds=data.get("five_hourly_reset_after_seconds"),
+                weekly_reset_after_seconds=data.get("weekly_reset_after_seconds"),
+                five_hourly_over_weekly_limit_percent=data.get("five_hourly_over_weekly_limit_percent"),
+                credits_balance=data.get("credits_balance"),
+                credits_has_credits=data.get("credits_has_credits"),
+                credits_unlimited=data.get("credits_unlimited"),
+                observed_at=float(data.get("observed_at", 0.0)),
+            )
+        except (TypeError, ValueError):
+            return None
+
+    def save_quota(self, backend_id: str, snapshot: CodexQuotaSnapshot) -> None:
+        self._quota_dir.mkdir(parents=True, exist_ok=True)
+        path = self._quota_dir / f"{backend_id}.json"
         tmp = path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(asdict(snapshot)))
         os.replace(tmp, path)
