@@ -93,7 +93,22 @@ All paths are under `src/callosum/`.
   logging path) records the realized quota delta, marking a 0 integer-%
   delta `verifiable=False` so it feeds aggregate calibration only, never
   a per-request point fit; `aggregate_cost_accuracy()` is the
-  many-rows predicted-vs-actual check. `probe.py` provides a tool-call
+  many-rows predicted-vs-actual check. `time_estimator.py` implements
+  the time half from the SAME forecast and substrate, fitting
+  `t ≈ a·input + b·output + c` (v1 blends `a == b` into one slope per
+  total token + intercept, against `latency_ms`; the TTFB/decode split
+  is deferred). Unlike cost, local cells are NOT zeroed — they are often
+  the slow path (5–50× remote in the live log) — and latency is always
+  observable, so every estimate/`finalize()` is `verifiable=True` (no
+  integer-resolution case). Its range carries BOTH output-length
+  uncertainty and per-cell residual dispersion (load/concurrency), and
+  the point uses the median residual (latency is right-skewed). It
+  publishes on `app.state.time_estimator` and finalizes at the same
+  `_log_attempt` path; `aggregate_time_accuracy()` is its many-rows
+  predicted-vs-actual check. The static stall-guard timeouts
+  (`CALLOSUM_LOCAL_FIRST_BYTE_TIMEOUT_S` / `..._IDLE_TIMEOUT_S`) remain
+  separate GUARD thresholds that could later become data-driven per-cell
+  from this estimator. `probe.py` provides a tool-call
   verification probe used by `callosum probe-tools` (or the legacy
   `callosum-ctl probe-tools` alias).
 - `backends/` — one module per backend kind. `codex_auth_vault.py`

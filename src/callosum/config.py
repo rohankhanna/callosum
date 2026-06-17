@@ -207,6 +207,33 @@ class AutoRouterConfig(BaseModel):
     cost_estimate_refresh_seconds: int = 3600
     # Operator overrides: {model_slug: pct_per_token}. Wins over measured + prior.
     cost_estimate_overrides: dict[str, float] = Field(default_factory=dict)
+    # Forward time estimator (): per-request prediction of
+    # wall-clock latency in ms for BOTH remote and local cells (local is NOT
+    # zero — it is often the slow path), fit t ≈ a·input + b·output + c against
+    # the same request log's latency_ms. Feeds a future pre-flight ETA range
+    # and data-driven per-cell timeout tuning. See
+    # callosum.routing.time_estimator.
+    time_estimate_enabled: bool = True
+    # Minimum timing rows before a cell's/model's measured fit is trusted
+    # (latency has no integer-resolution problem, so these are total samples,
+    # not non-zero deltas — contrast cost_estimate_min_nonzero_samples).
+    time_estimate_min_samples: int = 10
+    # Only rows newer than this feed the fit (bounds the scan, tracks the
+    # current latency regime). 30 days.
+    time_estimate_window_seconds: int = 2_592_000
+    # Flat per-token slope (ms/token) and fixed overhead (ms) used only when
+    # the log has no usable measured signal at all.
+    time_estimate_fallback_ms_per_token: float = 12.0
+    time_estimate_fallback_base_ms: float = 500.0
+    # Cold-start slowdown applied to a remote-dominated global prior when it is
+    # reused for a LOCAL cell ("local is the slow path"); yields to the cell's
+    # own measured fit once it has data. The time analogue of the cost
+    # estimator's catalog-priority tilt.
+    time_estimate_local_slowdown: float = 4.0
+    # How often the per-cell fit is recomputed (kept off the hot path).
+    time_estimate_refresh_seconds: int = 3600
+    # Operator overrides: {model_slug: [ms_per_token, base_ms]}. Wins outright.
+    time_estimate_overrides: dict[str, list[float]] = Field(default_factory=dict)
     # Shared output-token forecaster (): cold-start global
     # output:input ratio yields to per-cell measured ratios after this many
     # observed rows. Consumed by BOTH the cost and time estimators.

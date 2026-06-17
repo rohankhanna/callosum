@@ -44,6 +44,7 @@ from callosum.routing.exploration import exploration_order, is_exploration_reque
 from callosum.routing.factory import build_router
 from callosum.routing.protocols import CellCapabilities
 from callosum.routing.router import NoCompatibleCellError, Router
+from callosum.routing.time_estimator import TimeModelProvider, TimeUsageEstimator
 from callosum.routing.usage_estimate import OutputTokenForecaster
 from callosum.selector import select
 from callosum.selectors import SelectorError, is_selector, parse_selector
@@ -137,6 +138,12 @@ _COST_ESTIMATOR: Any = None
 # create_app alongside the cost estimator; published on app.state for
 # in-process consumers and reused by the time estimator.
 _OUTPUT_FORECASTER: Any = None
+
+# Time estimator holder. Set by create_app to a TimeUsageEstimator (or None
+# when usage logging is off). Consulted by `_log_attempt` to finalize the
+# realized latency_ms post-request (always verifiable — latency has no
+# integer-resolution problem; ). Reuses _OUTPUT_FORECASTER.
+_TIME_ESTIMATOR: Any = None
 
 # Complexity classification instruction appended to auto-learning requests.
 # The model outputs {{{1}}}, {{{2}}}, or {{{3}}} at the start of its response.
@@ -311,12 +318,13 @@ def create_app(
     # per-call-site plumbing. The previous holders are overwritten
     # — tests that build multiple apps see the most-recent ones.
     global _FAILURE_REGISTRY, _CANARY_SCHEDULER, _TRANSFORM_REGISTRY
-    global _COST_ESTIMATOR, _OUTPUT_FORECASTER
+    global _COST_ESTIMATOR, _OUTPUT_FORECASTER, _TIME_ESTIMATOR
     _FAILURE_REGISTRY = failure_registry
     _CANARY_SCHEDULER = canary_scheduler
     _TRANSFORM_REGISTRY = transform_registry
     _COST_ESTIMATOR = None
     _OUTPUT_FORECASTER = None
+    _TIME_ESTIMATOR = None
 
     # Extract state_store from the first CodexAuthVaultBackend (for model release tracking)
     state_store: StateStore | None = None
@@ -545,6 +553,26 @@ def create_app(
             _OUTPUT_FORECASTER = output_forecaster
             _COST_ESTIMATOR = CostUsageEstimator(cost_model_provider)
 
+        # Forward time estimator (): the sibling of the cost
+        # estimator. Reuses the SAME output_forecaster (anti-divergence) and
+        # the same request-log substrate, fitting t ≈ a·input + b·output + c
+        # against latency_ms. Local cells are NOT zeroed — they are often the
+        # slow path. Gated on its own flag but shares the forecaster build
+        # above, so it only runs when the cost block has built one.
+        if usage_log is not None and auto_cfg.time_estimate_enabled and _OUTPUT_FORECASTER is not None:
+            time_model_provider = TimeModelProvider(
+                usage_log.path,
+                overrides=auto_cfg.time_estimate_overrides,
+                enabled=auto_cfg.time_estimate_enabled,
+                min_samples=auto_cfg.time_estimate_min_samples,
+                window_seconds=auto_cfg.time_estimate_window_seconds,
+                fallback_ms_per_token=auto_cfg.time_estimate_fallback_ms_per_token,
+                fallback_base_ms=auto_cfg.time_estimate_fallback_base_ms,
+                local_slowdown=auto_cfg.time_estimate_local_slowdown,
+                refresh_seconds=auto_cfg.time_estimate_refresh_seconds,
+            )
+            _TIME_ESTIMATOR = TimeUsageEstimator(time_model_provider)
+
         router = build_router(auto_cfg.routing, capabilities_of=_capabilities_of)
 
     smoke_tester = _PeriodicSmokeTester(
@@ -695,6 +723,7 @@ def create_app(
     # term). None when usage logging or the cost estimator is disabled.
     app.state.output_forecaster = _OUTPUT_FORECASTER
     app.state.cost_estimator = _COST_ESTIMATOR
+    app.state.time_estimator = _TIME_ESTIMATOR
 
     # Install quality labeling UI if usage_log is available
     if usage_log is not None:
@@ -3032,6 +3061,25 @@ def _log_attempt(
             )
         except Exception:
             logger.debug("cost.finalize failed for request_id=%s", request_id, exc_info=True)
+    # Finalize the forward time estimate (): record the
+    # realized wall-clock latency. Latency is always observable, so this is
+    # always verifiable (no integer-resolution / unverifiable case like cost)
+    # and has no local-zero branch — local cells carry real, often large
+    # latency. Best-effort; the row is already persisted.
+    _te = _TIME_ESTIMATOR
+    if _te is not None and status == 200:
+        try:
+            from callosum.cell_grid import Cell as _Cell
+
+            latency_ms = (ts_end - ts_start) * 1000.0
+            _te.finalize(
+                request_id,
+                cell=_Cell(model=model, reasoning_effort=entry.reasoning_effort or ""),
+                observed_output_tokens=tokens.completion,
+                observed_value=latency_ms,
+            )
+        except Exception:
+            logger.debug("time.finalize failed for request_id=%s", request_id, exc_info=True)
     # Failure observation: if this row represents a failed request,
     # write a structured record so the dev loop and operator
     # dashboards can detect regressions empirically. Best-effort —

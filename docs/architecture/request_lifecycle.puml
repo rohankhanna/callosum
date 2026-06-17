@@ -79,5 +79,6 @@ note right of UL
 end note
 
 App -> App : CostUsageEstimator.finalize()\n(realized weekly-quota delta;\n0 delta = verifiable=false →\naggregate calibration only)
+App -> App : TimeUsageEstimator.finalize()\n(realized latency_ms; local NOT 0,\nalways verifiable; fit t≈a·in+b·out+c\nfor pre-flight ETA + timeout tuning)
 
 @enduml
