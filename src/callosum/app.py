@@ -280,6 +280,7 @@ def create_app(
     usage_log: UsageLog | None = None,
     auth_service: AuthService | None = None,
     auto_router_config: AutoRouterConfig | None = None,
+    codex_catalog_config: Any = None,
     startup_smoke_test: bool = False,
     smoke_test_interval_seconds: int = 0,
     operator_state: Any = None,
@@ -584,6 +585,26 @@ def create_app(
         backends=backends_list,
         interval_s=auto_cfg.cooldown_probe_interval_seconds,
     )
+    # codex `/model` picker reconciler. When enabled, projects the live
+    # Callosum catalog (the same ids `/v1/models` serves) into a codex
+    # `model_catalog_json` file so codex's in-session `/model` picker lists and
+    # switches between Callosum lanes from a single config. The unbuilt half of
+    # work tracker . The `model_ids_fn` lambda defers to the
+    # `_catalog_model_ids` closure defined below (resolved at call time, i.e.
+    # after the app is fully constructed). None when disabled.
+    codex_catalog_reconciler: Any = None
+    if codex_catalog_config is not None and getattr(
+        codex_catalog_config, "enabled", False
+    ):
+        from callosum.codex_catalog import CodexCatalogReconciler
+
+        codex_catalog_reconciler = CodexCatalogReconciler(
+            output_path=codex_catalog_config.output_path,
+            model_ids_fn=lambda: _catalog_model_ids(),
+            declared_lanes=codex_catalog_config.declared_lanes,
+            codex_bin=codex_catalog_config.codex_bin,
+            refresh_interval_s=codex_catalog_config.refresh_interval_seconds,
+        )
     # Periodic capability-harness sweeper. Re-runs the multi-dimensional
     # harness on a slow cadence (default 6h, env-overridable) so models
     #  pulls between sweeps land in routable findings
@@ -671,6 +692,8 @@ def create_app(
             await _run_startup_smoke_test(backends_list)
         smoke_tester.start()
         cooldown_prober.start()
+        if codex_catalog_reconciler is not None:
+            codex_catalog_reconciler.start()
         # Kick off the auto-probe sweep so any newly-seen local cells
         # get verified for OpenAI-shaped tool-call emission. Probes
         # run serially in the background; cell_capabilities consults
@@ -707,6 +730,8 @@ def create_app(
             yield
         finally:
             await periodic_harness.stop()
+            if codex_catalog_reconciler is not None:
+                await codex_catalog_reconciler.stop()
             await cooldown_prober.stop()
             await smoke_tester.stop()
             for backend in backends_list:
@@ -1568,6 +1593,27 @@ async def _dispatch_internal(
                 _routable = [b for b in _routable if getattr(b, "kind", "") != "litellm_gateway"]
         cells_now = _filter_cells_to_routable(cells_now, _routable)
         if not cells_now:
+            # A concrete client pin that no backend currently serves: the pin
+            # filter (above) emptied the pool. Surface that directly — the lane
+            # may be operator-declared in the `/model` picker but not yet live
+            # (requirement of the client-driven routing catalog, ).
+            # Without this branch the cause would be misreported as a routing-mode
+            # exclusion below.
+            if _selector is not None and _selector.pinned_model is not None:
+                _effort_note = (
+                    f" at {_selector.pinned_effort} reasoning"
+                    if _selector.pinned_effort is not None
+                    else ""
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        f"selected lane {requested_model!r} is not available yet: "
+                        f"no backend currently serves model "
+                        f"{_selector.pinned_model!r}{_effort_note}"
+                    ),
+                    headers={"Retry-After": "60"},
+                )
             if not _routable:
                 raise HTTPException(
                     status_code=503,

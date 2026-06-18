@@ -129,6 +129,35 @@ def test_unsatisfiable_pin_returns_503(tmp_path: Path) -> None:
         state.close()
 
 
+def test_not_live_lane_returns_actionable_503(tmp_path: Path) -> None:
+    """A well-formed pin to a model no backend serves (a declared-but-not-yet-
+    live `/model` lane, e.g. an aspirational catalog entry) returns a clean
+    503 that names the lane and the missing model — not the generic
+    routing-mode exclusion, and not a 400 loop. (Requirement of the
+    client-driven routing catalog; .)"""
+    remote = _make_backend(id="remote", kind="codex_auth_vault")
+    local = _make_backend(id="local", kind="litellm_gateway")
+    state = OperatorState(tmp_path / "op.sqlite")
+    state.set_routing("auto")
+    try:
+        app = create_app(backends=[remote, local], operator_state=state)
+        with TestClient(app) as client:
+            response = client.post(
+                "/v1/responses",
+                json={
+                    "model": "callosum:remote/model-a0b2:high",
+                    "input": [],
+                },
+            )
+        assert response.status_code == 503, response.text
+        assert "Retry-After" in response.headers
+        detail = response.json()["detail"]
+        assert "not available yet" in detail
+        assert "model-a0b2" in detail
+    finally:
+        state.close()
+
+
 def test_invalid_selectors_return_400(tmp_path: Path) -> None:
     remote = _make_backend(id="remote", kind="codex_auth_vault")
     local = _make_backend(id="local", kind="litellm_gateway")

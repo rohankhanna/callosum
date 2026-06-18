@@ -228,6 +228,7 @@ def _run_server(config_path: Path, host: str | None, port: int | None) -> None:
             usage_log=usage_log,
             auth_service=auth_service,
             auto_router_config=cfg.auto_router,
+            codex_catalog_config=cfg.codex_catalog,
             startup_smoke_test=cfg.server.startup_smoke_test,
             smoke_test_interval_seconds=cfg.server.smoke_test_interval_seconds,
             operator_state=operator_state,

@@ -89,6 +89,37 @@ class AuthConfig(BaseModel):
     session_ttl_seconds: int = 1800
 
 
+class CodexCatalogConfig(BaseModel):
+    """Project the live Callosum catalog into a codex `/model` picker file.
+
+    codex's interactive `/model` picker is driven by a model catalog override
+    declared in `~/.codex/config.toml` as `model_catalog_json = "<path>"`, not
+    by the provider's `/v1/models`. When enabled, Callosum re-emits that file
+    from the same catalog `/v1/models` serves, so the picker lists and switches
+    between Callosum lanes from a single config file. See
+    callosum.codex_catalog and work tracker .
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Off by default: emitting the file is only useful when a codex config on
+    # this host points `model_catalog_json` at `output_path`. Operators opt in.
+    enabled: bool = False
+    # Where the codex-shaped catalog file is written. The codex config's
+    # `model_catalog_json` must point at this same absolute path.
+    output_path: Path = Path.home() / ".codex" / "callosum-catalog.json"
+    # codex binary used to source a rich ModelInfo template (run under a
+    # disposable CODEX_HOME so it yields codex's bundled default catalog).
+    codex_bin: str = "codex"
+    # Safety re-emit cadence (the reconciler also re-emits on catalog-hash
+    # change and on startup). Seconds.
+    refresh_interval_seconds: int = 1800
+    # Operator-declared lanes that should appear in the picker even when no
+    # backend serves them yet (e.g. "callosum:remote/model-a0e8:high"). Selecting
+    # one surfaces a clean "not available yet" message at dispatch.
+    declared_lanes: list[str] = Field(default_factory=list)
+
+
 class AutoRouterConfig(BaseModel):
     """Background synthetic-request worker for the auto-learning explorer.
 
@@ -279,6 +310,7 @@ class Config(BaseModel):
     usage_log: UsageLogConfig = Field(default_factory=UsageLogConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
     auto_router: AutoRouterConfig = Field(default_factory=AutoRouterConfig)
+    codex_catalog: CodexCatalogConfig = Field(default_factory=CodexCatalogConfig)
     backends: list[BackendConfig] = Field(default_factory=list)
 
 

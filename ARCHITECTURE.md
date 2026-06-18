@@ -137,6 +137,27 @@ All paths are under `src/callosum/`.
   don't clobber each other. The canonical `/v1/models` catalog is
   built from these selectors plus the live remote/local catalogs
   (raw passthrough ids remain listed for back-compat).
+- `codex_catalog.py` — projects that canonical catalog into a codex
+  `/model` picker. codex's interactive picker is driven by a
+  config-declared catalog file (`model_catalog_json = <path>` in
+  `~/.codex/config.toml`), **not** by the provider's `/v1/models`, so
+  `CodexCatalogReconciler` re-emits a codex-shaped `{models:[...]}`
+  file from the same ids `/v1/models` serves — on startup, on
+  catalog-hash change, and on a periodic safety interval (mirrors the
+  `_PeriodicSmokeTester` start/stop lifecycle). Each lane inherits a
+  rich codex `ModelInfo` template sourced live from `codex debug
+  models` under a disposable `CODEX_HOME` (codex's bundled default
+  catalog — avoids re-reading our own override, and keeps codex's
+  prompt out of the repo). Strategy selectors lead the menu; remote
+  pins restrict the offered reasoning effort to the one baked into the
+  id; raw passthrough ids are excluded from the picker; operator-
+  declared aspirational lanes (`declared_lanes`) appear even when no
+  backend serves them yet — selecting one returns a clean
+  `503 … not available yet: no backend currently serves model …` at
+  dispatch. Off by default; enabled via `[codex_catalog]` in the
+  server config. This lets a single `~/.codex/config.toml` (default
+  `callosum:auto`) switch lanes in-session via `/model`, replacing the
+  old per-lane `*.config.toml` + `codex -p <lane>` files.
 - `operator_state.py` — SQLite-backed runtime state for operator
   decisions: per-cell inference-param overrides, cell denylist,
   routing mode (`auto` / `offline` / `local-only` / `remote-only`).
