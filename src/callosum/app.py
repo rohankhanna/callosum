@@ -1614,7 +1614,7 @@ async def _dispatch_internal(
             chosen = _explore[0]
             _ordered_candidates = tuple(_explore)
         body["model"] = chosen.model
-        body.setdefault("reasoning", {})["effort"] = chosen.reasoning_effort
+        _stamp_reasoning_effort(body, chosen.reasoning_effort)
         # Per-cell transforms. Empty registry → no-op. Each registered
         # transform's `applies_to(ctx)` decides whether it fires for
         # this cell+endpoint combination. Errors inside a transform are
@@ -1821,7 +1821,7 @@ async def _dispatch_nonstream_with_cell_retry(
 
     for cell_idx, cell in enumerate(cells_to_try):
         body["model"] = cell.model
-        body.setdefault("reasoning", {})["effort"] = cell.reasoning_effort
+        _stamp_reasoning_effort(body, cell.reasoning_effort)
         attempt_start = time.time()
         try:
             result = await _dispatch_nonstream(body, model=cell.model, usage_log=usage_log, **kwargs)
@@ -1904,7 +1904,7 @@ async def _dispatch_stream_with_cell_retry(
 
     for cell_idx, cell in enumerate(cells_to_try):
         body["model"] = cell.model
-        body.setdefault("reasoning", {})["effort"] = cell.reasoning_effort
+        _stamp_reasoning_effort(body, cell.reasoning_effort)
         attempt_start = time.time()
         try:
             result = await _dispatch_stream(body, model=cell.model, usage_log=usage_log, **kwargs)
@@ -3168,6 +3168,25 @@ def _extract_tokens(usage: Any) -> _Tokens:
     if isinstance(details_out, dict):
         reasoning = _int(details_out.get("reasoning_tokens"))
     return _Tokens(prompt, completion, total, cached, reasoning)
+
+
+def _stamp_reasoning_effort(body: dict[str, Any], effort: str) -> None:
+    """Set the routed reasoning effort on the request body, tolerating a
+    client-supplied reasoning: null.
+
+    body.setdefault("reasoning", {}) returns the EXISTING value when the
+    key is present, so a body carrying "reasoning": null yields None and
+    the follow-on ["effort"] = ... raises
+    TypeError: 'NoneType' object does not support item assignment — an
+    uncaught 500 that Codex renders as "high demand". Coerce any non-dict
+    reasoning to a fresh dict, preserving a client-provided reasoning
+    object when it already is one.
+    """
+    reasoning = body.get("reasoning")
+    if not isinstance(reasoning, dict):
+        reasoning = {}
+        body["reasoning"] = reasoning
+    reasoning["effort"] = effort
 
 
 def _extract_reasoning_effort(body: dict[str, Any]) -> str | None:
