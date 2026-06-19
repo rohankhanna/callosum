@@ -66,9 +66,17 @@ All paths are under `src/callosum/`.
   on embeddings is the next-generation predictor). `selector/`
   picks one cell from the predicted-and-scored candidate set
   (cost-weighted today). `router.py` orchestrates the pipeline.
-  `cost_model.py` derives each remote model's `cost_rank` from
-  MEASURED weekly-quota burn (`weekly_used_percent` deltas in the
-  request log) instead of a flat constant — catalog `priority` is
+  `cost_model.py` derives each remote model's compatibility `cost_rank`
+  from MEASURED weekly-quota burn, using serialized integer-meter tick
+  windows built from `weekly_used_percent` movement in the request log
+  instead of a flat constant. `/v1/usage` and the forward routing cost
+  path build the same class of quantized windows independently for both
+  Codex quota ledgers (`five_hourly_used_percent` and
+  `weekly_used_percent`) and report per-cell five-hourly rates, weekly
+  rates, and empirical five-hourly/weekly ratios. Backend routing is
+  composite quota-aware: it scores estimated burn against the remaining
+  headroom of each independent ledger and ranks by the worst pressure,
+  so either five-hourly or weekly exhaustion can block a route. Catalog `priority` is
   only the cold-start prior, and an operator override map wins
   outright (`CostRankProvider`, overlaid onto backend capabilities in
   `app.py`). `exploration.py` makes SYNTHETIC auto-learning traffic
@@ -86,10 +94,10 @@ All paths are under `src/callosum/`.
   yielding to per-cell measured ratios) so the cost AND time estimators
   consume the same forecast and cannot diverge. `cost_estimator.py`
   implements the cost half: `usage% ≈ rate × (input + output)` per cell,
-  reading the same `weekly_used_percent` deltas as the cost_rank, local
-  cells taking an explicit `0` branch. The estimate is a range
-  (`p50`→`p95`) consumed pre-flight by `/status` ("≈X%–Y% of weekly
-  quota") and post-hoc — `finalize()` (hooked at the `_log_attempt`
+  reading the same meter-tick windows for five-hourly and weekly meters,
+  local cells taking an explicit `0` branch. The estimate is a range
+  (`p50`→`p95`) consumed by composite backend routing and post-hoc —
+  `finalize()` (hooked at the `_log_attempt`
   logging path) records the realized quota delta, marking a 0 integer-%
   delta `verifiable=False` so it feeds aggregate calibration only, never
   a per-request point fit; `aggregate_cost_accuracy()` is the

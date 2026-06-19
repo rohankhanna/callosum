@@ -24,7 +24,7 @@ from callosum.auth import (
     SessionInvalidError,
 )
 from callosum.auth_db import ApiKey, Session
-from callosum.backend import Backend, CallHandle
+from callosum.backend import Backend, CallHandle, HealthStatus
 from callosum.cell_grid import (
     VIRTUAL_MODELS,
     Cell,
@@ -38,15 +38,20 @@ from callosum.config import AutoRouterConfig
 from callosum.errors import RETRYABLE, BackendError, ErrorClass
 from callosum.fallback import FallbackExecutor, should_attempt_fallback
 from callosum.label_ui import install_label_ui
-from callosum.routing.cost_estimator import CostModelProvider, CostUsageEstimator
+from callosum.routing.cost_estimator import (
+    CompositeCostModelProvider,
+    CompositeCostUsageEstimator,
+    CostUsageEstimator,
+)
 from callosum.routing.cost_model import CostRankProvider
 from callosum.routing.exploration import exploration_order, is_exploration_request
 from callosum.routing.factory import build_router
 from callosum.routing.protocols import CellCapabilities
 from callosum.routing.router import NoCompatibleCellError, Router
 from callosum.routing.time_estimator import TimeModelProvider, TimeUsageEstimator
-from callosum.routing.usage_estimate import OutputTokenForecaster
-from callosum.selector import select
+from callosum.routing.usage_estimate import EstimateInput, OutputTokenForecaster
+from callosum.routing.usage_rates import usage_rate_report
+from callosum.selector import BackendSnapshot, blocking_meters, constraining_meter, select
 from callosum.selectors import SelectorError, is_selector, parse_selector
 from callosum.session import SessionRegistry
 from callosum.usage_log import RoutingAttempt, UsageLog, UsageLogEntry
@@ -133,6 +138,7 @@ _TRANSFORM_REGISTRY: Any = None
 # flag (). Same module-level pattern as the registries
 # above; tests can monkey-patch it.
 _COST_ESTIMATOR: Any = None
+_COMPOSITE_COST_ESTIMATOR: Any = None
 
 # Shared output-token forecaster holder (). Set by
 # create_app alongside the cost estimator; published on app.state for
@@ -209,6 +215,90 @@ def _strip_trailing_complexity_marker_text(text: str) -> str:
     if not isinstance(text, str):
         return text
     return re.sub(r"\{\{\{[^}]*\}\}\}\s*$", "", text)
+
+
+def _eta_estimate_payload(
+    estimator: TimeUsageEstimator,
+    forecaster: OutputTokenForecaster,
+    cell: Cell,
+    input_tokens: int,
+) -> dict[str, Any]:
+    forecast = forecaster.forecast(cell, input_tokens)
+    estimate = estimator.estimate(
+        EstimateInput(
+            cell=cell,
+            input_tokens=input_tokens,
+            output=forecast,
+        )
+    )
+    return {
+        "cell": {
+            "model": cell.model,
+            "reasoning_effort": cell.reasoning_effort or None,
+        },
+        "eta": {
+            "unit": estimate.unit,
+            "p50_ms": round(estimate.point, 3),
+            "low_ms": round(estimate.low, 3),
+            "high_ms": round(estimate.high, 3),
+            "range": "approximate_p50_to_p95",
+            "exact": False,
+        },
+        "metadata": {
+            "source": estimate.source,
+            "time_source": estimate.source.split("+", 1)[0],
+            "output_forecast_source": forecast.source,
+            "time_sample_count": _time_sample_count(estimator, cell),
+            "output_sample_count": forecast.n_obs,
+            "confidence": _estimate_confidence(estimate.source, forecast.n_obs),
+            "verifiable": estimate.verifiable,
+        },
+    }
+
+
+def _approx_body_tokens(body: dict[str, Any]) -> int:
+    return max(1, len(json.dumps(body, sort_keys=True, default=str)) // 3)
+
+
+def _composite_cost_estimate_for_body(body: dict[str, Any], *, model: str) -> Any:
+    estimator = _COMPOSITE_COST_ESTIMATOR
+    forecaster = _OUTPUT_FORECASTER
+    if estimator is None or forecaster is None:
+        return None
+    try:
+        cell = Cell(model=model, reasoning_effort=_extract_reasoning_effort(body) or "")
+        input_tokens = _approx_body_tokens(body)
+        forecast = forecaster.forecast(cell, input_tokens)
+        return estimator.estimate(
+            EstimateInput(
+                cell=cell,
+                input_tokens=input_tokens,
+                output=forecast,
+            )
+        )
+    except Exception:
+        logger.debug("composite cost estimate failed", exc_info=True)
+        return None
+
+
+def _time_sample_count(estimator: TimeUsageEstimator, cell: Cell) -> int | None:
+    provider = getattr(estimator, "_provider", None)
+    if provider is None:
+        return None
+    try:
+        model = provider.model_for(cell)
+    except Exception:
+        logger.exception("eta endpoint: failed to resolve time model for %s/%s", cell.model, cell.reasoning_effort)
+        return None
+    return int(getattr(model, "n_obs", 0))
+
+
+def _estimate_confidence(source: str, output_n_obs: int) -> str:
+    if "cell-measured" in source and output_n_obs > 0:
+        return "measured"
+    if "model-measured" in source or "global-prior" in source:
+        return "prior"
+    return "insufficient-data"
 
 
 def _extract_and_strip_complexity(result: dict[str, Any]) -> tuple[int | None, dict[str, Any]]:
@@ -319,11 +409,12 @@ def create_app(
     # per-call-site plumbing. The previous holders are overwritten
     # — tests that build multiple apps see the most-recent ones.
     global _FAILURE_REGISTRY, _CANARY_SCHEDULER, _TRANSFORM_REGISTRY
-    global _COST_ESTIMATOR, _OUTPUT_FORECASTER, _TIME_ESTIMATOR
+    global _COST_ESTIMATOR, _COMPOSITE_COST_ESTIMATOR, _OUTPUT_FORECASTER, _TIME_ESTIMATOR
     _FAILURE_REGISTRY = failure_registry
     _CANARY_SCHEDULER = canary_scheduler
     _TRANSFORM_REGISTRY = transform_registry
     _COST_ESTIMATOR = None
+    _COMPOSITE_COST_ESTIMATOR = None
     _OUTPUT_FORECASTER = None
     _TIME_ESTIMATOR = None
 
@@ -541,7 +632,7 @@ def create_app(
                 window_seconds=auto_cfg.cost_estimate_window_seconds,
                 refresh_seconds=auto_cfg.cost_estimate_refresh_seconds,
             )
-            cost_model_provider = CostModelProvider(
+            cost_model_provider = CompositeCostModelProvider(
                 usage_log.path,
                 catalog_priorities=_remote_catalog_priorities,
                 overrides=auto_cfg.cost_estimate_overrides,
@@ -552,7 +643,8 @@ def create_app(
                 refresh_seconds=auto_cfg.cost_estimate_refresh_seconds,
             )
             _OUTPUT_FORECASTER = output_forecaster
-            _COST_ESTIMATOR = CostUsageEstimator(cost_model_provider)
+            _COST_ESTIMATOR = CostUsageEstimator(cost_model_provider.weekly)
+            _COMPOSITE_COST_ESTIMATOR = CompositeCostUsageEstimator(cost_model_provider)
 
         # Forward time estimator (): the sibling of the cost
         # estimator. Reuses the SAME output_forecaster (anti-divergence) and
@@ -748,6 +840,7 @@ def create_app(
     # term). None when usage logging or the cost estimator is disabled.
     app.state.output_forecaster = _OUTPUT_FORECASTER
     app.state.cost_estimator = _COST_ESTIMATOR
+    app.state.composite_cost_estimator = _COMPOSITE_COST_ESTIMATOR
     app.state.time_estimator = _TIME_ESTIMATOR
 
     # Install quality labeling UI if usage_log is available
@@ -861,6 +954,11 @@ def create_app(
                         "remaining_fraction": u.remaining_fraction,
                         "cooldown_until_ts": u.cooldown_until_ts,
                         "weekly_exhausted": u.weekly_exhausted,
+                        "blocking_meters": list(
+                            blocking_meters(
+                                BackendSnapshot(backend=backend, health=h, usage=u, quota=q)
+                            )
+                        ),
                         "probed_at_ts": u.probed_at_ts,
                     },
                     "quota": _quota_to_dict(q),
@@ -1161,6 +1259,66 @@ def create_app(
                 }
         raise HTTPException(status_code=404, detail=f"model {model_id!r} not found")
 
+    @app.post("/v1/eta")
+    async def estimate_eta(body: dict[str, Any]) -> dict[str, Any]:
+        """Pre-flight approximate latency ranges for visible cells.
+
+        This is intentionally range-first and metadata-heavy: it exposes the
+        existing TimeUsageEstimator without implying exact per-request timing.
+        """
+        estimator = getattr(app.state, "time_estimator", None)
+        forecaster = getattr(app.state, "output_forecaster", None)
+        if estimator is None or forecaster is None:
+            return {
+                "available": False,
+                "reason": "time_estimator_unavailable",
+                "unit": "ms",
+                "input_tokens": None,
+                "estimates": [],
+            }
+
+        raw_tokens = body.get("input_tokens", 1000)
+        if not isinstance(raw_tokens, int) or raw_tokens < 0:
+            raise HTTPException(status_code=400, detail="input_tokens must be a non-negative integer")
+        requested_model = body.get("model")
+        requested_effort = body.get("reasoning_effort")
+        if requested_model is not None and not isinstance(requested_model, str):
+            raise HTTPException(status_code=400, detail="model must be a string when provided")
+        if requested_effort is not None and not isinstance(requested_effort, str):
+            raise HTTPException(status_code=400, detail="reasoning_effort must be a string when provided")
+
+        cells = _live_cells()
+        if requested_model is not None:
+            cells = [cell for cell in cells if cell.model == requested_model]
+        if requested_effort is not None:
+            cells = [cell for cell in cells if cell.reasoning_effort == requested_effort]
+        estimates = [_eta_estimate_payload(estimator, forecaster, cell, raw_tokens) for cell in cells]
+        return {
+            "available": bool(estimates),
+            "reason": None if estimates else "no_matching_cells",
+            "unit": "ms",
+            "input_tokens": raw_tokens,
+            "estimates": estimates,
+        }
+
+    @app.get("/v1/usage")
+    async def usage_rates() -> dict[str, Any]:
+        """Empirical weekly-quota token-rate table from the local request log."""
+        if usage_log is None:
+            return {
+                "available": False,
+                "reason": "usage_log_unavailable",
+                "unit": "weekly_used_percent",
+                "basis": "empirical_request_log",
+                "limitations": [
+                    "usage logging is disabled, so no empirical request-log rates can be computed"
+                ],
+                "rates": [],
+                "meters": {},
+                "relationships": [],
+            }
+        return usage_rate_report(usage_log.path, cells=_live_cells())
+
     @app.post("/v1/feedback")
     async def feedback(body: dict[str, Any]) -> dict[str, str]:
         """Record user feedback (quality label) for a request.
@@ -1322,9 +1480,10 @@ async def _routable_backends(backends_list: Sequence[Backend], *, now: float | N
     for b in backends_list:
         try:
             u = await b.usage_snapshot()
+            q = await b.quota_snapshot()
         except Exception:
             continue  # if we can't even read state, treat as unroutable
-        if u.weekly_exhausted:
+        if blocking_meters(BackendSnapshot(backend=b, health=HealthStatus(True, "ok"), usage=u, quota=q)):
             continue
         if u.cooldown_until_ts is not None and u.cooldown_until_ts > n:
             continue
@@ -2020,12 +2179,14 @@ async def _dispatch_nonstream(
     excluded: set[str] = set()
     excluded_errors: dict[str, BackendError] = {}
     last_error: BackendError | None = None
+    cost_estimate = _composite_cost_estimate_for_body(body, model=model)
     while True:
         backend = await select(
             backends_list,
             model=model,
             excluded=frozenset(excluded),
             preferred_id=preferred_id,
+            cost_estimate=cost_estimate,
         )
         if backend is None:
             break
@@ -2166,12 +2327,14 @@ async def _dispatch_stream(
     excluded: set[str] = set()
     excluded_errors: dict[str, BackendError] = {}
     last_error: BackendError | None = None
+    cost_estimate = _composite_cost_estimate_for_body(body, model=model)
     while True:
         backend = await select(
             backends_list,
             model=model,
             excluded=frozenset(excluded),
             preferred_id=preferred_id,
+            cost_estimate=cost_estimate,
         )
         if backend is None:
             break
@@ -3864,6 +4027,32 @@ async def _collect_backend_status(
                 "cooldown_until_ts": cd,
                 "cooldown_in_seconds": int(cd_in_s) if cd_in_s and cd_in_s > 0 else None,
                 "weekly_exhausted": bool(getattr(usage, "weekly_exhausted", False)),
+                "blocking_meters": (
+                    list(
+                        blocking_meters(
+                            BackendSnapshot(
+                                backend=b,
+                                health=HealthStatus(available=True, reason="ok"),
+                                usage=usage,
+                                quota=quota,
+                            )
+                        )
+                    )
+                    if usage is not None
+                    else []
+                ),
+                "constraining_meter": (
+                    constraining_meter(
+                        BackendSnapshot(
+                            backend=b,
+                            health=HealthStatus(available=True, reason="ok"),
+                            usage=usage,
+                            quota=quota,
+                        )
+                    )
+                    if usage is not None
+                    else None
+                ),
                 "five_hourly_used_percent": getattr(quota, "five_hourly_used_percent", None),
                 "five_hourly_reset_after_seconds": getattr(quota, "five_hourly_reset_after_seconds", None),
                 "weekly_used_percent": getattr(quota, "weekly_used_percent", None),

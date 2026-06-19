@@ -136,7 +136,7 @@ def cmd_version(args: argparse.Namespace) -> int:
 
     sha = _git("rev-parse", "--short", "HEAD")
     if sha is not None:
-        info = {
+        info: dict[str, str | None] = {
             "version": version,
             "mode": "editable",
             "source_sha": sha,

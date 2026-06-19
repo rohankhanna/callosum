@@ -33,7 +33,7 @@ R -> R : extract_features(body)\n(tokens, modalities, needs_tools)
 R -> CF : filter(cells, features)
 CF --> R : compatible cells
 R -> R : predict(features, compatible)\n(uniform | knn)
-R -> S : select(scaled_predictions, capabilities)\n(cost_rank = MEASURED weekly-quota\nburn; CostRankProvider overlay)
+R -> S : select(scaled_predictions, capabilities)\n(cost_rank compatibility rank;\nbackend routing uses composite\n5h + weekly quota pressure)
 S --> R : chosen cell + ranked candidates
 R --> App : RoutingDecision
 

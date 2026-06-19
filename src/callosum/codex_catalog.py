@@ -260,7 +260,7 @@ def load_codex_template(*, codex_bin: str = "codex") -> dict[str, Any] | None:
     if "base_instructions" not in template:
         logger.warning("codex catalog: template model missing base_instructions")
         return None
-    return template
+    return dict(template)
 
 
 def catalog_digest(catalog: dict[str, Any]) -> str:

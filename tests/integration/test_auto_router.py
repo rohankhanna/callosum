@@ -222,17 +222,33 @@ def _seed_quota_rows(db: Path, model: str, n: int, *, before: int, after: int) -
     import time as _time
 
     now = _time.time()
+    delta = after - before
     conn = sqlite3.connect(db)
     try:
         conn.executemany(
             "INSERT INTO requests"
             " (ts_start, ts_end, latency_ms, route, stream, backend_id, status,"
             "  model, quota_reset_crossover, weekly_used_percent_before,"
-            "  weekly_used_percent_after)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "  weekly_used_percent_after, prompt_tokens, completion_tokens, total_tokens)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
-                (now - 100, now - 99, 1000, "/v1/responses", 0, "primary", 200, model, 0, before, after)
-                for _ in range(n)
+                (
+                    now - 100 + i * 2,
+                    now - 99 + i * 2,
+                    1000,
+                    "/v1/responses",
+                    0,
+                    f"seed-{model}",
+                    200,
+                    model,
+                    0,
+                    before + i * delta,
+                    before + (i + 1) * delta,
+                    900,
+                    100,
+                    1000,
+                )
+                for i in range(n)
             ],
         )
         conn.commit()
@@ -250,7 +266,7 @@ async def test_measured_cost_rank_steers_organic_routing(tmp_path: Path) -> None
     # model-a0c3 burns +1% per call; model-a0e6 burns +5%. Both clear the
     # min-nonzero-samples threshold; the rest of the grid stays unmeasured.
     _seed_quota_rows(db, "model-a0c3", 12, before=10, after=11)
-    _seed_quota_rows(db, "model-a0e6", 12, before=10, after=15)
+    _seed_quota_rows(db, "model-a0e6", 12, before=22, after=27)
     backend = _backend()
     async with _client(backends=[backend], usage_log=log) as client:
         r = await client.post("/v1/responses", json={"model": "auto-learning", "input": []})
@@ -258,4 +274,3 @@ async def test_measured_cost_rank_steers_organic_routing(tmp_path: Path) -> None
         served = r.json()["model"]
     # Cheapest measured burn wins under the cold-start (uniform) predictor.
     assert served == "model-a0c3"
-
