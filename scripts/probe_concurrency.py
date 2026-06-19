@@ -15,20 +15,20 @@ Sweep mode also writes a top-level sweep_report.json across all N values
 so the degradation curve is visible at a glance.
 
 Usage:
-    CODEX_PROXY_TOKEN=... python scripts/probe_concurrency.py \\
+    CALLOSUM_TOKEN=... python scripts/probe_concurrency.py \\
         --model model-a0a0 \\
         --path proxy-direct \\
         --n 10
 
     # Sweep across multiple N to find the degradation knee.
-    CODEX_PROXY_TOKEN=... python scripts/probe_concurrency.py \\
+    CALLOSUM_TOKEN=... python scripts/probe_concurrency.py \\
         --model model-a0a0 \\
         --path proxy-direct \\
         --sweep 1,5,10,20
 
     # Vary prompts across the burst so we aren't just sending N copies of
     # the same string (which lets caches/serialization mask real behavior).
-    CODEX_PROXY_TOKEN=... python scripts/probe_concurrency.py \\
+    CALLOSUM_TOKEN=... python scripts/probe_concurrency.py \\
         --model model-a0a0 \\
         --path proxy-direct --n 10 --prompt-source varied
 
@@ -138,14 +138,14 @@ def build_url_body_headers(model: str, path: str, prompt: str) -> tuple[str, dic
 
     if path == "callosum-v1":
         body_responses["model"] = model
-        token = os.environ.get("CODEX_PROXY_TOKEN")
+        token = os.environ.get("CALLOSUM_TOKEN")
         if token:
             headers["Authorization"] = f"Bearer {token}"
         return f"{CALLOSUM_URL}/v1/responses", body_responses, headers
 
     if path == "callosum-codex":
         body_responses["model"] = model
-        token = os.environ.get("CODEX_PROXY_TOKEN")
+        token = os.environ.get("CALLOSUM_TOKEN")
         if token:
             headers["Authorization"] = f"Bearer {token}"
         return f"{CALLOSUM_URL}/codex", body_responses, headers

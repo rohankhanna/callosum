@@ -269,10 +269,10 @@ def build_request_for_path(scenario: dict, model: str, path: str) -> tuple[str, 
     if path == "callosum-v1":
         # Callosum /v1/* is gated by the bearer middleware against the
         # auth-service api_keys table. The operator's client.env (e.g.
-        # ~/.config/codex-proxy/client.env) defines CODEX_PROXY_TOKEN —
+        # ~/.config/callosum/client.env) defines CALLOSUM_TOKEN —
         # source it before running the probe so this env lookup picks
         # it up. The probe never reads the token from disk itself.
-        token = os.environ.get("CODEX_PROXY_TOKEN")
+        token = os.environ.get("CALLOSUM_TOKEN")
         if token:
             headers["Authorization"] = f"Bearer {token}"
         url = f"{CALLOSUM_URL}/v1/chat/completions" if shape == "chat" else f"{CALLOSUM_URL}/v1/responses"
@@ -280,7 +280,7 @@ def build_request_for_path(scenario: dict, model: str, path: str) -> tuple[str, 
 
     if path == "callosum-codex":
         # /codex is Responses-only; convert chat scenarios.
-        token = os.environ.get("CODEX_PROXY_TOKEN")
+        token = os.environ.get("CALLOSUM_TOKEN")
         if token:
             headers["Authorization"] = f"Bearer {token}"
         if shape == "chat":

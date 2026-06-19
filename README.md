@@ -85,7 +85,7 @@ uv sync
 
 The proxy requires a credential custody service running on the local network. Configure it to point to your credential service:
 
-Write `~/.config/codex-proxy/config.toml`:
+Write `~/.config/callosum/config.toml`:
 
 ```toml
 [server]
@@ -93,14 +93,14 @@ host = "127.0.0.1"
 port = 8765
 
 [state]
-dir = "/home/you/.local/state/codex-proxy"
+dir = "/home/you/.local/state/callosum"
 
 [usage_log]
-path = "/home/you/.local/state/codex-proxy/requests.sqlite"
+path = "/home/you/.local/state/callosum/requests.sqlite"
 capture_bodies = true
 
 [auth]
-db = "/home/you/.local/state/codex-proxy/auth.sqlite"
+db = "/home/you/.local/state/callosum/auth.sqlite"
 
 [[backends]]
 id = "primary"
@@ -120,7 +120,7 @@ Replace `proxy_url` with your credential service's URL. Ensure the credential se
 Start the server:
 
 ```
-uv run python -m codex_proxy
+uv run python -m callosum
 ```
 
 It listens on `http://127.0.0.1:8765` by default. Confirm it's up:
@@ -137,7 +137,7 @@ If you set `[auth]` in your config (recommended), every `/v1/*` request needs a 
 **The easy way: web UI.** Open [`http://127.0.0.1:8765/ui/`](http://127.0.0.1:8765/ui/) in a browser. Click "Create account", pick a username and password, then "Mint key" with a label like `daily-driver`. The plaintext key is shown ONCE — copy it immediately into your shell rc:
 
 ```
-echo 'export CODEX_PROXY_TOKEN=<the-plaintext-from-the-ui>' >> ~/.bashrc
+echo 'export CALLOSUM_TOKEN=<the-plaintext-from-the-ui>' >> ~/.bashrc
 source ~/.bashrc
 ```
 
@@ -165,7 +165,7 @@ curl -s -X POST $PROXY/auth/keys \
   | jq -r .api_key
 ```
 
-Either way you end up with a plaintext key that goes into `CODEX_PROXY_TOKEN`. The proxy stores only `sha256(key)`, never the plaintext, so this is your only chance to see it.
+Either way you end up with a plaintext key that goes into `CALLOSUM_TOKEN`. The proxy stores only `sha256(key)`, never the plaintext, so this is your only chance to see it.
 
 If you don't want auth at all (single-operator localhost, no other people, no usage attribution): drop the `[auth]` block from your config. `/v1/*` is then open and the `/ui/` route returns 404.
 
@@ -185,35 +185,35 @@ The history-preserving pattern is to override **per command**, not in your shell
 
 ```
 OPENAI_BASE_URL=http://127.0.0.1:8765/v1 \
-OPENAI_API_KEY=$CODEX_PROXY_TOKEN \
+OPENAI_API_KEY=$CALLOSUM_TOKEN \
 your-tool ...
 ```
 
 Persistent edits (rc files, app settings) work too; they just permanently re-target the tool.
 
-> **Codex CLI does NOT honor `OPENAI_BASE_URL`.** It has its own typed provider system. Setting `OPENAI_BASE_URL=http://127.0.0.1:8765/v1 codex ...` will silently route to OpenAI's real API and present your codex-proxy key as if it were an OpenAI key — which OpenAI then rejects. Use the [Codex CLI section below](#codex-cli) instead.
+> **Codex CLI does NOT honor `OPENAI_BASE_URL`.** It has its own typed provider system. Setting `OPENAI_BASE_URL=http://127.0.0.1:8765/v1 codex ...` will silently route to OpenAI's real API and present your callosum key as if it were an OpenAI key — which OpenAI then rejects. Use the [Codex CLI section below](#codex-cli) instead.
 
 ### Codex CLI
 
 The OpenAI Codex CLI (`codex`, `codex exec`, `codex resume`) uses a typed provider system. Two integration shapes — pick based on whether you want the proxy to be the default for all `codex` commands, or only when explicitly opted into.
 
-#### Option A — `codex_proxy` as the global default (recommended for "single point of auth" setups)
+#### Option A — `callosum` as the global default (recommended for "single point of auth" setups)
 
 Edit `~/.codex/config.toml` so global defaults stay at the top, **before any `[section]` header**.
 
-> **TOML detail that bit me once.** Every `key = value` line after a `[section]` header belongs to that section until the next header. Putting `model_provider = "codex_proxy"` *after* a `[profiles.x]` block silently makes it part of that profile, not a global default. You'll then wonder why `-p via_proxy` is still required.
+> **TOML detail that bit me once.** Every `key = value` line after a `[section]` header belongs to that section until the next header. Putting `model_provider = "callosum"` *after* a `[profiles.x]` block silently makes it part of that profile, not a global default. You'll then wonder why `-p via_proxy` is still required.
 
 ```toml
 # Global defaults — MUST be above any [section] header.
 model = "model-a0e7"
-model_provider = "codex_proxy"
+model_provider = "callosum"
 
 # (your other top-level settings: model_reasoning_effort, personality, etc.)
 
-[model_providers.codex_proxy]
-name = "codex-proxy"
+[model_providers.callosum]
+name = "callosum"
 base_url = "http://127.0.0.1:8765/v1"
-env_key = "CODEX_PROXY_TOKEN"
+env_key = "CALLOSUM_TOKEN"
 wire_api = "responses"
 
 # (your [projects.*], [features], etc. continue below)
@@ -224,7 +224,7 @@ Use it — no flags needed:
 ```
 codex                  # routes through the proxy
 codex exec "..."       # routes through the proxy
-codex resume           # picker shows sessions tagged "codex_proxy"
+codex resume           # picker shows sessions tagged "callosum"
 ```
 
 **One-time migration of pre-existing sessions** so they appear under the new default. The `resume` picker filters by the saved `model_provider` field in each rollout. Migrate (with hardlink backup so it's safe and cheap):
@@ -233,14 +233,14 @@ codex resume           # picker shows sessions tagged "codex_proxy"
 # 1. Migrate the JSONL rollouts (the source of truth for replay).
 cp -al ~/.codex/sessions ~/.codex/sessions.before-migration-$(date +%Y%m%d-%H%M%S)
 find ~/.codex/sessions -name '*.jsonl' \
-  -exec sed -i -E 's/"model_provider":\s*"openai"/"model_provider":"codex_proxy"/g' {} +
+  -exec sed -i -E 's/"model_provider":\s*"openai"/"model_provider":"callosum"/g' {} +
 
 # 2. ALSO migrate the index DB the picker reads from. Without this, the
-#    picker's WHERE model_provider = 'codex_proxy' filter returns 0 rows
+#    picker's WHERE model_provider = 'callosum' filter returns 0 rows
 #    even though the JSONLs are correctly tagged. Discovered the hard way.
 cp ~/.codex/state_5.sqlite ~/.codex/state_5.sqlite.before-migration-$(date +%Y%m%d-%H%M%S)
 sqlite3 ~/.codex/state_5.sqlite \
-  "UPDATE threads SET model_provider = 'codex_proxy' WHERE model_provider = 'openai'"
+  "UPDATE threads SET model_provider = 'callosum' WHERE model_provider = 'openai'"
 ```
 
 The hardlink backup of `sessions/` costs near-zero disk space — `sed -i` rename-on-top breaks the hardlink for each modified file, leaving the backup pointing at the original inode. The index backup is a regular `cp` because SQLite is a single file.
@@ -254,21 +254,21 @@ Use this when you want plain `codex` to keep going to OpenAI directly and only `
 ```toml
 # Global defaults stay whatever they were (OpenAI direct, etc.)
 
-[model_providers.codex_proxy]
-name = "codex-proxy"
+[model_providers.callosum]
+name = "callosum"
 base_url = "http://127.0.0.1:8765/v1"
-env_key = "CODEX_PROXY_TOKEN"
+env_key = "CALLOSUM_TOKEN"
 wire_api = "responses"
 
 [profiles.via_proxy]
 model = "model-a0e7"
-model_provider = "codex_proxy"
+model_provider = "callosum"
 ```
 
 ```
 codex -p via_proxy
 codex exec -p via_proxy "..."
-codex resume -p via_proxy   # picker only shows sessions tagged "codex_proxy"
+codex resume -p via_proxy   # picker only shows sessions tagged "callosum"
 ```
 
 The `-p via_proxy` flag must appear on every invocation you want routed through the proxy.
@@ -281,7 +281,7 @@ The `-p via_proxy` flag must appear on every invocation you want routed through 
 hermes config set model.provider custom
 hermes config set model.base_url http://127.0.0.1:8765/v1
 hermes config set model.api_mode codex_responses
-hermes config set OPENAI_API_KEY "$CODEX_PROXY_TOKEN"
+hermes config set OPENAI_API_KEY "$CALLOSUM_TOKEN"
 ```
 
 Three things worth knowing about the hermes setup that surprised me during integration:
@@ -294,7 +294,7 @@ Verify the setup:
 
 ```bash
 hermes chat -q "say only the words: hello via hermes"
-sqlite3 ~/.local/state/codex-proxy/requests.sqlite \
+sqlite3 ~/.local/state/callosum/requests.sqlite \
   "SELECT id, route, user_id, api_key_id, status FROM requests ORDER BY id DESC LIMIT 1"
 # Expect: route = "responses", status = 200, your user_id + api_key_id populated.
 
@@ -305,7 +305,7 @@ hermes chat -c -q "and again: hello again via hermes"
 Per-invocation alternative (no persistent config change):
 
 ```bash
-OPENAI_API_KEY="$CODEX_PROXY_TOKEN" hermes chat -q "..." \
+OPENAI_API_KEY="$CALLOSUM_TOKEN" hermes chat -q "..." \
   -- /* you'd still need model.provider=custom, model.base_url=..., model.api_mode=codex_responses
         applied somehow; hermes doesn't accept those as flags. The persistent form above is the
         recommended setup for the "single point of auth" use case. */
@@ -317,7 +317,7 @@ OPENAI_API_KEY="$CODEX_PROXY_TOKEN" hermes chat -q "..." \
 
 ```
 OPENAI_API_BASE=http://127.0.0.1:8765/v1 \
-OPENAI_API_KEY=$CODEX_PROXY_TOKEN \
+OPENAI_API_KEY=$CALLOSUM_TOKEN \
 aider --model model-a0e7
 ```
 
@@ -325,7 +325,7 @@ Or with explicit flags (also non-persistent):
 
 ```
 aider --openai-api-base http://127.0.0.1:8765/v1 \
-      --openai-api-key  $CODEX_PROXY_TOKEN \
+      --openai-api-key  $CALLOSUM_TOKEN \
       --model model-a0e7
 ```
 
@@ -336,7 +336,7 @@ Per-project chat history at `.aider.chat.history.md` is unaffected.
 Cursor's "Override OpenAI Base URL" setting is **global and persistent** — there is no per-invocation override.
 
 - **Settings → Models → Override OpenAI Base URL:** `http://127.0.0.1:8765/v1`
-- **Settings → Models → API Key:** your codex-proxy key
+- **Settings → Models → API Key:** your callosum key
 
 ### Continue (VS Code)
 
@@ -344,11 +344,11 @@ Cursor's "Override OpenAI Base URL" setting is **global and persistent** — the
 
 ```json
 {
-  "title": "via codex-proxy (model-a0e7)",
+  "title": "via callosum (model-a0e7)",
   "provider": "openai",
   "model": "model-a0e7",
   "apiBase": "http://127.0.0.1:8765/v1",
-  "apiKey": "<your-codex-proxy-api-key>"
+  "apiKey": "<your-callosum-api-key>"
 }
 ```
 
@@ -359,7 +359,7 @@ from openai import OpenAI
 
 client = OpenAI(
     base_url="http://127.0.0.1:8765/v1",
-    api_key="<your-codex-proxy-api-key>",
+    api_key="<your-callosum-api-key>",
 )
 
 resp = client.responses.create(
@@ -384,7 +384,7 @@ import OpenAI from "openai";
 
 const client = new OpenAI({
   baseURL: "http://127.0.0.1:8765/v1",
-  apiKey: "<your-codex-proxy-api-key>",
+  apiKey: "<your-callosum-api-key>",
 });
 
 const resp = await client.responses.create({
@@ -400,7 +400,7 @@ console.log(resp.output[0].content[0].text);
 
 ```
 curl http://127.0.0.1:8765/v1/responses \
-  -H "Authorization: Bearer $CODEX_PROXY_TOKEN" \
+  -H "Authorization: Bearer $CALLOSUM_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "model-a0e7",
@@ -414,7 +414,7 @@ For the chat-completions shape:
 
 ```
 curl http://127.0.0.1:8765/v1/chat/completions \
-  -H "Authorization: Bearer $CODEX_PROXY_TOKEN" \
+  -H "Authorization: Bearer $CALLOSUM_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"model":"model-a0e7","messages":[{"role":"user","content":"hi"}]}'
 ```
@@ -426,7 +426,7 @@ For streaming, add `"stream": true` to either body.
 Look for one of these knobs in its config:
 
 - "OpenAI base URL", "endpoint", "API base", "custom provider URL" — set to `http://127.0.0.1:8765/v1`.
-- "API key" or "bearer token" — set to your codex-proxy API key.
+- "API key" or "bearer token" — set to your callosum API key.
 - For OpenAI SDK-based clients, `OPENAI_BASE_URL` and `OPENAI_API_KEY` env vars usually override at startup.
 
 ### Claude Code: requires Phase 3
@@ -437,7 +437,7 @@ Routing Claude Code through this proxy means **Phase 3**, not yet built: a `/v1/
 
 ## Configuration reference
 
-`codex-proxy` reads a single TOML file. Default path: `~/.config/codex-proxy/config.toml`. Override with `--config /path/to/config.toml`.
+`callosum` reads a single TOML file. Default path: `~/.config/callosum/config.toml`. Override with `--config /path/to/config.toml`.
 
 ### `[server]`
 
@@ -445,8 +445,8 @@ Routing Claude Code through this proxy means **Phase 3**, not yet built: a `/v1/
 [server]
 host = "127.0.0.1"
 port = 8765
-client_auth_token_env  = "CODEX_PROXY_CLIENT_TOKEN"   # optional
-control_auth_token_env = "CODEX_PROXY_CONTROL_TOKEN"  # optional
+client_auth_token_env  = "CALLOSUM_CLIENT_TOKEN"   # optional
+control_auth_token_env = "CALLOSUM_CONTROL_TOKEN"  # optional
 startup_smoke_test = true                              # optional, default true
 smoke_test_interval_seconds = 3600                     # optional, default 3600 (1h)
 ```
@@ -462,7 +462,7 @@ smoke_test_interval_seconds = 3600                     # optional, default 3600 
 
 ```toml
 [state]
-dir = "/home/you/.local/state/codex-proxy"
+dir = "/home/you/.local/state/callosum"
 ```
 
 - `dir` — optional. Per-backend usage and cooldown snapshots are persisted here so they survive restart. If omitted, all state is memory-only.
@@ -471,7 +471,7 @@ dir = "/home/you/.local/state/codex-proxy"
 
 ```toml
 [usage_log]
-path = "/home/you/.local/state/codex-proxy/requests.sqlite"
+path = "/home/you/.local/state/callosum/requests.sqlite"
 capture_bodies = true
 ```
 
@@ -484,7 +484,7 @@ See [Per-request usage log](#per-request-usage-log) for the full schema.
 
 ```toml
 [auth]
-db = "/home/you/.local/state/codex-proxy/auth.sqlite"
+db = "/home/you/.local/state/callosum/auth.sqlite"
 session_ttl_seconds = 1800   # default
 ```
 
@@ -520,6 +520,8 @@ To distribute load across multiple backends, declare multiple `[[backends]]` ent
 | `GET /status` | no | backend pool view, pin, session bindings |
 | `POST /v1/responses` | bearer when `[auth]` set | native OpenAI Responses API; SSE forwarded byte-for-byte |
 | `POST /v1/chat/completions` | bearer when `[auth]` set | chat-completions shape; translated to/from Responses internally |
+| `POST /v1/eta` | bearer when `[auth]` set | approximate pre-flight p50-p95 latency ranges per cell |
+| `GET /v1/usage` | bearer when `[auth]` set | empirical five-hourly and weekly quota token-rate tables per cell |
 | `GET /diagnose/upstream` | bearer when `[auth]` set | daily contract check; see below |
 | `POST /control/pin` | no | force routing to one backend |
 | `POST /control/unpin` | no | clear the pin |
@@ -537,9 +539,9 @@ Per request, the selector:
 
 1. Drops any backend that does not advertise the requested model.
 2. Drops any backend whose `available` is false or whose `cooldown_until_ts` is in the future.
-3. Prefers `weekly_exhausted=false` over `true`.
-4. Among ties, prefers higher `remaining_fraction` (unknown treated as `0.5`).
-5. Among ties, prefers more recent `probed_at_ts`.
+3. Drops any backend whose observed five-hourly or weekly Codex quota meter is exhausted.
+4. When a forward cost estimate is available, ranks candidates by the worst normalized pressure across both independent ledgers: estimated five-hourly burn against five-hourly headroom and estimated weekly burn against weekly headroom.
+5. When measured data is insufficient, falls back to higher `remaining_fraction` (unknown treated as `0.5`), then more recent `probed_at_ts`.
 6. Final tiebreak: backend `id`, lexicographic.
 
 If the chosen backend returns a retryable error, it is excluded from this request and the selector re-runs.
@@ -580,7 +582,7 @@ For a Plus account the list typically looks like:
 ```toml
 [[backends]]
 id = "primary"
-vault_path = "/home/you/.codex-proxy/vaults/primary/auth.json"
+vault_path = "/home/you/.callosum/vaults/primary/auth.json"
 models = ["model-a0e7", "model-a0c3", "model-a0b8", "model-a0e6", "codex-auto-review"]
 ```
 
@@ -590,7 +592,7 @@ The selector only routes a request when at least one backend advertises the requ
 
 **Auto-routing virtual models (`auto-learning`, `auto-learning-synthetic`, `auto`).** Three virtual model names short-circuit the picker. Any client that can name a model — Codex CLI's `/model`, Hermes' `model.default`, Aider's `--model`, a curl with `"model": "..."` — can opt in.
 
-- **`auto-learning`** — organic explorer. Each request is rewritten to the (model, reasoning_effort) cell with the fewest successful samples in the usage log so the corpus fills evenly across the 16-cell grid (4 models × 4 reasoning levels — see `src/codex_proxy/cell_grid.py`). Round-robin v1; ties break in cell-grid order. Stateless: every call rereads coverage, so concurrent calls converge.
+- **`auto-learning`** — organic explorer. Each request is rewritten to the (model, reasoning_effort) cell with the fewest successful samples in the usage log so the corpus fills evenly across the 16-cell grid (4 models × 4 reasoning levels — see `src/callosum/cell_grid.py`). Round-robin v1; ties break in cell-grid order. Stateless: every call rereads coverage, so concurrent calls converge.
 - **`auto-learning-synthetic`** — synthetic background tier. Same round-robin algorithm, but uses an **independent coverage query** (only counts rows where `routing_mode='auto-learning-synthetic'`) so synthetics don't double-count organic samples and vice versa. Driven by a built-in worker (see `[auto_router]` config below) that fires bland prompts when the daily floor or pct-of-organic target hasn't been met. You can also send this name yourself for testing.
 - **`auto`** — cost-optimal exploiter. Reserved for the router that picks the cell with the lowest expected Δquota per request. Currently returns `503 NotTrained` with an explanatory message until the cost model is fit on the explorer's corpus.
 
@@ -599,7 +601,7 @@ The rewrite happens before the selector, so backends do **not** need to advertis
 Inspect cell coverage (per tier):
 
 ```bash
-sqlite3 ~/.local/state/codex-proxy/requests.sqlite \
+sqlite3 ~/.local/state/callosum/requests.sqlite \
   "SELECT routing_mode, model, reasoning_effort, COUNT(*) FROM requests
    WHERE routing_mode IN ('auto-learning', 'auto-learning-synthetic') AND status = 200
    GROUP BY routing_mode, model, reasoning_effort ORDER BY 1, 2, 3"
@@ -669,6 +671,86 @@ curl -X POST http://127.0.0.1:8765/control/unpin
 ```
 
 While pinned the selector considers only that backend (no fallback) — upstream errors surface directly. Pin overrides the session header.
+
+## Pre-flight ETA ranges
+
+`POST /v1/eta` exposes the request-log-backed time estimator as approximate
+operator guidance. Send `input_tokens` plus optional `model` and
+`reasoning_effort` filters; the response returns one entry per matching cell
+with `eta.p50_ms`, `eta.high_ms`, `eta.range = "approximate_p50_to_p95"`,
+`eta.exact = false`, and metadata for source, sample counts, confidence, and
+verifiability. When usage logging or the estimator is unavailable, the route
+returns `available: false` instead of inventing a prediction.
+
+## Empirical usage-rate table
+
+`GET /v1/usage` exposes the request-log-backed quota-rate analysis used for
+operator observability. The backward-compatible top-level `unit`,
+`metadata`, and `rates[]` fields still report the weekly meter. New clients
+should read `meters.five_hourly` and `meters.weekly`, each with its own
+`unit`, `metadata`, and `rates[]` table keyed by served `model` and
+`reasoning_effort`.
+
+The two remote Codex quota ledgers are measured independently:
+
+- `five_hourly_used_percent`, reset by `five_hourly_reset_at`
+- `weekly_used_percent`, reset by `weekly_reset_at`
+
+The same upstream request consumes both ledgers, but not necessarily at the
+same rate. Either ledger can independently block access, so weekly-only
+measurement is not enough for quota-aware routing decisions. The endpoint also
+returns `relationships[]` rows per cell with empirical
+`five_hourly_per_weekly_ratio` and `weekly_per_five_hourly_ratio` when both
+meters have enough closed tick windows.
+
+Routing uses the same quantized meter-window substrate for composite
+quota-aware backend selection. It does not average the ledgers: a candidate
+whose five-hourly estimate would consume too much of the remaining five-hourly
+headroom loses even if weekly headroom is ample, and the reverse is true when
+weekly quota is the tighter constraint. `/status` and no-viable-backend
+diagnostics expose `blocking_meters` and the currently `constraining_meter`
+when quota snapshots are available.
+
+Each rate row includes `samples.total`, `samples.usable`, component entries
+for `input_uncached`, `input_cached`, `output`, and `reasoning`, a
+`cache_effect`, `source`, `confidence`, and `updated_at`. A component is
+reported with `available: false` when the request log cannot identify that
+coefficient independently, for example because cached and uncached token
+counts are collinear or there are too few positive quota-delta samples. Local
+cells are reported as `local_zero` because they do not consume ChatGPT/Codex
+plan quota.
+
+High-confidence quota rates are fit from serialized integer-meter windows, not
+single request rows. Because both percent meters are integer-resolution, a row
+with no visible movement for that meter is treated as pending burn evidence.
+The estimator accumulates serialized same-backend rows while the selected
+meter is unchanged and emits one aggregate training sample only when a later
+request advances that same meter. If that pending window crosses a reset, a
+credit/top-up change, a concurrent same-backend request, or multiple served
+cells, it is excluded rather than guessed. The current request log does not
+persist a non-secret upstream credential/account identifier, so this is
+backend-level serialization rather than true credential-level serialization.
+Each meter's metadata under `cost_label_attribution` reports the attribution
+key, included serialized count, and excluded counts such as `overlapped`,
+`scheduled_reset`, `credit_or_topup_change`, `zero_quantized_or_unobservable`,
+`unknown_negative_delta`, `reset_crossover`, `non_success`, `missing_quota`,
+and `nonpositive_delta`.
+
+Call it directly:
+
+```bash
+curl -s http://127.0.0.1:8765/v1/usage \
+  -H "Authorization: Bearer $CALLOSUM_TOKEN" | jq .
+```
+
+The units are integer-resolution plan-quota counters persisted from upstream
+quota snapshots. They are not OpenAI API dollar pricing, and the endpoint
+intentionally does not import published API token prices or prompt-cache
+discounts. Cached-vs-uncached differences are only "measured from this proxy's
+request log" when the logged quota deltas make that split identifiable.
+Upstream prompt-cache prefix matching, partial-match behavior, ordering
+sensitivity, and expiry are upstream behavior and are not verified by this
+quota data.
 
 ## Per-request usage log
 
@@ -747,11 +829,11 @@ Cron example:
 
 ```
 # Run at 09:00 every day; alert via mail on any failure.
-0 9 * * *   curl -s -H "Authorization: Bearer $CODEX_PROXY_DIAG_KEY" \
+0 9 * * *   curl -s -H "Authorization: Bearer $CALLOSUM_DIAG_KEY" \
                  http://127.0.0.1:8765/diagnose/upstream \
             | jq -e '.ok' > /dev/null \
-            || echo "codex-proxy upstream check failed at $(date)" \
-                | mail -s "codex-proxy: upstream regression" you@example.com
+            || echo "callosum upstream check failed at $(date)" \
+                | mail -s "callosum: upstream regression" you@example.com
 ```
 
 For systemd users, prefer a `systemd.timer` over cron — easier to inspect via `systemctl list-timers` and to log with `journalctl`.
@@ -794,11 +876,11 @@ bash deploy/systemd/install.sh --enable
 
 ## Operational notes
 
-- **Background process interruption.** When running the service in the background with `&` (e.g., `uv run codex-proxy ... &`), the process is no longer in the terminal's foreground process group, so Ctrl+C won't reach it directly. Use `kill <pid>` or `killall codex-proxy` to stop background instances, or use a process manager (tmux, screen, systemd) for reliable lifecycle management. The service includes explicit signal handlers (SIGINT/SIGTERM) to ensure clean shutdown.
+- **Background process interruption.** When running the service in the background with `&` (e.g., `uv run callosum ... &`), the process is no longer in the terminal's foreground process group, so Ctrl+C won't reach it directly. Use `kill <pid>` or `killall callosum` to stop background instances, or use a process manager (tmux, screen, systemd) for reliable lifecycle management. The service includes explicit signal handlers (SIGINT/SIGTERM) to ensure clean shutdown.
 - **Managed service control.** On systems running Callosum as a systemd user service, use `callosum service status`, `callosum service logs --follow`, `callosum service logs -n 100`, `callosum service restart`, `callosum service stop`, and `callosum service start`. Do not run multiple instances on the same port (8765 by default)—only the first will bind successfully; subsequent instances fail with "address already in use" and requests will hit the original instance instead.
-- **Auth.json refresh-chain caveat.** The proxy reads `auth.json` directly and owns the OAuth refresh chain for that account. Every successful refresh produces a new refresh token and writes it back to the file. If anything else (e.g. your normal `codex` usage on the same account) refreshes against the same auth file in parallel, whichever side rotates first invalidates the other. **Either dedicate an account to the proxy, or route your own Codex usage through the proxy too** (using the [Codex CLI Option A](#option-a--codex_proxy-as-the-global-default-recommended-for-single-point-of-auth-setups) global-default setup).
+- **Auth.json refresh-chain caveat.** The proxy reads `auth.json` directly and owns the OAuth refresh chain for that account. Every successful refresh produces a new refresh token and writes it back to the file. If anything else (e.g. your normal `codex` usage on the same account) refreshes against the same auth file in parallel, whichever side rotates first invalidates the other. **Either dedicate an account to the proxy, or route your own Codex usage through the proxy too** (using the [Codex CLI Option A](#option-a--callosum-as-the-global-default-recommended-for-single-point-of-auth-setups) global-default setup).
 - **Body capture is sensitive data.** With `capture_bodies = true`, prompts and responses are stored on disk in cleartext (after zlib decompression). Treat the database file as sensitive; `chmod 600` is a sensible baseline. Flip `capture_bodies = false` once you've collected enough corpus to model consumption; turn it back on whenever Codex updates its models.
-- **Quota-percent granularity.** `five_hourly_used_percent` and `weekly_used_percent` are integer percentages reported by the upstream (over the wire as `x-codex-primary-used-percent` and `x-codex-secondary-used-percent` respectively). Single small calls often show `Δ = 0`. Aggregate across many calls for a useful signal.
+- **Quota-percent granularity.** `five_hourly_used_percent` and `weekly_used_percent` are integer percentages reported by the upstream (over the wire as `x-codex-primary-used-percent` and `x-codex-secondary-used-percent` respectively). Single small calls often show `Δ = 0`; those rows are pending burn evidence, not free requests. The rate fitter aggregates serialized rows until the meter ticks and uses that closed window as the training label.
 - **No log rotation.** The usage-log SQLite file grows append-only. Archive manually when it gets large.
 - **Localhost only.** The proxy binds `127.0.0.1`. If you need to expose it to other machines, front it with TLS (Caddy / nginx) and rely on `[auth]` for access control.
 - **One worker.** uvicorn defaults to one worker; the SQLite databases are not safe across multiple worker processes. Don't increase `--workers`.

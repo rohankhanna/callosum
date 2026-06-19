@@ -20,7 +20,7 @@
 set -euo pipefail
 
 # `pwd -P` resolves symlinks. Without it, a checkout reached via a
-# symlink (e.g. ~/Desktop/codex-proxy → callosum) would produce a
+# symlink (e.g. ~/Desktop/callosum → callosum) would produce a
 # REPO_ROOT pointing at the symlink, and systemd-set WorkingDirectory
 # would dereference inconsistently across boots. Always commit the
 # physical path to the unit.
