@@ -187,7 +187,35 @@ All paths are under `src/callosum/`.
   pointing at the same `main()` function.
 - `usage_log.py` — SQLite request log. Every request lands here as
   a row in the `requests` table with request and response payloads,
-  status, latency, and tokens.
+  status, latency, and tokens. It also owns the first peer-quality
+  reward substrate: `peer_quality_opinions` stores nonce-validated,
+  per-session judge-to-subject model opinions separately from request
+  rows so routing behavior can remain unchanged while the matrix
+  accumulates.
+- `peer_quality.py` — parser and fail-closed stripper for hidden
+  in-band `<<qop ...>>` quality-opinion markers. It records only
+  markers carrying the current request nonce; wrong-nonce markers are
+  counted as echoes and malformed current-nonce markers are stripped
+  without becoming training labels. The sending side is gated by
+  `CALLOSUM_PEER_QUALITY_CAPTURE_RATE` (default `0`, disabled): when
+  enabled for a sampled streamed request, `app.py` exact-matches recent
+  same-session assistant outputs from the usage log, wraps only those
+  prior non-self messages with model/effort provenance tags in the
+  outbound upstream body, and adds a nonce-bearing audit instruction.
+  Injection is skipped when the projected outbound body would exceed
+  the selected cell's known backend context window after the router
+  safety margin; the added audit/provenance overhead is also capped
+  independently. This is a conservative near-term gate, not the final
+  tokenizer story: the long-term path should use provider-specific
+  tokenizers and reserve output tokens explicitly. Tool/function-call
+  requests and turns without exact text assistant outputs are skipped
+  rather than forcing an opinion slot.
+  The user's visible stream and persisted response body have qop
+  markers stripped before storage/display. `peer_quality_opinions`
+  stores valid opinions; `peer_quality_capture_metrics` stores
+  request-level counters for valid opinions, wrong-nonce echoes, and
+  malformed markers so the operator can measure task interference and
+  echo behavior before any routing use.
 - `routing_events.py` — `GET /events/routing` SSE stream of
   per-request routing decisions. The `snorkel` sidecar HUD consumes
   this to display the actually-routed model in its bottom bar.

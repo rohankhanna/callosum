@@ -44,13 +44,54 @@ def _build():
 
 def test_factory_defaults_yield_a_working_cold_start_router() -> None:
     """RoutingConfig() with no overrides → no-op embedding + uniform
-    predictor + cost-weighted selector → a working pipeline that picks
-    the cheapest compatible cell."""
+    predictor + cost-weighted selector → a working pipeline. For a
+    simple prompt, the cold-start suitability layer still lets the
+    cheapest compatible cell win."""
     router = _build()
     body = {"messages": [{"role": "user", "content": "hello"}]}
     decision = asyncio.run(router.route(body, [LOCAL, REMOTE_MID, REMOTE_HIGH]))
     assert decision.cell == LOCAL  # cheapest compatible
     assert decision.predictor_id == "uniform"
+
+
+def test_cold_start_router_promotes_harder_prompt_past_cheapest_default_cell() -> None:
+    """Flat predictions should not send a hard design/debug prompt to
+    the cheapest default-effort cell just because it is compatible."""
+    router = _build()
+    body = {
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Debug this failing architecture and propose an "
+                    "implementation roadmap with tests."
+                ),
+            }
+        ]
+    }
+    decision = asyncio.run(router.route(body, [LOCAL, REMOTE_MID, REMOTE_HIGH]))
+    assert decision.cell == REMOTE_HIGH
+
+
+def test_cold_start_router_lets_large_local_model_handle_moderate_tasks() -> None:
+    """A local `default` cell is not automatically weak when the backend
+    reports enough parameter_count to make it a plausible moderate-task
+    target."""
+    local_large = Cell(model="local-large", reasoning_effort="default")
+    caps = {
+        local_large: CellCapabilities(
+            context_window=128_000,
+            modalities=frozenset({"text"}),
+            supports_tools=False,
+            cost_rank=0,
+            parameter_count=31_000_000_000,
+        ),
+        REMOTE_MID: CAPS[REMOTE_MID],
+    }
+    router = build_router(RoutingConfig(), capabilities_of=caps.__getitem__)
+    body = {"messages": [{"role": "user", "content": "Explain the routing design."}]}
+    decision = asyncio.run(router.route(body, [local_large, REMOTE_MID]))
+    assert decision.cell == local_large
 
 
 def test_router_picks_only_modality_capable_cell() -> None:
@@ -86,18 +127,14 @@ def test_router_picks_only_tool_capable_cell() -> None:
 
 def test_router_prefers_large_context_cell_when_prompt_is_huge() -> None:
     """A 250K-token prompt no longer EXCLUDES LOCAL (128K) — the filter
-    is soft, not hard. But the Router's window-fit scaling penalizes
-    LOCAL's prediction enough that the selector should prefer MID
-    (256K, full headroom) over LOCAL even though LOCAL is cheaper.
-    Window fit is the routing preference signal the user asked for."""
+    is soft, not hard. The cold-start suitability layer treats this as
+    an extreme request, and the Router's window-fit scaling then favors
+    the strongest large-window compatible cell."""
     router = _build()
     huge = "x" * 750_000  # ~250K tokens at chars/3
     body = {"messages": [{"role": "user", "content": huge}]}
     decision = asyncio.run(router.route(body, [LOCAL, REMOTE_MID, REMOTE_HIGH]))
-    # MID has full headroom (256K > 254K budget); LOCAL doesn't (128K < 254K)
-    # so its scaled prediction halves. With uniform prior 0.5, LOCAL → ~0.25,
-    # falls below the selector's 0.5 cutoff, MID at 0.5 wins.
-    assert decision.cell == REMOTE_MID
+    assert decision.cell == REMOTE_HIGH
     # LOCAL must still be in the candidate list — soft preference, not exclusion.
     assert LOCAL in decision.candidates
 
@@ -161,11 +198,13 @@ def test_factory_rejects_unknown_impl_names() -> None:
 
 def test_decision_carries_predictions_keyed_by_cell_string() -> None:
     """RoutingDecision.predictions is keyed by 'model effort' strings so
-    the request-log writer can serialize without a custom encoder."""
+    the request-log writer can serialize without a custom encoder. With
+    the cold-start suitability layer active, these are adjusted scores,
+    not the raw uniform predictor's 0.5 priors."""
     router = _build()
     body = {"messages": [{"role": "user", "content": "hi"}]}
     decision = asyncio.run(router.route(body, [LOCAL, REMOTE_MID]))
     assert decision.predictions == {
-        "local-llm default": 0.5,
-        "remote-mid medium": 0.5,
+        "local-llm default": 0.58,
+        "remote-mid medium": 0.6,
     }

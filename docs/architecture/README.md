@@ -12,9 +12,10 @@ Regenerate when the source changes.
 
 - `request_lifecycle.puml` — sequence diagram of one request from
   inbound POST through routing decision, backend dispatch, upstream
-  streaming, and usage-log write. Mirrors the lifecycle described in
-  prose in `ARCHITECTURE.md`. Renders without external dependencies
-  (just PlantUML + Java).
+  streaming, usage-log write, peer-quality capture, and the offline
+  shadow label pass that can turn captured peer opinions into
+  `quality_score` training candidates. Renders without external
+  dependencies (just PlantUML + Java).
 - `runtime_topology.puml` — component diagram of the loopback proxy,
   backend lanes, persistent state, capability harness, and scheduled
   auto-dev path. This is the quickest visual for understanding where

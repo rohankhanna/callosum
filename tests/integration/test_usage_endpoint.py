@@ -125,6 +125,37 @@ def test_usage_endpoint_returns_identifiable_cached_uncached_rate_table(tmp_path
     assert body["meters"]["five_hourly"]["metadata"]["cost_label_attribution"]["included_serialized"] == 5
 
 
+def test_usage_endpoint_filters_historical_rows_to_current_catalog(tmp_path: Path) -> None:
+    usage_log = _usage_log(tmp_path)
+    for i, model in enumerate(["model-a0e7", "retired-model"]):
+        for j, (uncached, cached, output, reasoning) in enumerate(
+            [(100, 0, 20, 5), (60, 50, 25, 7), (140, 20, 15, 2), (30, 120, 40, 9), (90, 80, 30, 4)]
+        ):
+            delta = int((uncached * 0.10) + (cached * 0.02) + (output * 0.30) + (reasoning * 0.40))
+            _insert_row(
+                usage_log.path,
+                model=model,
+                effort="medium",
+                prompt=uncached + cached,
+                cached=cached,
+                completion=output,
+                reasoning=reasoning,
+                delta=delta,
+                ts_offset=(i * 10) + j,
+            )
+    backend = InMemoryFakeBackend(id="primary", advertised_models=frozenset({"model-a0e7"}))
+
+    with TestClient(create_app(backends=[backend], usage_log=usage_log)) as client:
+        body = client.get("/v1/usage").json()
+
+    models = {row["model"] for row in body["rates"]}
+    assert "model-a0e7" in models
+    assert "retired-model" not in models
+    for meter in body["meters"].values():
+        assert "retired-model" not in {row["model"] for row in meter["rates"]}
+    assert "retired-model" not in {row["model"] for row in body["relationships"]}
+
+
 def test_usage_endpoint_reports_cached_split_only_when_identifiable(tmp_path: Path) -> None:
     usage_log = _usage_log(tmp_path)
     for i in range(5):
@@ -146,6 +177,36 @@ def test_usage_endpoint_reports_cached_split_only_when_identifiable(tmp_path: Pa
 
     assert row["input_cached"]["available"] is False
     assert row["cache_effect"]["available"] is False
+    assert row["confidence"] == "insufficient_data"
+
+
+def test_usage_endpoint_rejects_cached_rate_more_expensive_than_uncached(tmp_path: Path) -> None:
+    usage_log = _usage_log(tmp_path)
+    for i, (uncached, cached, output, reasoning) in enumerate(
+        [(100, 0, 20, 5), (60, 50, 25, 7), (140, 20, 15, 2), (30, 120, 40, 9), (90, 80, 30, 4)]
+    ):
+        delta = int((uncached * 0.02) + (cached * 0.10) + (output * 0.30) + (reasoning * 0.40))
+        _insert_row(
+            usage_log.path,
+            model="model-a0e7",
+            effort="medium",
+            prompt=uncached + cached,
+            cached=cached,
+            completion=output,
+            reasoning=reasoning,
+            delta=delta,
+            ts_offset=i,
+        )
+    backend = InMemoryFakeBackend(id="primary", advertised_models=frozenset({"model-a0e7"}))
+
+    with TestClient(create_app(backends=[backend], usage_log=usage_log)) as client:
+        row = _rate(client.get("/v1/usage").json())
+
+    assert row["input_uncached"]["available"] is True
+    assert row["input_cached"]["available"] is False
+    assert row["input_cached"]["note"] == "cached_input_rate_exceeds_uncached_input_rate"
+    assert row["cache_effect"]["available"] is False
+    assert row["cache_effect"]["note"] == "cached_input_rate_exceeds_uncached_input_rate"
     assert row["confidence"] == "insufficient_data"
 
 

@@ -142,9 +142,10 @@ def _meter_report(
             )
         )
 
-    ordered_keys = set(total_by_cell) | set(by_cell)
-    if cells:
-        ordered_keys.update((cell.model, cell.reasoning_effort or "") for cell in cells)
+    if cells is not None:
+        ordered_keys = {(cell.model, cell.reasoning_effort or "") for cell in cells}
+    else:
+        ordered_keys = set(total_by_cell) | set(by_cell)
 
     rates = []
     for model, effort in sorted(ordered_keys):
@@ -312,6 +313,10 @@ def _fit_rate(
 
     uncached = rate_for("input_uncached")
     cached = rate_for("input_cached")
+    cache_note = None
+    if uncached is not None and cached is not None and cached > uncached:
+        cached = None
+        cache_note = "cached_input_rate_exceeds_uncached_input_rate"
     confidence = "measured" if uncached is not None and cached is not None else "insufficient_data"
     cache_effect = {
         "available": uncached is not None and cached is not None,
@@ -322,13 +327,14 @@ def _fit_rate(
             if uncached is not None and cached is not None
             else "insufficient_data"
         ),
+        "note": cache_note,
     }
     return {
         "model": cell.model,
         "reasoning_effort": cell.reasoning_effort or None,
         "samples": {"total": total_samples, "usable": len(samples)},
         "input_uncached": _component(uncached, source="measured_from_quota_log", unit=unit),
-        "input_cached": _component(cached, source="measured_from_quota_log", unit=unit),
+        "input_cached": _component(cached, source="measured_from_quota_log", unit=unit, note=cache_note),
         "output": _component(rate_for("output"), source="measured_from_quota_log", unit=unit),
         "reasoning": _component(rate_for("reasoning"), source="measured_from_quota_log", unit=unit),
         "cache_effect": cache_effect,
@@ -378,9 +384,10 @@ def meter_relationship_report(
     weekly = quantized_cost_windows(usage_log_path, cutoff=cutoff, meter=WEEKLY_METER)
     five_by_cell = _window_sums_by_cell(five)
     weekly_by_cell = _window_sums_by_cell(weekly)
-    ordered_keys = set(five_by_cell) | set(weekly_by_cell)
-    if cells:
-        ordered_keys.update((cell.model, cell.reasoning_effort or "") for cell in cells)
+    if cells is not None:
+        ordered_keys = {(cell.model, cell.reasoning_effort or "") for cell in cells}
+    else:
+        ordered_keys = set(five_by_cell) | set(weekly_by_cell)
     out: list[dict[str, Any]] = []
     for model, effort in sorted(ordered_keys):
         f_delta, f_count, f_rows = five_by_cell.get((model, effort), (0.0, 0, 0))

@@ -4,11 +4,14 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import re
+import secrets
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -38,6 +41,7 @@ from callosum.config import AutoRouterConfig
 from callosum.errors import RETRYABLE, BackendError, ErrorClass
 from callosum.fallback import FallbackExecutor, should_attempt_fallback
 from callosum.label_ui import install_label_ui
+from callosum.peer_quality import PeerQualityOpinion, extract_peer_quality_opinions
 from callosum.routing.cost_estimator import (
     CompositeCostModelProvider,
     CompositeCostUsageEstimator,
@@ -46,6 +50,7 @@ from callosum.routing.cost_estimator import (
 from callosum.routing.cost_model import CostRankProvider
 from callosum.routing.exploration import exploration_order, is_exploration_request
 from callosum.routing.factory import build_router
+from callosum.routing.features import _approx_tokens
 from callosum.routing.protocols import CellCapabilities
 from callosum.routing.router import NoCompatibleCellError, Router
 from callosum.routing.time_estimator import TimeModelProvider, TimeUsageEstimator
@@ -54,7 +59,7 @@ from callosum.routing.usage_rates import usage_rate_report
 from callosum.selector import BackendSnapshot, blocking_meters, constraining_meter, select
 from callosum.selectors import SelectorError, is_selector, parse_selector
 from callosum.session import SessionRegistry
-from callosum.usage_log import RoutingAttempt, UsageLog, UsageLogEntry
+from callosum.usage_log import RoutingAttempt, SessionAssistantTurn, UsageLog, UsageLogEntry
 
 logger = logging.getLogger("callosum.startup")
 
@@ -93,8 +98,10 @@ _EXHAUSTED_STATUS: dict[ErrorClass, int] = {
 # and read by response handlers to include in X-Proxy-Request-ID header.
 _request_id_context: ContextVar[int | None] = ContextVar("request_id", default=None)
 
-# Context variable to signal that this request needs complexity extraction from the response.
-# Set to True for auto-learning requests, used by response handlers to extract {{{N}}}.
+# Deprecated collection flag for marker-only prompt complexity labels.
+# New requests keep this False; scrubbers may still remove legacy/context-poisoned
+# markers from output, but the bare numeric class is no longer collected as
+# routing evidence because it lacks judge/model provenance.
 _extract_complexity_context: ContextVar[bool] = ContextVar("extract_complexity", default=False)
 
 # Context variable to store the extracted complexity class (1, 2, or 3) after response is processed.
@@ -109,6 +116,217 @@ _complexity_class_context: ContextVar[int | None] = ContextVar("complexity_class
 # Values: 'auto', 'canary_redirect', 'forced_remote', 'forced_local',
 # 'forced_offline', or None (no router; pass-through path).
 _effective_routing_mode_context: ContextVar[str | None] = ContextVar("effective_routing_mode", default=None)
+
+_PEER_QUALITY_CAPTURE_RATE_ENV = "CALLOSUM_PEER_QUALITY_CAPTURE_RATE"
+_PEER_QUALITY_MAX_PRIORS = 4
+_PEER_QUALITY_OVERHEAD_TOKEN_BUDGET = 1200
+
+
+@dataclass(frozen=True, slots=True)
+class _PeerQualitySubject:
+    request_id: int
+    model: str
+    reasoning_effort: str | None
+
+
+@dataclass(slots=True)
+class _PeerQualityCapture:
+    nonce: str
+    opinions: list[PeerQualityOpinion] = field(default_factory=list)
+    echo_count: int = 0
+    malformed_count: int = 0
+    _seen_markers: set[str] = field(default_factory=set)
+
+    def apply(self, text: str) -> str:
+        extracted = extract_peer_quality_opinions(text, nonce=self.nonce)
+        for opinion in extracted.opinions:
+            if opinion.raw_marker in self._seen_markers:
+                continue
+            self._seen_markers.add(opinion.raw_marker)
+            self.opinions.append(opinion)
+        self.echo_count += extracted.echo_count
+        self.malformed_count += extracted.malformed_count
+        return extracted.cleaned_text
+
+
+def _peer_quality_capture_enabled() -> bool:
+    rate = _peer_quality_capture_rate()
+    if rate <= 0:
+        return False
+    if rate >= 1:
+        return True
+    return secrets.randbelow(10_000) < int(rate * 10_000)
+
+
+def _peer_quality_capture_rate() -> float:
+    try:
+        return float(os.environ.get(_PEER_QUALITY_CAPTURE_RATE_ENV, "0"))
+    except ValueError:
+        return 0.0
+
+
+def _inject_peer_quality_prompt(
+    body: dict[str, Any],
+    *,
+    capture: _PeerQualityCapture,
+    usage_log: UsageLog | None,
+    session_id: str | None,
+    current_cell: Cell,
+    context_window_tokens: int | None = None,
+    safety_margin_tokens: int = 8192,
+) -> dict[str, Any]:
+    """Add hidden provenance tags and qop instruction to the outbound body.
+
+    The injection is deliberately narrow: stream-only caller, explicit sample
+    gate, same-session rows only, exact text match against prior assistant
+    messages, skip tool/function requests, and budget both provenance overhead
+    and the target cell context window. The context check is a conservative
+    fail-closed gate; the long-term version should use provider tokenizers and
+    explicit output-token reservation instead of the rough chars/3 estimate.
+    """
+    if usage_log is None or session_id is None:
+        return body
+    if body.get("tools") or body.get("functions"):
+        return body
+    turns = usage_log.recent_session_assistant_turns(session_id, limit=_PEER_QUALITY_MAX_PRIORS * 2)
+    if not turns:
+        return body
+    subjects = _peer_quality_subjects(turns, current_cell=current_cell)
+    if not subjects:
+        return body
+    out = _tag_peer_quality_subjects(body, subjects)
+    if out is body:
+        return body
+    instruction = _peer_quality_instruction(capture.nonce)
+    injected = _append_peer_quality_instruction(out, instruction)
+    base_tokens = _approx_tokens(json.dumps(body, separators=(",", ":")))
+    projected_tokens = _approx_tokens(json.dumps(injected, separators=(",", ":")))
+    overhead_tokens = max(0, projected_tokens - base_tokens)
+    if overhead_tokens > _PEER_QUALITY_OVERHEAD_TOKEN_BUDGET:
+        return body
+    if context_window_tokens is not None and projected_tokens + safety_margin_tokens > context_window_tokens:
+        return body
+    return injected
+
+
+def _context_window_for_cell(backends_list: Sequence[Backend], cell: Cell) -> int | None:
+    windows: list[int] = []
+    for backend in backends_list:
+        if cell.model not in backend.advertised_models:
+            continue
+        cell_caps = getattr(backend, "cell_capabilities", None)
+        if cell_caps is None:
+            continue
+        try:
+            caps = cell_caps(cell.model)
+        except Exception:
+            continue
+        if caps.context_window > 0:
+            windows.append(caps.context_window)
+    return min(windows) if windows else None
+
+
+def _peer_quality_subjects(
+    turns: list[SessionAssistantTurn],
+    *,
+    current_cell: Cell,
+) -> dict[str, _PeerQualitySubject]:
+    subjects: dict[str, _PeerQualitySubject] = {}
+    current_effort = current_cell.reasoning_effort or None
+    for turn in turns:
+        if turn.model == current_cell.model and turn.reasoning_effort == current_effort:
+            continue
+        subjects.setdefault(
+            turn.response_text,
+            _PeerQualitySubject(
+                request_id=turn.request_id,
+                model=turn.model,
+                reasoning_effort=turn.reasoning_effort,
+            ),
+        )
+        if len(subjects) >= _PEER_QUALITY_MAX_PRIORS:
+            break
+    return subjects
+
+
+def _tag_peer_quality_subjects(
+    body: dict[str, Any],
+    subjects: dict[str, _PeerQualitySubject],
+) -> dict[str, Any]:
+    if "messages" in body and isinstance(body["messages"], list):
+        messages: list[Any] = []
+        changed = False
+        for message in body["messages"]:
+            if not isinstance(message, dict):
+                messages.append(message)
+                continue
+            tagged = _tag_chat_message(message, subjects)
+            changed = changed or tagged is not message
+            messages.append(tagged)
+        return {**body, "messages": messages} if changed else body
+    if "input" in body and isinstance(body["input"], list):
+        items: list[Any] = []
+        changed = False
+        for item in body["input"]:
+            if not isinstance(item, dict):
+                items.append(item)
+                continue
+            tagged = _tag_chat_message(item, subjects)
+            changed = changed or tagged is not item
+            items.append(tagged)
+        return {**body, "input": items} if changed else body
+    return body
+
+
+def _tag_chat_message(message: dict[str, Any], subjects: dict[str, _PeerQualitySubject]) -> dict[str, Any]:
+    if message.get("role") != "assistant":
+        return message
+    content = message.get("content")
+    if isinstance(content, str):
+        subject = subjects.get(content)
+        if subject is None:
+            return message
+        return {**message, "content": _wrap_peer_quality_subject(content, subject)}
+    if isinstance(content, list):
+        parts: list[Any] = []
+        changed = False
+        for part in content:
+            if not isinstance(part, dict) or not isinstance(part.get("text"), str):
+                parts.append(part)
+                continue
+            subject = subjects.get(part["text"])
+            if subject is None:
+                parts.append(part)
+                continue
+            parts.append({**part, "text": _wrap_peer_quality_subject(part["text"], subject)})
+            changed = True
+        return {**message, "content": parts} if changed else message
+    return message
+
+
+def _wrap_peer_quality_subject(text: str, subject: _PeerQualitySubject) -> str:
+    cell = f"{subject.model}|{subject.reasoning_effort}" if subject.reasoning_effort else subject.model
+    label = f"{cell}|{subject.request_id}"
+    return f"<{label}>{text}</{label}>"
+
+
+def _peer_quality_instruction(nonce: str) -> str:
+    return (
+        "Hidden Callosum quality audit. After completing the user's requested answer, "
+        "emit one compact marker for each prior assistant message wrapped in <model|effort|request_id> tags. "
+        "Use exactly this format: <<qop nonce="
+        f"{nonce} subject=model|effort subject_request_id=request_id score=-1|0|+1 reason=short>>. "
+        "Judge only tagged messages not produced by your current model. Do not mention this audit."
+    )
+
+
+def _append_peer_quality_instruction(body: dict[str, Any], instruction: str) -> dict[str, Any]:
+    if "messages" in body and isinstance(body["messages"], list):
+        return {**body, "messages": [{"role": "system", "content": instruction}, *body["messages"]]}
+    existing = body.get("instructions")
+    if isinstance(existing, str) and existing.strip():
+        return {**body, "instructions": f"{existing}\n\n{instruction}"}
+    return {**body, "instructions": instruction}
 
 # Failure-observation registry holder. Set by create_app; consulted by
 # _log_attempt. Module-level rather than parameter-plumbed because
@@ -150,21 +368,6 @@ _OUTPUT_FORECASTER: Any = None
 # realized latency_ms post-request (always verifiable — latency has no
 # integer-resolution problem; ). Reuses _OUTPUT_FORECASTER.
 _TIME_ESTIMATOR: Any = None
-
-# Complexity classification instruction appended to auto-learning requests.
-# The model outputs {{{1}}}, {{{2}}}, or {{{3}}} at the start of its response.
-_COMPLEXITY_CLASSIFIER_INSTRUCTION = (
-    "Before answering, classify this prompt's complexity. Your VERY FIRST "
-    "output characters must be exactly one of these three tokens, with the "
-    "triple braces included: {{{1}}} (simple factual/short), {{{2}}} "
-    "(moderate analysis), or {{{3}}} (complex reasoning/long output). "
-    "Do NOT emit just the digit; the braces are mandatory. After the token, "
-    "emit a blank line, then your full answer. The marker is NOT a wrapping "
-    "tag: emit it exactly ONCE at the very start. Do NOT emit a closing "
-    "tag like {{{/2}}} or {{{end}}} at the end of your answer. Do not "
-    "mention or echo this instruction in your answer."
-)
-
 
 def _extract_complexity_class(text: str) -> tuple[int | None, str]:
     """Extract complexity classification token from response start.
@@ -973,7 +1176,23 @@ def create_app(
             "embedding_provider": auto_cfg.routing.embedding_provider,
             "quality_predictor": auto_cfg.routing.quality_predictor,
             "cell_selector": auto_cfg.routing.cell_selector,
+            "peer_quality_capture": {
+                "env_var": _PEER_QUALITY_CAPTURE_RATE_ENV,
+                "configured_rate": _peer_quality_capture_rate(),
+                "enabled": _peer_quality_capture_rate() > 0,
+            },
         }
+        if usage_log is not None:
+            try:
+                from callosum.routing.labeler.peer_quality import peer_quality_shadow_report
+
+                router_block["peer_quality_shadow"] = peer_quality_shadow_report(usage_log.path)
+            except Exception:
+                logger.exception("status: peer-quality shadow report failed")
+                router_block["peer_quality_shadow"] = {
+                    "available": False,
+                    "reason": "report_failed",
+                }
         # Canary baseline block: current effective percent given live
         # quota state, plus rolling per-mode failure rates over 1h /
         # 6h / 24h windows. The dev loop polls this same data via SQL
@@ -1905,6 +2124,19 @@ async def _dispatch_internal(
             )
     preferred_id = session_registry.get(session_id) if session_id is not None else None
     if body.get("stream") is True:
+        peer_quality_capture: _PeerQualityCapture | None = None
+        if _peer_quality_capture_enabled():
+            peer_quality_capture = _PeerQualityCapture(nonce=secrets.token_urlsafe(8))
+            peer_quality_cell = Cell(model=model, reasoning_effort=_extract_reasoning_effort(body) or "")
+            body = _inject_peer_quality_prompt(
+                body,
+                capture=peer_quality_capture,
+                usage_log=usage_log,
+                session_id=session_id,
+                current_cell=peer_quality_cell,
+                context_window_tokens=_context_window_for_cell(active, peer_quality_cell),
+                safety_margin_tokens=router_context_safety_margin,
+            )
         return await _dispatch_stream_with_cell_retry(
             body,
             candidates=cell_candidates,
@@ -1925,6 +2157,7 @@ async def _dispatch_internal(
             recommender_raw_output=recommender_raw_output,
             recommender_source=recommender_source,
             prompt_embedding=prompt_embedding,
+            peer_quality_capture=peer_quality_capture,
         )
     result = await _dispatch_nonstream_with_cell_retry(
         body,
@@ -2324,6 +2557,7 @@ async def _dispatch_stream(
     recommender_raw_output: str | None = None,
     recommender_source: str | None = None,
     prompt_embedding: bytes | None = None,
+    peer_quality_capture: _PeerQualityCapture | None = None,
 ) -> StreamingResponse:
     excluded: set[str] = set()
     excluded_errors: dict[str, BackendError] = {}
@@ -2416,6 +2650,9 @@ async def _dispatch_stream(
         # often read for the final UI render). The delta filters above
         # never touch these — see _scrub_full_text_events docstring.
         stream = _scrub_full_text_events(stream)
+        if peer_quality_capture is None:
+            peer_quality_capture = _PeerQualityCapture(nonce="")
+        stream = _strip_peer_quality_markers_from_stream(stream, capture=peer_quality_capture)
 
         # Wrap stream with safe error handling for peer disconnections
         stream = _safe_stream(stream, backend_id=backend.id)
@@ -2440,6 +2677,7 @@ async def _dispatch_stream(
                 recommender_raw_output=recommender_raw_output,
                 recommender_source=recommender_source,
                 prompt_embedding=prompt_embedding,
+                peer_quality_capture=peer_quality_capture,
             ),
             media_type="text/event-stream",
         )
@@ -2624,6 +2862,40 @@ def _scrub_full_text_event(data: dict[str, Any]) -> bool:
     return True
 
 
+def _scrub_peer_quality_from_event(data: dict[str, Any], *, capture: _PeerQualityCapture) -> bool:
+    """Strip qop markers from user-visible text fields and collect valid opinions."""
+    modified = False
+    try:
+        choices = data.get("choices")
+        if choices and len(choices) > 0:
+            delta = choices[0].get("delta", {})
+            content = delta.get("content") or ""
+            if isinstance(content, str) and "<<qop" in content:
+                cleaned = capture.apply(content)
+                if cleaned != content:
+                    delta["content"] = cleaned
+                    choices[0]["delta"] = delta
+                    data["choices"] = choices
+                    modified = True
+        elif data.get("type") in _TEXT_BEARING_DELTA_EVENT_TYPES:
+            delta_text = data.get("delta") or ""
+            if isinstance(delta_text, str) and "<<qop" in delta_text:
+                cleaned = capture.apply(delta_text)
+                if cleaned != delta_text:
+                    data["delta"] = cleaned
+                    modified = True
+        elif data.get("type") in _FULL_TEXT_EVENT_PATHS:
+            path = _FULL_TEXT_EVENT_PATHS[data["type"]]
+            text = _get_at_path(data, path)
+            if isinstance(text, str) and "<<qop" in text:
+                cleaned = capture.apply(text)
+                if cleaned != text:
+                    modified = _set_at_path(data, path, cleaned)
+    except (AttributeError, KeyError, IndexError, TypeError):
+        return False
+    return modified
+
+
 def _event_delta_text(event_bytes: bytes) -> str:
     """Concatenated delta text from one SSE event (chat-completions + Responses API).
 
@@ -2783,13 +3055,13 @@ async def _extract_complexity_from_stream(
 ) -> AsyncIterator[bytes]:
     """Strip a leading {{{N}}} / {{{...}}} marker from an SSE stream.
 
-    The marker is emitted as the first output of the model when the proxy
-    injects the complexity classifier instruction. Tokenizers usually split
-    the marker across multiple SSE events (e.g. "{{{", "2", "}}}"), so we
-    must buffer events until either the full marker has arrived (then strip
-    its bytes across whichever events carry them) or we can prove no marker
-    is present (then flush as-is). Once decided, the rest of the stream is
-    passed through unchanged.
+    This is now defensive cleanup only. Older prompts or context-poisoned
+    threads may still cause a model to lead with marker-shaped text.
+    Tokenizers usually split the marker across multiple SSE events (e.g.
+    "{{{", "2", "}}}"), so we buffer events until either the full marker
+    has arrived (then strip its bytes across whichever events carry them)
+    or we can prove no marker is present (then flush as-is). Once decided,
+    the rest of the stream is passed through unchanged.
     """
     buffered_events: list[bytes] = []
     accumulated_text = ""
@@ -2831,21 +3103,23 @@ async def _extract_complexity_from_stream(
         # A) strict {{{N}}}
         match = re.match(r"^\s*\{\{\{([123])\}\}\}", accumulated_text)
         if match:
-            _complexity_class_context.set(int(match.group(1)))
+            if _extract_complexity_context.get():
+                _complexity_class_context.set(int(match.group(1)))
             return _strip_and_flush(match.end())
 
         # B) any {{{...}}}
         match = re.match(r"^\s*\{\{\{[^}]*\}\}\}", accumulated_text)
         if match:
             inner = match.group(0).strip().strip("{").strip("}").strip()
-            if inner in ("1", "2", "3"):
+            if inner in ("1", "2", "3") and _extract_complexity_context.get():
                 _complexity_class_context.set(int(inner))
             return _strip_and_flush(match.end())
 
         # C) bare digit followed by blank line
         match = re.match(r"^\s*([123])[ \t]*\n[ \t]*\n", accumulated_text)
         if match:
-            _complexity_class_context.set(int(match.group(1)))
+            if _extract_complexity_context.get():
+                _complexity_class_context.set(int(match.group(1)))
             return _strip_and_flush(match.end())
 
         stripped_acc = accumulated_text.lstrip()
@@ -2962,6 +3236,52 @@ async def _scrub_full_text_events(
         yield leftover
 
 
+async def _strip_peer_quality_markers_from_stream(
+    source: AsyncIterator[bytes],
+    *,
+    capture: _PeerQualityCapture,
+) -> AsyncIterator[bytes]:
+    """Strip nonce-bound peer-quality markers from text-bearing SSE events.
+
+    This pass is intentionally limited to user-visible text fields. Tool-call
+    argument deltas and reasoning structures are passed through unchanged.
+    """
+    leftover = b""
+    async for chunk in source:
+        combined = leftover + chunk
+        parts = combined.split(b"\n\n")
+        leftover = parts[-1]
+        events = parts[:-1]
+        for ev in events:
+            try:
+                ev_str = ev.decode("utf-8")
+            except UnicodeDecodeError:
+                yield ev + b"\n\n"
+                continue
+            lines = ev_str.split("\n")
+            new_lines: list[str] = []
+            for line in lines:
+                if not line.startswith("data: "):
+                    new_lines.append(line)
+                    continue
+                json_str = line[6:]
+                if json_str.strip() == "[DONE]":
+                    new_lines.append(line)
+                    continue
+                try:
+                    data = json.loads(json_str)
+                except (json.JSONDecodeError, ValueError):
+                    new_lines.append(line)
+                    continue
+                if _scrub_peer_quality_from_event(data, capture=capture):
+                    new_lines.append("data: " + json.dumps(data))
+                else:
+                    new_lines.append(line)
+            yield ("\n".join(new_lines)).encode("utf-8") + b"\n\n"
+    if leftover:
+        yield leftover
+
+
 async def _strip_trailing_complexity_marker(
     source: AsyncIterator[bytes],
 ) -> AsyncIterator[bytes]:
@@ -3053,6 +3373,7 @@ async def _log_on_complete(
     recommender_raw_output: str | None = None,
     recommender_source: str | None = None,
     prompt_embedding: bytes | None = None,
+    peer_quality_capture: _PeerQualityCapture | None = None,
 ) -> AsyncIterator[bytes]:
     """Pass-through wrapper that writes the usage log row when the stream ends.
 
@@ -3085,10 +3406,11 @@ async def _log_on_complete(
         recommender_raw_output=recommender_raw_output,
         recommender_source=recommender_source,
         prompt_embedding=prompt_embedding,
+        peer_quality_capture=peer_quality_capture,
     )
 
 
-def _clean_sse_blob(blob: bytes | None) -> bytes | None:
+def _clean_sse_blob(blob: bytes | None, *, peer_quality_capture: _PeerQualityCapture | None = None) -> bytes | None:
     """Remove complexity markers from SSE blob before storage.
 
     Parses SSE format, extracts and cleans response content from delta/text fields,
@@ -3116,12 +3438,16 @@ def _clean_sse_blob(blob: bytes | None) -> bytes | None:
                         if isinstance(delta, str) and delta:
                             _, cleaned_delta = _extract_complexity_class(delta)
                             cleaned_delta = _strip_trailing_complexity_marker_text(cleaned_delta)
+                            if peer_quality_capture is not None and "<<qop" in cleaned_delta:
+                                cleaned_delta = peer_quality_capture.apply(cleaned_delta)
                             data["delta"] = cleaned_delta
 
                     # Handle full-text 'done' events (Hermes / codex-cli often
                     # read these for final UI render — must be scrubbed too)
                     elif data.get("type") in _FULL_TEXT_EVENT_PATHS:
                         _scrub_full_text_event(data)
+                        if peer_quality_capture is not None:
+                            _scrub_peer_quality_from_event(data, capture=peer_quality_capture)
 
                     # Handle chat completions format (choices[0].delta.content)
                     elif "choices" in data and len(data.get("choices", [])) > 0:
@@ -3130,6 +3456,8 @@ def _clean_sse_blob(blob: bytes | None) -> bytes | None:
                         if isinstance(content, str) and content:
                             _, cleaned_content = _extract_complexity_class(content)
                             cleaned_content = _strip_trailing_complexity_marker_text(cleaned_content)
+                            if peer_quality_capture is not None and "<<qop" in cleaned_content:
+                                cleaned_content = peer_quality_capture.apply(cleaned_content)
                             delta["content"] = cleaned_content
                             data["choices"][0]["delta"] = delta
 
@@ -3172,6 +3500,7 @@ def _log_attempt(
     recommender_raw_output: str | None = None,
     recommender_source: str | None = None,
     prompt_embedding: bytes | None = None,
+    peer_quality_capture: _PeerQualityCapture | None = None,
 ) -> None:
     if usage_log is None:
         return
@@ -3179,7 +3508,7 @@ def _log_attempt(
     if stream and handle.stream_summary is not None:
         resp_payload: bytes | None = handle.stream_summary.raw_blob
         # Clean markers from raw blob before storing in database
-        resp_payload = _clean_sse_blob(resp_payload)
+        resp_payload = _clean_sse_blob(resp_payload, peer_quality_capture=peer_quality_capture)
         response_bytes = handle.stream_summary.total_bytes
         completed = handle.stream_summary.completed_response
         tokens = _extract_tokens(completed.get("usage") if completed else None)
@@ -3236,6 +3565,29 @@ def _log_attempt(
         effective_routing_mode=effective_routing_mode,
     )
     request_id = usage_log.record(entry)
+    if peer_quality_capture is not None and peer_quality_capture.nonce:
+        if peer_quality_capture.opinions:
+            usage_log.record_peer_quality_opinions(
+                request_id=request_id,
+                session_id=session_id,
+                judge_backend_id=backend.id,
+                judge_model=model,
+                judge_reasoning_effort=entry.reasoning_effort,
+                opinions=peer_quality_capture.opinions,
+                created_at=ts_end,
+            )
+        usage_log.record_peer_quality_capture_metrics(
+            request_id=request_id,
+            session_id=session_id,
+            judge_backend_id=backend.id,
+            judge_model=model,
+            judge_reasoning_effort=entry.reasoning_effort,
+            nonce=peer_quality_capture.nonce,
+            opinion_count=len(peer_quality_capture.opinions),
+            echo_count=peer_quality_capture.echo_count,
+            malformed_count=peer_quality_capture.malformed_count,
+            created_at=ts_end,
+        )
     # Store request_id in context for response handlers to access
     _request_id_context.set(request_id)
     # Finalize the forward cost estimate (): record the

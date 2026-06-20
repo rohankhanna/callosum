@@ -7,6 +7,8 @@ from callosum.app import (
     _extract_and_strip_complexity,
     _extract_complexity_class,
     _extract_complexity_from_stream,
+    _PeerQualityCapture,
+    _strip_peer_quality_markers_from_stream,
     _strip_trailing_complexity_marker,
     _strip_trailing_complexity_marker_text,
 )
@@ -391,6 +393,55 @@ class TestStreamingComplexityExtraction:
         assert visible == "2 minutes is the limit", f"visible content was {visible!r}"
 
 
+class TestStreamingPeerQualityExtraction:
+    async def _extract_from_source(self, sse_bytes: bytes, *, nonce: str = "AB12") -> tuple[bytes, _PeerQualityCapture]:
+        async def source():
+            yield sse_bytes
+
+        capture = _PeerQualityCapture(nonce=nonce)
+        result_chunks = []
+        async for chunk in _strip_peer_quality_markers_from_stream(source(), capture=capture):
+            result_chunks.append(chunk)
+        return b"".join(result_chunks), capture
+
+    async def case_chat_delta_qop_marker_is_stripped_and_captured(self) -> None:
+        sse_data = (
+            b'data: {"choices":[{"delta":{"content":"answer <<qop nonce=AB12 subject=model-a0e7|medium score=+1 reason=solid>>"}}]}\n\n'
+            b"data: [DONE]\n\n"
+        )
+
+        result, capture = await self._extract_from_source(sse_data)
+
+        assert b"<<qop" not in result
+        assert b"answer " in result
+        assert len(capture.opinions) == 1
+        assert capture.opinions[0].subject_model == "model-a0e7"
+        assert capture.opinions[0].score == 1
+
+    async def case_wrong_nonce_qop_marker_is_stripped_as_echo(self) -> None:
+        sse_data = (
+            b'data: {"type":"response.output_text.delta","delta":"answer <<qop nonce=OLD subject=model-a0e7|medium score=-1 reason=stale>>"}\n\n'
+            b"data: [DONE]\n\n"
+        )
+
+        result, capture = await self._extract_from_source(sse_data, nonce="NEW")
+
+        assert b"<<qop" not in result
+        assert capture.opinions == []
+        assert capture.echo_count == 1
+
+    async def case_tool_argument_delta_is_not_touched(self) -> None:
+        sse_data = (
+            b'data: {"type":"response.function_call_arguments.delta","delta":"{\\"text\\":\\"<<qop nonce=AB12 subject=model-a0e7|medium score=+1>>\\"}"}\n\n'
+            b"data: [DONE]\n\n"
+        )
+
+        result, capture = await self._extract_from_source(sse_data)
+
+        assert b"<<qop" in result
+        assert capture.opinions == []
+
+
 # Async test wrapper for pytest
 def test_chat_completions_format_with_marker() -> None:
     asyncio.run(TestStreamingComplexityExtraction().test_chat_completions_format_with_marker())
@@ -446,6 +497,38 @@ def test_bare_digit_marker_responses_api() -> None:
 
 def test_leading_digit_in_legit_content_not_stripped() -> None:
     asyncio.run(TestStreamingComplexityExtraction().test_leading_digit_in_legit_content_not_stripped())
+
+
+def test_peer_quality_chat_delta_qop_marker_is_stripped_and_captured() -> None:
+    asyncio.run(TestStreamingPeerQualityExtraction().case_chat_delta_qop_marker_is_stripped_and_captured())
+
+
+def test_peer_quality_wrong_nonce_qop_marker_is_stripped_as_echo() -> None:
+    asyncio.run(TestStreamingPeerQualityExtraction().case_wrong_nonce_qop_marker_is_stripped_as_echo())
+
+
+def test_peer_quality_tool_argument_delta_is_not_touched() -> None:
+    asyncio.run(TestStreamingPeerQualityExtraction().case_tool_argument_delta_is_not_touched())
+
+
+def test_peer_quality_malformed_marker_is_counted() -> None:
+    async def run() -> _PeerQualityCapture:
+        async def source():
+            yield (
+                b'data: {"type":"response.output_text.delta","delta":"'
+                b'<<qop nonce=AB12 subject=model-a0e7|medium score=nope reason=bad>>'
+                b'"}\n\n'
+            )
+            yield b"data: [DONE]\n\n"
+
+        capture = _PeerQualityCapture(nonce="AB12")
+        async for _ in _strip_peer_quality_markers_from_stream(source(), capture=capture):
+            pass
+        return capture
+
+    capture = asyncio.run(run())
+    assert capture.opinions == []
+    assert capture.malformed_count == 1
 
 
 # ---------- Trailing-marker stripper tests ----------

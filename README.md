@@ -3,16 +3,17 @@
 A local, adaptive HTTP routing layer that decides which underlying model
 should handle each prompt and forwards it there, behind one
 OpenAI-compatible endpoint on `127.0.0.1`. Multiple upstream backends
-(today: Codex Plus/Pro vaults; soon: local models via ollama / lmstudio /
-model-a0e0) sit behind one URL. Routing decisions are made per request by
-asking the cheapest available cell to classify the prompt and pick a
-target; cell discovery, context windows, supported reasoning levels, and
-strength rankings all come from the upstream model catalog — nothing is
-hardcoded against a particular model lineup. When one cell is
-rate-limited, the router picks another; when the recommender can't reach
-its classifier, it falls back to a sensible cheap cell; when everything
-is exhausted, the proxy returns a self-diagnosing error (per-backend
-cooldown, quota, and recovery ETA in the response body).
+(today: Codex Plus/Pro credential-proxy backends and local models via
+local LLM gateway / LiteLLM-compatible OpenAI surfaces) sit behind one URL.
+Routing decisions are made per request by an in-process pipeline:
+extract prompt features, filter cells that cannot serve the request,
+predict each compatible cell's chance of satisfying it, then select the
+lowest-cost qualifying cell. Cell discovery, context windows, supported
+reasoning levels, and strength rankings come from backend catalogs where
+available — nothing is hardcoded against a particular model lineup. When
+one cell is rate-limited, the router picks another; when all eligible
+backends are exhausted, the proxy returns a self-diagnosing error
+(per-backend cooldown, quota, and recovery ETA in the response body).
 
 The OpenAI-compatible routes (`/v1/responses` and `/v1/chat/completions`)
 exist so any OpenAI-compatible client can point at this endpoint without
@@ -755,6 +756,62 @@ quota data.
 ## Per-request usage log
 
 When `[usage_log] path = "..."` is set, every backend call is recorded as a row in a SQLite database. Combined with `capture_bodies = true` (default during the modeling phase), this is the data corpus for figuring out how `(model, reasoning_effort, token counts)` translate into the opaque "usage percent" Codex Plus accounts decrement against.
+
+Peer-quality capture is stored separately from live routing decisions.
+Nonce-validated `<<qop ...>>` opinions are persisted in
+`peer_quality_opinions`; new rows include an exact subject request id
+when the judging model returns it, while older rows fall back to the
+latest prior same-session subject-cell match. The shadow label job can
+write conservative `quality_score` candidates with
+`quality_label_method='peer_quality_v1'`. This produces KNN-ready
+training rows only when embeddings also exist; it does not switch live
+routing to KNN by itself.
+
+Capture is opt-in. Set `CALLOSUM_PEER_QUALITY_CAPTURE_RATE` to a value
+above `0` before expecting new peer opinions or capture metrics. `/status`
+reports the current setting under `router.peer_quality_capture`. For a
+managed service, use the reversible capture-window flow in
+`docs/operations/dispatch.md` rather than editing the unit file directly.
+
+Apply peer-derived labels manually:
+
+```bash
+python -m callosum.jobs.apply_peer_quality_labels \
+  --db-path /home/<user>/.local/state/callosum/requests.sqlite \
+  --checkpoint-path /home/<user>/.local/state/callosum/apply_peer_quality_labels.ckpt \
+  --batch-size 200 \
+  --dry-run
+```
+
+Drop `--dry-run` only after the preview shows candidate labels worth
+writing. Dry-run mode resolves candidates through the same operator path
+but does not update request rows or checkpoint state.
+
+Inspect readiness without changing routing:
+
+```bash
+curl -s http://127.0.0.1:8765/status \
+  -H "Authorization: Bearer $CALLOSUM_TOKEN" \
+  | jq .router.peer_quality_shadow
+```
+
+If the service is stopped, inspect the same shadow-readiness report
+directly from the usage log:
+
+```bash
+python -m callosum.jobs.peer_quality_shadow_report \
+  --db-path /home/<user>/.local/state/callosum/requests.sqlite
+```
+
+`peer_quality_shadow` reports captured opinion counts,
+`peer_quality_v1` label counts, embedded label coverage, per-cell
+coverage, and a read-only `knn_shadow_eval` over held-out embedded
+peer-derived labeled rows. `knn_shadow_readiness` also reports the
+minimum evidence expected before P3 canary discussion: embedded
+peer-derived labels, coverage across at least two cells, and enough
+held-out shadow-eval samples. Treat that block as diagnostic only; live
+routing stays on the configured predictor until a later canary
+explicitly changes it.
 
 `requests` (one row per backend attempt — successes AND rotated-from failures):
 

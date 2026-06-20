@@ -41,6 +41,38 @@ class NoCompatibleCellError(RuntimeError):
 # 256K-window cell.
 _OUTPUT_HEADROOM_TOKENS = 4096
 
+_EFFORT_RANK: dict[str, int] = {
+    "default": 1,
+    "low": 1,
+    "medium": 2,
+    "high": 3,
+    "xhigh": 4,
+}
+
+_HARD_PROMPT_TERMS = (
+    "architecture",
+    "debug",
+    "diagnose",
+    "failing",
+    "failure",
+    "implement",
+    "refactor",
+    "review",
+    "roadmap",
+    "root cause",
+    "test failure",
+    "traceback",
+)
+
+_MODERATE_PROMPT_TERMS = (
+    "analyze",
+    "compare",
+    "design",
+    "explain",
+    "plan",
+    "summarize",
+)
+
 
 def _window_fit_factor(window: int, prompt_tokens: int) -> float:
     """Multiplicative score factor in (0, 1] reflecting how comfortably
@@ -62,6 +94,89 @@ def _window_fit_factor(window: int, prompt_tokens: int) -> float:
     # Linear taper. ratio < 1 because window < budget. Floor at 0.1
     # so even a 10x-overflowing cell stays in the pool.
     return max(0.1, window / max(1, budget))
+
+
+def _task_difficulty(features: Any) -> int:
+    """Return a cold-start difficulty tier: 1=simple, 2=moderate,
+    3=hard, 4=extreme.
+
+    This is intentionally deterministic and conservative. It only fires
+    when the configured predictor has no differentiated opinion, so it
+    keeps cold-start routing from collapsing to "cheapest compatible"
+    while avoiding a second LLM call on the hot path.
+    """
+    text = features.text.lower()
+    if features.tokens >= 64_000 or (features.needs_tools and features.tokens >= 16_000):
+        return 4
+    if (
+        features.tokens >= 16_000
+        or any(term in text for term in _HARD_PROMPT_TERMS)
+    ):
+        return 3
+    if (
+        features.needs_tools
+        or features.modalities - {"text"}
+        or features.tokens >= 2_000
+        or any(term in text for term in _MODERATE_PROMPT_TERMS)
+    ):
+        return 2
+    return 1
+
+
+def _effective_effort_rank(cell: Cell, capabilities: Any) -> int:
+    """Reasoning-effort rank with a local-model fallback.
+
+    Local cells often expose only `default`, which says nothing about
+    actual model size. When parameter_count is known, let a larger local
+    model qualify for moderate/hard cold-start tasks without inventing
+    fake reasoning-effort names.
+    """
+    rank = _EFFORT_RANK.get(cell.reasoning_effort, 1)
+    params = getattr(capabilities, "parameter_count", None)
+    if params is None:
+        return rank
+    if params >= 70_000_000_000:
+        return max(rank, 3)
+    if params >= 30_000_000_000:
+        return max(rank, 2)
+    return rank
+
+
+def _has_differentiated_predictions(predictions: dict[Cell, float]) -> bool:
+    if len(predictions) < 2:
+        return False
+    vals = list(predictions.values())
+    return max(vals) - min(vals) > 0.01
+
+
+def _cold_start_predictions(
+    predictions: dict[Cell, float],
+    capabilities: dict[Cell, Any],
+    features: Any,
+) -> dict[Cell, float]:
+    """Replace flat predictor priors with deterministic suitability scores.
+
+    The selector treats 0.5 as the "qualifies" boundary. Scores below
+    that boundary tell the selector "do not pick this cheap cell unless
+    every other option is also unsuitable." This is the missing guard
+    against cold-start routing hard prompts to arbitrary cheapest cells.
+    """
+    if _has_differentiated_predictions(predictions):
+        return predictions
+
+    difficulty = _task_difficulty(features)
+    adjusted: dict[Cell, float] = {}
+    for cell, prior in predictions.items():
+        caps = capabilities[cell]
+        effort_gap = _effective_effort_rank(cell, caps) - difficulty
+        if effort_gap >= 0:
+            score = 0.58 + min(0.08, effort_gap * 0.02)
+        elif effort_gap == -1:
+            score = 0.48
+        else:
+            score = 0.40
+        adjusted[cell] = min(0.95, max(0.05, (prior - 0.5) + score))
+    return adjusted
 
 
 class Router:
@@ -103,6 +218,7 @@ class Router:
             )
         predictions = self._predictor.predict(features, compatible)
         capabilities_map = {c: self._filter._capabilities_of(c) for c in compatible}
+        predictions = _cold_start_predictions(predictions, capabilities_map, features)
         # Soft window-fit: scale each cell's predicted satisfaction by
         # how comfortably its advertised window fits our token estimate.
         # Cells with full headroom keep their score; tighter cells get

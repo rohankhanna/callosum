@@ -24,6 +24,8 @@ participant "Selector" as S
 participant "Backend\n(picked cell)" as B
 participant "Upstream\n(cloud or local)" as U
 participant "Usage\nLog" as UL
+participant "Peer Quality\nMatrix" as PQ
+participant "PeerJudgeLabeler\n(shadow job)" as PJ
 database "operator_state\n.sqlite" as OS
 
 C -> App : POST /v1/responses (stream)
@@ -70,6 +72,23 @@ end note
 
 B --> App : stream complete
 App -> UL : record(UsageLogEntry)\n(tokens parsed from response.completed)
+
+opt peer-quality capture enabled
+  App -> UL : recent_session_assistant_turns(session_id)
+  UL --> App : prior outputs + served cells
+  App -> App : exact-match prior assistant text\nwrap non-self messages with model|effort tags\nappend nonce audit instruction
+  App -> App : skip if projected body exceeds\ncell context window minus safety margin
+  App -> App : skip tool/function requests\nand prose-less prior turns
+  App -> B : modified outbound body
+  App -> PQ : parse nonce-bound <<qop ...>>\nstrip echoes/malformed markers
+  PQ -> UL : record_peer_quality_opinions()\n(judge cell to subject cell)
+  PQ -> UL : record_peer_quality_capture_metrics()\n(valid/echo/malformed counts)
+end
+
+opt offline peer-label shadow pass
+  PJ -> UL : read peer_quality_opinions\nprefer exact subject_request_id;\nlegacy fallback to latest prior\nsame-session subject cell
+  PJ -> UL : write quality_score +\nquality_label_method=peer_quality_v1\nonly for unlabeled rows
+end
 
 note right of UL
   usage_log.record() triggers

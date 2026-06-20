@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from callosum.codex_quota import CodexQuotaSnapshot
+from callosum.peer_quality import PeerQualityOpinion
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS requests (
@@ -83,6 +84,42 @@ CREATE TABLE IF NOT EXISTS request_routing_attempts (
 );
 CREATE INDEX IF NOT EXISTS idx_request_routing_attempts_request_id
     ON request_routing_attempts(request_id);
+
+CREATE TABLE IF NOT EXISTS peer_quality_opinions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id INTEGER NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+    session_id TEXT,
+    judge_backend_id TEXT NOT NULL,
+    judge_model TEXT NOT NULL,
+    judge_reasoning_effort TEXT,
+    subject_request_id INTEGER REFERENCES requests(id) ON DELETE CASCADE,
+    subject_model TEXT NOT NULL,
+    subject_reasoning_effort TEXT,
+    score INTEGER NOT NULL CHECK (score IN (-1, 0, 1)),
+    nonce TEXT NOT NULL,
+    reason TEXT,
+    raw_marker TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_peer_quality_opinions_request_id
+    ON peer_quality_opinions(request_id);
+CREATE INDEX IF NOT EXISTS idx_peer_quality_matrix
+    ON peer_quality_opinions(judge_model, judge_reasoning_effort, subject_model, subject_reasoning_effort);
+
+CREATE TABLE IF NOT EXISTS peer_quality_capture_metrics (
+    request_id INTEGER PRIMARY KEY REFERENCES requests(id) ON DELETE CASCADE,
+    session_id TEXT,
+    judge_backend_id TEXT NOT NULL,
+    judge_model TEXT NOT NULL,
+    judge_reasoning_effort TEXT,
+    nonce TEXT NOT NULL,
+    opinion_count INTEGER NOT NULL,
+    echo_count INTEGER NOT NULL,
+    malformed_count INTEGER NOT NULL,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_peer_quality_capture_metrics_session
+    ON peer_quality_capture_metrics(session_id, created_at);
 """
 
 # Columns added after the initial v1 schema. ALTER TABLE on each one (guarded
@@ -185,6 +222,9 @@ END""",
     # against the remote-only baseline.
     "ALTER TABLE requests ADD COLUMN effective_routing_mode TEXT",
     "CREATE INDEX IF NOT EXISTS idx_requests_effective_routing_mode ON requests(effective_routing_mode)",
+    "ALTER TABLE peer_quality_opinions ADD COLUMN subject_request_id INTEGER",
+    "CREATE INDEX IF NOT EXISTS idx_peer_quality_opinions_subject_request_id "
+    "ON peer_quality_opinions(subject_request_id)",
 ]
 
 
@@ -271,6 +311,14 @@ class RoutingAttempt:
     classification: str
     latency_ms: int
     error_message: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SessionAssistantTurn:
+    request_id: int
+    model: str
+    reasoning_effort: str | None
+    response_text: str
 
 
 class UsageLog:
@@ -499,6 +547,31 @@ class UsageLog:
             ).fetchone()
         return row[0] if row is not None else None
 
+    def recent_session_assistant_turns(self, session_id: str, *, limit: int = 8) -> list[SessionAssistantTurn]:
+        """Return recent successful assistant outputs for hidden provenance tagging."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, model, reasoning_effort, response_text FROM requests"
+                " WHERE session_id = ?"
+                "   AND status = 200"
+                "   AND model IS NOT NULL"
+                "   AND response_text IS NOT NULL"
+                " ORDER BY ts_start DESC LIMIT ?",
+                (session_id, limit),
+            ).fetchall()
+        out: list[SessionAssistantTurn] = []
+        for request_id, model, effort, text in rows:
+            if isinstance(model, str) and isinstance(text, str) and text:
+                out.append(
+                    SessionAssistantTurn(
+                        request_id=int(request_id),
+                        model=model,
+                        reasoning_effort=effort,
+                        response_text=text,
+                    )
+                )
+        return out
+
     def record_quality(self, request_id: int, score: int, method: str) -> None:
         """Record a quality label for an existing request row.
 
@@ -512,6 +585,83 @@ class UsageLog:
             self._conn.execute(
                 "UPDATE requests SET quality_score = ?, quality_label_method = ? WHERE id = ?",
                 (score, method, request_id),
+            )
+
+    def record_peer_quality_opinions(
+        self,
+        *,
+        request_id: int,
+        session_id: str | None,
+        judge_backend_id: str,
+        judge_model: str,
+        judge_reasoning_effort: str | None,
+        opinions: list[PeerQualityOpinion] | tuple[PeerQualityOpinion, ...],
+        created_at: float,
+    ) -> None:
+        """Persist nonce-validated peer quality opinions for one request."""
+        if not opinions:
+            return
+        rows = [
+            (
+                request_id,
+                session_id,
+                judge_backend_id,
+                judge_model,
+                judge_reasoning_effort,
+                opinion.subject_request_id,
+                opinion.subject_model,
+                opinion.subject_reasoning_effort,
+                opinion.score,
+                opinion.nonce,
+                opinion.reason,
+                opinion.raw_marker,
+                created_at,
+            )
+            for opinion in opinions
+        ]
+        with self._lock:
+            self._conn.executemany(
+                "INSERT INTO peer_quality_opinions"
+                " (request_id, session_id, judge_backend_id, judge_model, judge_reasoning_effort,"
+                "  subject_request_id, subject_model, subject_reasoning_effort, score, nonce,"
+                "  reason, raw_marker, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                rows,
+            )
+
+    def record_peer_quality_capture_metrics(
+        self,
+        *,
+        request_id: int,
+        session_id: str | None,
+        judge_backend_id: str,
+        judge_model: str,
+        judge_reasoning_effort: str | None,
+        nonce: str,
+        opinion_count: int,
+        echo_count: int,
+        malformed_count: int,
+        created_at: float,
+    ) -> None:
+        """Persist request-level qop capture counters for observability."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO peer_quality_capture_metrics"
+                " (request_id, session_id, judge_backend_id, judge_model, judge_reasoning_effort,"
+                "  nonce, opinion_count, echo_count, malformed_count, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    request_id,
+                    session_id,
+                    judge_backend_id,
+                    judge_model,
+                    judge_reasoning_effort,
+                    nonce,
+                    opinion_count,
+                    echo_count,
+                    malformed_count,
+                    created_at,
+                ),
             )
 
     def per_mode_stats_since(self, *, since_ts: float) -> dict[str, dict[str, int]]:
