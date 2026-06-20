@@ -754,41 +754,107 @@ def _extract_prompt_text(client_request: dict[str, Any] | None) -> str | None:
         return None
 
 
+def _response_text_from_dict(resp: dict[str, Any]) -> str | None:
+    """Pull assistant-visible text from a single response JSON object."""
+    # Responses API shape.
+    if "output" in resp:
+        parts = _walk_text(resp["output"])
+        text = "\n".join(p for p in parts if p)
+        if text:
+            return text
+    # Chat Completions shape.
+    choices = resp.get("choices")
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        msg = choices[0].get("message")
+        if isinstance(msg, dict):
+            c = msg.get("content")
+            if isinstance(c, str) and c:
+                return c
+            if isinstance(c, list):
+                parts = _walk_text(c)
+                text = "\n".join(p for p in parts if p)
+                if text:
+                    return text
+    return None
+
+
+def _response_text_from_sse(blob: bytes) -> str | None:
+    """Recover assistant text from a Codex Responses SSE stream blob.
+
+    Streamed responses are stored as the raw `data: {...}` event blob, not a
+    single JSON document, so `json.loads` over the whole thing fails. The
+    terminal `response.completed` event carries the full response object; the
+    per-output `response.output_text.done` events each carry the full
+    accumulated text. Prefer the completed event, fall back to the done events.
+    """
+    completed_text: str | None = None
+    done_parts: list[str] = []
+    delta_parts: list[str] = []
+    for line in blob.split(b"\n"):
+        line = line.strip()
+        if not line.startswith(b"data:"):
+            continue
+        data = line[5:].strip()
+        if not data or data == b"[DONE]":
+            continue
+        try:
+            ev = json.loads(data)
+        except Exception:
+            continue
+        if not isinstance(ev, dict):
+            continue
+        et = ev.get("type")
+        if et == "response.completed":
+            # Codex Responses: terminal event carries the full response object.
+            resp = ev.get("response")
+            if isinstance(resp, dict):
+                completed_text = _response_text_from_dict(resp) or completed_text
+        elif et == "response.output_text.done":
+            # Codex Responses: each output emits its full accumulated text.
+            t = ev.get("text")
+            if isinstance(t, str) and t:
+                done_parts.append(t)
+        else:
+            # Chat Completions: accumulate streamed `choices[0].delta.content`.
+            choices = ev.get("choices")
+            if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+                delta = choices[0].get("delta")
+                if isinstance(delta, dict) and isinstance(delta.get("content"), str):
+                    delta_parts.append(delta["content"])
+    if completed_text:
+        return completed_text
+    if done_parts:
+        return "\n".join(done_parts)
+    if delta_parts:
+        return "".join(delta_parts)
+    return None
+
+
 def _extract_response_text(resp_payload: bytes | None) -> str | None:
     """Extract assistant-visible text from a response payload.
 
-    Same dual-shape problem as `_extract_prompt_text`: the original
-    impl only handled Chat Completions `choices[0].message.content`
-    and missed the Codex Responses API
-    `output[].content[].text` shape. Now walks both.
+    Handles three storage shapes: a single Chat Completions JSON
+    (`choices[0].message.content`), a single Codex Responses JSON
+    (`output[].content[].text`), and — for streamed responses — the raw SSE
+    event blob, whose text lives in the terminal `response.completed` event
+    rather than at the top level. The SSE shape is the common one: peer-quality
+    capture only runs on streaming requests, and `recent_session_assistant_turns`
+    can only surface a prior turn as a subject when its `response_text` is set,
+    so failing to extract here silently starves capture of subjects.
     """
     if resp_payload is None:
         return None
     try:
         resp = json.loads(resp_payload)
-        if not isinstance(resp, dict):
-            return None
-        # Responses API shape.
-        if "output" in resp:
-            parts = _walk_text(resp["output"])
-            text = "\n".join(p for p in parts if p)
+        if isinstance(resp, dict):
+            text = _response_text_from_dict(resp)
             if text:
                 return text
-        # Chat Completions shape.
-        choices = resp.get("choices")
-        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
-            msg = choices[0].get("message")
-            if isinstance(msg, dict):
-                c = msg.get("content")
-                if isinstance(c, str) and c:
-                    return c
-                if isinstance(c, list):
-                    parts = _walk_text(c)
-                    text = "\n".join(p for p in parts if p)
-                    if text:
-                        return text
     except Exception:
         pass
+    # Streamed responses are SSE (`data: {...}` lines), not a single document.
+    if b"data:" in resp_payload:
+        return _response_text_from_sse(resp_payload)
     return None
 
 
