@@ -1937,6 +1937,19 @@ async def _dispatch_internal(
                 cells_now = [c for c in cells_now if c.model == _selector.pinned_model]
                 if _selector.pinned_effort is not None:
                     cells_now = [c for c in cells_now if c.reasoning_effort == _selector.pinned_effort]
+        _process_pin = pin_state.get()
+        _process_pin_concrete_model = (
+            _process_pin is not None
+            and _selector is None
+            and requested_model not in VIRTUAL_MODELS
+        )
+        # The process-wide operator pin is stronger than the learning
+        # router's model rewrite. For concrete model requests, preserve the
+        # requested model and let an incompatible pinned backend surface as
+        # no viable backend. Virtual router names (auto/auto-learning) still
+        # choose among the pinned backend's advertised cells.
+        if _process_pin_concrete_model:
+            cells_now = [c for c in cells_now if c.model == requested_model]
         # Drop cells whose only serving backends are currently unroutable
         # (Codex weekly-exhausted, on cooldown, gateway down). The Router's
         # capability filter further drops cells whose physical capabilities
@@ -1970,8 +1983,21 @@ async def _dispatch_internal(
                 _routable = [b for b in _routable if getattr(b, "kind", "") == "litellm_gateway"]
             elif _routing == "remote-only":
                 _routable = [b for b in _routable if getattr(b, "kind", "") != "litellm_gateway"]
+        if _process_pin is not None:
+            _routable = [b for b in _routable if b.id == _process_pin]
         cells_now = _filter_cells_to_routable(cells_now, _routable)
         if not cells_now:
+            if _process_pin_concrete_model:
+                _pinned_backend = next((b for b in backends_list if b.id == _process_pin), None)
+                if _pinned_backend is not None and requested_model not in _pinned_backend.advertised_models:
+                    raise HTTPException(
+                        status_code=503,
+                        detail=(
+                            f"pinned backend {_process_pin!r} cannot serve "
+                            f"requested model {requested_model!r}"
+                        ),
+                        headers={"Retry-After": "60"},
+                    )
             # A concrete client pin that no backend currently serves: the pin
             # filter (above) emptied the pool. Surface that directly — the lane
             # may be operator-declared in the `/model` picker but not yet live

@@ -43,7 +43,7 @@ class BGELargeEmbeddingProvider:
         # import-check here so misconfigured deployments fail at startup
         # rather than on the first user request.
         try:
-            import sentence_transformers  # noqa: F401
+            import sentence_transformers  # type: ignore[import-not-found]  # noqa: F401
         except ImportError as e:
             raise ImportError(
                 "sentence-transformers not installed. Install with "
@@ -69,7 +69,7 @@ class BGELargeEmbeddingProvider:
                 # Blackwell) FP16 inference runs 2-3x faster with
                 # negligible quality loss for embedding tasks. Falls
                 # back to FP32 on CPU or older GPUs.
-                import torch
+                import torch  # type: ignore[import-not-found]
                 from sentence_transformers import SentenceTransformer
 
                 use_fp16 = torch.cuda.is_available()
