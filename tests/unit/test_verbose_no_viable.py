@@ -23,6 +23,11 @@ class _FakeQuota:
     five_hourly_reset_after_seconds: int | None = 1800
     weekly_used_percent: int | None = 44
     weekly_reset_after_seconds: int | None = 500_000
+    # reset_at absolute timestamps: None = "no upstream datum", which
+    # blocking_meters treats as an open window (percent honored as-is),
+    # preserving this test's pre-reset-aware expectations.
+    five_hourly_reset_at: int | None = None
+    weekly_reset_at: int | None = None
 
 
 @dataclass

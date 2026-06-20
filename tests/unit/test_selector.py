@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from callosum.backend import HealthStatus, UsageSnapshot
 from callosum.codex_quota import CodexQuotaSnapshot
 from callosum.fakes import InMemoryFakeBackend
@@ -42,7 +44,13 @@ def _fake(
     return backend
 
 
-def _quota(*, five_hourly: int | None, weekly: int | None) -> CodexQuotaSnapshot:
+def _quota(
+    *,
+    five_hourly: int | None,
+    weekly: int | None,
+    five_hourly_reset_at: int | None = None,
+    weekly_reset_at: int | None = None,
+) -> CodexQuotaSnapshot:
     return CodexQuotaSnapshot(
         plan_type=None,
         active_limit=None,
@@ -50,8 +58,8 @@ def _quota(*, five_hourly: int | None, weekly: int | None) -> CodexQuotaSnapshot
         weekly_used_percent=weekly,
         five_hourly_window_minutes=None,
         weekly_window_minutes=None,
-        five_hourly_reset_at=None,
-        weekly_reset_at=None,
+        five_hourly_reset_at=five_hourly_reset_at,
+        weekly_reset_at=weekly_reset_at,
         five_hourly_reset_after_seconds=None,
         weekly_reset_after_seconds=None,
         five_hourly_over_weekly_limit_percent=None,
@@ -211,3 +219,63 @@ async def test_diagnostics_expose_blocking_and_constraining_meter() -> None:
     )
     assert blocking_meters(snapshot) == ("five_hourly",)
     assert constraining_meter(snapshot) == "five_hourly"
+
+
+# ---- reset-aware staleness (overnight-shutdown lockout) -----------------
+#
+# A snapshot that reads 100% but whose window already reset must NOT block.
+# This is the cold-boot failure mode: the host is off all night, the 5h/
+# weekly window rolls over while it sleeps, and the persisted snapshot is
+# stale until a real request can re-probe upstream. blocking_meters must
+# date the percent against the snapshot's own reset_at.
+
+_NOW = int(time.time())
+_PAST = _NOW - 3600  # window reset an hour ago
+_FUTURE = _NOW + 3600  # window still open for another hour
+
+
+def _snap(backend: InMemoryFakeBackend, *, quota: CodexQuotaSnapshot, usage: UsageSnapshot | None = None) -> BackendSnapshot:
+    return BackendSnapshot(
+        backend=backend,
+        health=HealthStatus(available=True, reason="ok"),
+        usage=usage or _usage(),
+        quota=quota,
+    )
+
+
+def test_exhausted_meter_with_passed_reset_does_not_block() -> None:
+    snap = _snap(_fake("stale"), quota=_quota(five_hourly=100, weekly=100, five_hourly_reset_at=_PAST, weekly_reset_at=_PAST))
+    assert blocking_meters(snap, now_ts=_NOW) == ()
+
+
+def test_exhausted_meter_with_open_window_still_blocks() -> None:
+    snap = _snap(_fake("live"), quota=_quota(five_hourly=100, weekly=1, five_hourly_reset_at=_FUTURE, weekly_reset_at=_FUTURE))
+    assert blocking_meters(snap, now_ts=_NOW) == ("five_hourly",)
+
+
+def test_weekly_exhausted_flag_is_stale_after_weekly_reset() -> None:
+    snap = _snap(
+        _fake("weekly-stale"),
+        quota=_quota(five_hourly=1, weekly=1, weekly_reset_at=_PAST),
+        usage=_usage(weekly_exhausted=True),
+    )
+    assert blocking_meters(snap, now_ts=_NOW) == ()
+
+
+def test_weekly_exhausted_flag_honored_with_no_quota() -> None:
+    # No quota snapshot to date the flag against → honor it (cold-start safe).
+    snap = BackendSnapshot(
+        backend=_fake("no-quota"),
+        health=HealthStatus(available=True, reason="ok"),
+        usage=_usage(weekly_exhausted=True),
+        quota=None,
+    )
+    assert blocking_meters(snap, now_ts=_NOW) == ("weekly",)
+
+
+async def test_select_recovers_backend_after_overnight_window_reset() -> None:
+    # The end-to-end morning case: the only backend reads 100% from last
+    # night, but its window reset hours ago. It must be selectable again.
+    stale = _fake("overnight", quota=_quota(five_hourly=100, weekly=100, five_hourly_reset_at=_PAST, weekly_reset_at=_PAST))
+    chosen = await select([stale], model="model-a0d0", now_ts=float(_NOW))
+    assert chosen is stale

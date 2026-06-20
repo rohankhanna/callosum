@@ -58,7 +58,7 @@ def _is_viable(
         return False
     if not snapshot.health.available:
         return False
-    if blocking_meters(snapshot):
+    if blocking_meters(snapshot, now_ts=now_ts):
         return False
     cooldown = snapshot.usage.cooldown_until_ts
     if cooldown is not None and cooldown > now_ts:
@@ -66,15 +66,46 @@ def _is_viable(
     return model in snapshot.backend.advertised_models
 
 
-def blocking_meters(snapshot: BackendSnapshot) -> tuple[str, ...]:
+def _window_open(reset_at: float | int | None, now: float) -> bool:
+    """True when the quota window a snapshot describes is still current.
+
+    A meter at 100% only blocks routing while its window is open. Once
+    `reset_at` passes, the window has provably rolled over and the percent
+    in the snapshot is stale. The classic trigger is an overnight host
+    shutdown: the 5-hourly/weekly window resets while the machine is off,
+    but the persisted snapshot still reads exhausted, so on cold boot the
+    proxy locks out a backend whose quota actually reset hours ago. Treat a
+    passed reset as an open, un-blocked window so the next real request
+    re-probes upstream instead of 503-ing on yesterday's number. A `None`
+    reset (cold start, no upstream datum yet) is treated as open and the
+    percent honored as-is.
+    """
+    return reset_at is None or now < float(reset_at)
+
+
+def blocking_meters(snapshot: BackendSnapshot, *, now_ts: float | None = None) -> tuple[str, ...]:
+    now = time.time() if now_ts is None else now_ts
     quota = snapshot.quota
     blocked: list[str] = []
+    weekly_window_open = True
     if quota is not None:
-        if quota.five_hourly_used_percent is not None and quota.five_hourly_used_percent >= 100:
+        if (
+            quota.five_hourly_used_percent is not None
+            and quota.five_hourly_used_percent >= 100
+            and _window_open(quota.five_hourly_reset_at, now)
+        ):
             blocked.append("five_hourly")
-        if quota.weekly_used_percent is not None and quota.weekly_used_percent >= 100:
+        weekly_window_open = _window_open(quota.weekly_reset_at, now)
+        if (
+            quota.weekly_used_percent is not None
+            and quota.weekly_used_percent >= 100
+            and weekly_window_open
+        ):
             blocked.append("weekly")
-    if snapshot.usage.weekly_exhausted and "weekly" not in blocked:
+    # The sticky weekly_exhausted usage flag is only meaningful while the
+    # weekly window it was set in is still open; after weekly_reset_at it is
+    # stale (same overnight-shutdown failure mode as the percent meters).
+    if snapshot.usage.weekly_exhausted and "weekly" not in blocked and weekly_window_open:
         blocked.append("weekly")
     return tuple(blocked)
 
@@ -92,17 +123,24 @@ def composite_pressure(
     snapshot: BackendSnapshot,
     *,
     cost_estimate: CompositeCostEstimate | None,
+    now_ts: float | None = None,
 ) -> tuple[float, str | None]:
     if cost_estimate is None or snapshot.quota is None:
         return (_UNKNOWN_PRESSURE, None)
+    now = time.time() if now_ts is None else now_ts
     quota = snapshot.quota
+    # A meter whose window has reset contributes no pressure: its stale
+    # used-percent must not deprioritize a backend that just regained
+    # headroom across an overnight shutdown (mirrors blocking_meters).
+    five_used = quota.five_hourly_used_percent if _window_open(quota.five_hourly_reset_at, now) else 0
+    weekly_used = quota.weekly_used_percent if _window_open(quota.weekly_reset_at, now) else 0
     pressures = [
         (
-            _meter_pressure(quota.five_hourly_used_percent, cost_estimate.five_hourly.high),
+            _meter_pressure(five_used, cost_estimate.five_hourly.high),
             "five_hourly",
         ),
         (
-            _meter_pressure(quota.weekly_used_percent, cost_estimate.weekly.high),
+            _meter_pressure(weekly_used, cost_estimate.weekly.high),
             "weekly",
         ),
     ]

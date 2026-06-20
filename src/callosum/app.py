@@ -732,30 +732,27 @@ def create_app(
         # Initialize proxy startup timestamp if not already set (for initial 90-day ramp)
         if state_store is not None and state_store.get_proxy_startup_timestamp() is None:
             state_store.set_proxy_startup_timestamp(time.time())
-        # Refresh dynamic model lists for backends that support it BEFORE the
-        # smoke test runs — that way the smoke test probes models the upstream
-        # actually still serves, not stale TOML names. Best-effort: any
-        # backend that fails to refresh just keeps using its cold-start set.
-        # Also detect when new models appear (model release) and timestamp them.
-        for backend in backends_list:
-            refresh = getattr(backend, "refresh_advertised_models", None)
-            if refresh is not None:
-                try:
-                    # Capture models before refresh to detect new ones
-                    models_before = set(backend.advertised_models)
-                    await refresh()
-                    models_after = set(backend.advertised_models)
-                    # If new models detected, record the release timestamp
-                    if models_after > models_before and state_store is not None:
-                        new_models = models_after - models_before
-                        logger.info(
-                            "new models detected for backend %r: %s — recording model release timestamp",
-                            backend.id,
-                            sorted(new_models),
-                        )
-                        state_store.set_model_release_timestamp(time.time())
-                except Exception:
-                    logger.exception("startup model-list refresh failed for %r", backend.id)
+        # Cold-boot freshness guard ("the fire that burns last night's notes"):
+        # refresh each backend's upstream-owned model catalog BEFORE the smoke
+        # test — so the smoke test probes models the upstream actually still
+        # serves, not stale TOML names. A backend whose catalog is STILL empty
+        # afterward booted before its dependency (credential service) was ready;
+        # rather than leave the cell grid empty until the hourly smoke tester,
+        # retry it in the background. This is the model-catalog leg of the
+        # stale-on-cold-boot class; quota/cooldown staleness is handled by the
+        # reset-aware routability gate + the cooldown prober's startup pass, and
+        # the auth token by lazy refresh on first use.
+        _catalog_pending = await _refresh_catalogs_pass(backends_list, state_store=state_store)
+        catalog_resync_task: asyncio.Task[None] | None = None
+        if _catalog_pending:
+            logger.warning(
+                "catalog boot resync: %s booted with empty catalog; retrying in background",
+                [b.id for b in _catalog_pending],
+            )
+            catalog_resync_task = asyncio.create_task(
+                _catalog_boot_resync(_catalog_pending, state_store=state_store, attempts=8, interval_s=15.0),
+                name="catalog-boot-resync",
+            )
         # Phase 6: kNN predictor reload from the request log's labeled
         # rows. Only fires if the operator picked the knn predictor —
         # uniform predictor doesn't need data and avoids the SQLite
@@ -824,6 +821,10 @@ def create_app(
             await periodic_harness.stop()
             if codex_catalog_reconciler is not None:
                 await codex_catalog_reconciler.stop()
+            if catalog_resync_task is not None:
+                catalog_resync_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await catalog_resync_task
             await cooldown_prober.stop()
             await smoke_tester.stop()
             for backend in backends_list:
@@ -1483,7 +1484,7 @@ async def _routable_backends(backends_list: Sequence[Backend], *, now: float | N
             q = await b.quota_snapshot()
         except Exception:
             continue  # if we can't even read state, treat as unroutable
-        if blocking_meters(BackendSnapshot(backend=b, health=HealthStatus(True, "ok"), usage=u, quota=q)):
+        if blocking_meters(BackendSnapshot(backend=b, health=HealthStatus(True, "ok"), usage=u, quota=q), now_ts=n):
             continue
         if u.cooldown_until_ts is not None and u.cooldown_until_ts > n:
             continue
@@ -3673,6 +3674,15 @@ class _PeriodicCooldownProber:
             self._task = None
 
     async def _run(self) -> None:
+        # Probe once immediately at startup, THEN settle into the interval
+        # cadence. After a cold boot (e.g. an overnight host shutdown) the
+        # persisted cooldown/exhaustion snapshot is stale — quota windows
+        # reset while the machine was off — but the startup smoke test skips
+        # cooldown'd backends by design, so without this first pass nothing
+        # re-validates the lockout until a full `interval_s` (default 1h)
+        # has elapsed. That hour-after-every-boot window is exactly when the
+        # operator hits "works last night, 503 every morning."
+        await self._probe_cooldowned()
         while not self._stop.is_set():
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=self._interval_s)
@@ -3680,35 +3690,101 @@ class _PeriodicCooldownProber:
                 pass
             else:
                 return
-            for backend in self._backends:
-                try:
-                    usage = await backend.usage_snapshot()
-                except Exception:
-                    logger.exception("cooldown prober: usage_snapshot failed for %r", backend.id)
-                    continue
-                now = time.time()
-                in_active_cooldown = usage.cooldown_until_ts is not None and usage.cooldown_until_ts > now
-                if not in_active_cooldown and not usage.weekly_exhausted:
-                    continue
-                try:
-                    result = await _diagnose_backend(backend, force=True)
-                except Exception:
-                    logger.exception("cooldown prober: probe raised for %r", backend.id)
-                    continue
-                if result.get("ok") and not result.get("skipped"):
-                    clear = getattr(backend, "clear_cooldown", None)
-                    if clear is not None:
-                        try:
-                            clear()
-                            logger.warning(
-                                "cooldown prober: %r probe succeeded; cooldown cleared "
-                                "(was until %s, weekly_exhausted=%s)",
-                                backend.id,
-                                usage.cooldown_until_ts,
-                                usage.weekly_exhausted,
-                            )
-                        except Exception:
-                            logger.exception("cooldown prober: clear_cooldown raised for %r", backend.id)
+            await self._probe_cooldowned()
+
+    async def _probe_cooldowned(self) -> None:
+        for backend in self._backends:
+            try:
+                usage = await backend.usage_snapshot()
+            except Exception:
+                logger.exception("cooldown prober: usage_snapshot failed for %r", backend.id)
+                continue
+            now = time.time()
+            in_active_cooldown = usage.cooldown_until_ts is not None and usage.cooldown_until_ts > now
+            if not in_active_cooldown and not usage.weekly_exhausted:
+                continue
+            try:
+                result = await _diagnose_backend(backend, force=True)
+            except Exception:
+                logger.exception("cooldown prober: probe raised for %r", backend.id)
+                continue
+            if result.get("ok") and not result.get("skipped"):
+                clear = getattr(backend, "clear_cooldown", None)
+                if clear is not None:
+                    try:
+                        clear()
+                        logger.warning(
+                            "cooldown prober: %r probe succeeded; cooldown cleared "
+                            "(was until %s, weekly_exhausted=%s)",
+                            backend.id,
+                            usage.cooldown_until_ts,
+                            usage.weekly_exhausted,
+                        )
+                    except Exception:
+                        logger.exception("cooldown prober: clear_cooldown raised for %r", backend.id)
+
+
+async def _refresh_catalogs_pass(backends: Sequence[Backend], *, state_store: Any | None) -> list[Backend]:
+    """Run one upstream model-catalog refresh per backend. Returns the
+    backends whose catalog is STILL empty afterward — the signal that the
+    backend's dependency (credential service) was not ready at boot and the
+    fetch needs retrying. Also records a model-release timestamp when new
+    models appear. Best-effort: a backend that raises keeps its cold-start set.
+    """
+    pending: list[Backend] = []
+    for backend in backends:
+        refresh = getattr(backend, "refresh_advertised_models", None)
+        if refresh is None:
+            continue
+        try:
+            models_before = set(backend.advertised_models)
+            await refresh()
+            models_after = set(backend.advertised_models)
+            if models_after > models_before and state_store is not None:
+                logger.info(
+                    "new models detected for backend %r: %s — recording model release timestamp",
+                    backend.id,
+                    sorted(models_after - models_before),
+                )
+                state_store.set_model_release_timestamp(time.time())
+        except Exception:
+            logger.exception("startup model-list refresh failed for %r", backend.id)
+        if not backend.advertised_models:
+            pending.append(backend)
+    return pending
+
+
+async def _catalog_boot_resync(
+    backends: Sequence[Backend],
+    *,
+    state_store: Any | None,
+    attempts: int,
+    interval_s: float,
+) -> None:
+    """Background cold-boot retry for backends that booted with an empty model
+    catalog. Keeps re-fetching the upstream model list until every backend has
+    one (or the attempt budget is spent), so the cell grid recovers within
+    minutes of a boot-time dependency lag instead of waiting on the hourly
+    smoke tester. The model-catalog leg of the stale-on-cold-boot class.
+    """
+    pending = list(backends)
+    for attempt in range(1, attempts + 1):
+        await asyncio.sleep(interval_s)
+        pending = await _refresh_catalogs_pass(pending, state_store=state_store)
+        if not pending:
+            logger.warning("catalog boot resync: all catalogs populated after %d retr(y/ies)", attempt)
+            return
+        logger.warning(
+            "catalog boot resync: attempt %d/%d, still-empty: %s",
+            attempt,
+            attempts,
+            [b.id for b in pending],
+        )
+    logger.error(
+        "catalog boot resync: gave up after %d attempts; still-empty: %s",
+        attempts,
+        [b.id for b in pending],
+    )
 
 
 async def _run_startup_smoke_test(backends_list: Sequence[Backend]) -> None:
