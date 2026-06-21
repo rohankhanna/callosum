@@ -109,6 +109,82 @@ def test_remote_pin_with_effort_routes_to_remote(tmp_path: Path) -> None:
         state.close()
 
 
+def test_local_pin_with_effort_routes_to_local(tmp_path: Path) -> None:
+    """A local pin carrying an effort the model supports routes to local
+    (symmetric to the remote-pin-with-effort case). The fake's local metadata
+    advertises low/medium/high/xhigh, so :high has a live cell."""
+    remote = _make_backend(id="remote", kind="codex_auth_vault")
+    local = _make_backend(id="local", kind="litellm_gateway")
+    state = OperatorState(tmp_path / "op.sqlite")
+    state.set_routing("auto")
+    try:
+        app = create_app(backends=[remote, local], operator_state=state)
+        with TestClient(app) as client:
+            response = client.post(
+                "/v1/responses",
+                json={"model": "callosum:local/model-a0e7:high", "input": []},
+            )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["id"] == "resp-local"
+        assert body["model"] == "model-a0e7"
+    finally:
+        state.close()
+
+
+def test_local_pin_with_unsupported_effort_returns_503(tmp_path: Path) -> None:
+    """A local pin whose effort the model does NOT advertise parses fine but
+    finds no live cell → clean actionable 503, not a 400. (:
+    e.g. model-a0g2 advertises only ("default",), so :high has no cell.)"""
+
+    class _DefaultOnlyLocal(InMemoryFakeBackend):
+        @property
+        def model_metadata(self):  # type: ignore[override]
+            from callosum.cell_grid import ModelMetadata
+
+            return {
+                slug: ModelMetadata(
+                    slug=slug,
+                    supported_in_api=True,
+                    visibility="list",
+                    priority=100,
+                    supported_reasoning_levels=("default",),
+                )
+                for slug in self.advertised_models
+            }
+
+    remote = _make_backend(id="remote", kind="codex_auth_vault")
+    local = _DefaultOnlyLocal(
+        id="local",
+        advertised_models=frozenset({"model-a0g2"}),
+        health=HealthStatus(available=True, reason="ok"),
+        usage=UsageSnapshot(
+            remaining_fraction=1.0,
+            cooldown_until_ts=None,
+            weekly_exhausted=False,
+            probed_at_ts=0.0,
+        ),
+    )
+    local.kind = "litellm_gateway"
+    state = OperatorState(tmp_path / "op.sqlite")
+    state.set_routing("auto")
+    try:
+        app = create_app(backends=[remote, local], operator_state=state)
+        with TestClient(app) as client:
+            response = client.post(
+                "/v1/responses",
+                json={"model": "callosum:local/model-a0g2:high", "input": []},
+            )
+        assert response.status_code == 503, response.text
+        assert "Retry-After" in response.headers
+        detail = response.json()["detail"]
+        assert "not available yet" in detail
+        assert "model-a0g2" in detail
+        assert "high" in detail
+    finally:
+        state.close()
+
+
 def test_unsatisfiable_pin_returns_503(tmp_path: Path) -> None:
     """A remote pin while remote quota is exhausted leaves zero routable
     cells — clean 503 + Retry-After, not a 400 loop."""
@@ -166,7 +242,9 @@ def test_invalid_selectors_return_400(tmp_path: Path) -> None:
     try:
         app = create_app(backends=[remote, local], operator_state=state)
         with TestClient(app) as client:
-            for bad in ("callosum:offline", "callosum:local/model-a0e7:high"):
+            # local/<model>:<effort> is now valid grammar ();
+            # an unsupported effort surfaces as a 503 at dispatch, not a 400.
+            for bad in ("callosum:offline", "callosum:local/model-a0e7:bogus"):
                 r = client.post("/v1/responses", json={"model": bad, "input": []})
                 assert r.status_code == 400, f"{bad}: {r.text}"
     finally:

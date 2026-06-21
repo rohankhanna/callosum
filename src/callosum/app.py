@@ -29,6 +29,7 @@ from callosum.auth import (
 from callosum.auth_db import ApiKey, Session
 from callosum.backend import Backend, CallHandle, HealthStatus
 from callosum.cell_grid import (
+    REASONING_LEVELS,
     VIRTUAL_MODELS,
     Cell,
     ModelMetadata,
@@ -1335,13 +1336,17 @@ def create_app(
         - remote concrete pins: callosum:remote/<model>:<effort> (one per
           supported reasoning level, from model_metadata with REASONING_LEVELS
           fallback)
-        - local concrete pins: callosum:local/<model> (no effort in Phase 1)
+        - local concrete pins: callosum:local/<model>, plus a
+          callosum:local/<model>:<effort> variant for each non-default
+          reasoning level the model advertises (from model_metadata). Models
+          that advertise only ("default",) get the bare pin alone.
         - raw passthrough ids, still listed + resolvable for back-compat
         """
         raw: set[str] = set()
         remote_models: set[str] = set()
         local_models: set[str] = set()
         remote_meta: dict[str, ModelMetadata] = {}
+        local_meta: dict[str, ModelMetadata] = {}
         for backend in backends_list:
             is_local = getattr(backend, "kind", "") == "litellm_gateway"
             for m in backend.advertised_models:
@@ -1349,16 +1354,16 @@ def create_app(
                     continue
                 raw.add(m)
                 (local_models if is_local else remote_models).add(m)
-            if not is_local:
-                meta = getattr(backend, "model_metadata", None) or {}
-                for slug, md in meta.items():
-                    existing = remote_meta.get(slug)
-                    # Prefer the record that actually carries reasoning levels.
-                    if existing is None or (
-                        md.supported_reasoning_levels
-                        and not existing.supported_reasoning_levels
-                    ):
-                        remote_meta[slug] = md
+            meta = getattr(backend, "model_metadata", None) or {}
+            target = local_meta if is_local else remote_meta
+            for slug, md in meta.items():
+                existing = target.get(slug)
+                # Prefer the record that actually carries reasoning levels.
+                if existing is None or (
+                    md.supported_reasoning_levels
+                    and not existing.supported_reasoning_levels
+                ):
+                    target[slug] = md
 
         ids: list[str] = [
             "callosum:auto",
@@ -1370,6 +1375,17 @@ def create_app(
                 ids.append(f"callosum:remote/{m}:{level}")
         for m in sorted(local_models):
             ids.append(f"callosum:local/{m}")
+            # Effort variants come straight from the model's advertised
+            # supported_reasoning_levels (NOT the REASONING_LEVELS fallback):
+            # advertise a pin only for levels the model genuinely exposes.
+            # "default" is the implicit base pin above, so it's skipped here;
+            # any non-default level must also be a recognized REASONING_LEVELS
+            # value to be pinnable via the selector grammar.
+            md = local_meta.get(m)
+            levels = md.supported_reasoning_levels if md is not None else ()
+            for level in levels:
+                if level != "default" and level in REASONING_LEVELS:
+                    ids.append(f"callosum:local/{m}:{level}")
         ids.extend(sorted(raw))
         return ids
 

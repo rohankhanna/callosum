@@ -15,15 +15,22 @@ Strategy selectors (a *routing engine* that selects within a pool):
 
 Concrete pins (name a specific model; drop the `-only` suffix):
     callosum:remote/<model>[:<effort>]  -> source="remote", pinned_model, pinned_effort?
-    callosum:local/<model>              -> source="local",  pinned_model
+    callosum:local/<model>[:<effort>]   -> source="local",  pinned_model, pinned_effort?
 
 Notes
 -----
 - `callosum:offline` is explicitly rejected until no-network semantics can be
   enforced end to end (raises SelectorError -> caller returns 400).
-- A local pin with `:<effort>` is rejected for now: whether local models expose
-  reasoning-effort levels is an open question tracked separately. Reject rather
-  than silently drop, so the boundary is explicit.
+- A local pin may carry `:<effort>` symmetric to a remote pin. The parser is
+  stateless, so it validates only that `<effort>` is a syntactically valid
+  reasoning level (a member of `REASONING_LEVELS`) — exactly as for remote. The
+  *model-specific* check ("does THIS local model actually expose that level?")
+  lives where the per-model `supported_reasoning_levels` are known: the catalog
+  advertises a local-effort variant only for models that support it, and
+  dispatch surfaces a clean 503 when no live cell serves the pinned (model,
+  effort) pair. So `callosum:local/model-a0d2:high` parses and routes, while
+  `callosum:local/model-a0g2:high` parses but 503s (model-a0g2 advertises only
+  `("default",)`, so the cell grid has no high cell for it).
 - Anything not starting with `callosum:` returns None -> legacy pass-through,
   behavior unchanged.
 """
@@ -109,17 +116,11 @@ def parse_selector(model: str | None) -> SelectorDecision | None:
     if not pinned_model:
         raise SelectorError(f"missing model in callosum pin {model!r}")
 
-    if source == "local":
-        if sep:
-            # Effort on a local pin is the open question ();
-            # reject explicitly rather than silently dropping it.
-            raise SelectorError(
-                "callosum:local pins do not accept a reasoning effort "
-                f"(got {model!r})"
-            )
-        return SelectorDecision(source="local", pinned_model=pinned_model)
-
-    # source == "remote"
+    # Effort is optional and validated identically for both sources: the parser
+    # is stateless, so it gates only on the universe of valid reasoning levels.
+    # Per-model support (does this specific model expose the level?) is enforced
+    # downstream by the catalog (advertise) and dispatch (503), where the
+    # per-model `supported_reasoning_levels` are available.
     pinned_effort: str | None = None
     if sep:
         if effort not in REASONING_LEVELS:
@@ -129,5 +130,5 @@ def parse_selector(model: str | None) -> SelectorDecision | None:
             )
         pinned_effort = effort
     return SelectorDecision(
-        source="remote", pinned_model=pinned_model, pinned_effort=pinned_effort
+        source=source, pinned_model=pinned_model, pinned_effort=pinned_effort
     )

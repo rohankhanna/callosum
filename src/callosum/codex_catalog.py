@@ -98,19 +98,20 @@ def lane_metadata(model_id: str) -> tuple[str, str, int] | None:
         # Not a concrete pin (raw passthrough id, or unknown) → keep it out of
         # the menu.
         return None
-    if sel.source == "remote":
-        effort = sel.pinned_effort
-        suffix = f" · {effort}" if effort else ""
-        name = f"Callosum remote · {sel.pinned_model}{suffix}"
-        desc = (
-            f"Pin the remote model {sel.pinned_model}"
-            + (f" at {effort} reasoning." if effort else ".")
-        )
-        return name, desc, 10
-    # source == "local"
-    name = f"Callosum local · {sel.pinned_model}"
-    desc = f"Pin the local model {sel.pinned_model}."
-    return name, desc, 20
+    # Remote and local pins render symmetrically; only the word and the picker
+    # priority (remote leads local) differ. A baked effort is shown when present
+    # — the lane then offers only that effort (see `_reasoning_levels_for_lane`).
+    effort = sel.pinned_effort
+    suffix = f" · {effort}" if effort else ""
+    source_word, priority = (
+        ("remote", 10) if sel.source == "remote" else ("local", 20)
+    )
+    name = f"Callosum {source_word} · {sel.pinned_model}{suffix}"
+    desc = (
+        f"Pin the {source_word} model {sel.pinned_model}"
+        + (f" at {effort} reasoning." if effort else ".")
+    )
+    return name, desc, priority
 
 
 def _pinned_effort(model_id: str) -> str | None:

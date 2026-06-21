@@ -46,6 +46,7 @@ def _template() -> dict:
         ("callosum:remote/model-a0e8:high", "Callosum remote · model-a0e8 · high", 10),
         ("callosum:remote/model-a0e8", "Callosum remote · model-a0e8", 10),
         ("callosum:local/model-a0g2", "Callosum local · model-a0g2", 20),
+        ("callosum:local/model-a0d2:high", "Callosum local · model-a0d2 · high", 20),
     ],
 )
 def test_lane_metadata_known_lanes(model_id, expected_name, expected_priority):
@@ -117,6 +118,22 @@ def test_remote_pin_restricts_reasoning_levels_to_baked_effort():
         template=_template(),
     )
     (entry,) = cat["models"]
+    levels = entry["supported_reasoning_levels"]
+    assert [lvl["effort"] for lvl in levels] == ["high"]
+    assert entry["default_reasoning_level"] == "high"
+
+
+def test_local_pin_restricts_reasoning_levels_to_baked_effort():
+    # Symmetric to the remote case: a local pin that bakes an effort offers only
+    # that effort in the picker ().
+    cat = cc.build_codex_catalog(
+        model_ids=["callosum:local/model-a0d2:high"],
+        declared_lanes=[],
+        template=_template(),
+    )
+    (entry,) = cat["models"]
+    assert entry["slug"] == "callosum:local/model-a0d2:high"
+    assert entry["display_name"] == "Callosum local · model-a0d2 · high"
     levels = entry["supported_reasoning_levels"]
     assert [lvl["effort"] for lvl in levels] == ["high"]
     assert entry["default_reasoning_level"] == "high"

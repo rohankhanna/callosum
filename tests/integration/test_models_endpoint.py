@@ -33,6 +33,50 @@ def test_v1_models_returns_canonical_catalog() -> None:
         assert entry["owned_by"] == "callosum"
 
 
+def test_v1_models_advertises_local_effort_variants() -> None:
+    """A local backend (kind=litellm_gateway) gets a bare local pin plus a
+    callosum:local/<model>:<effort> variant for each non-default reasoning
+    level it advertises. Models advertising only ("default",) get the bare pin
+    alone. (.)"""
+
+    class _DefaultOnlyLocal(InMemoryFakeBackend):
+        @property
+        def model_metadata(self):  # type: ignore[override]
+            from callosum.cell_grid import ModelMetadata
+
+            return {
+                slug: ModelMetadata(
+                    slug=slug,
+                    supported_in_api=True,
+                    visibility="list",
+                    priority=100,
+                    supported_reasoning_levels=("default",),
+                )
+                for slug in self.advertised_models
+            }
+
+    # model-a0d2 exposes low/medium/high/xhigh (default fake metadata); model-a0g2 only
+    # default. Both are local (litellm_gateway).
+    effortful = InMemoryFakeBackend(id="local-oss", advertised_models=frozenset({"model-a0d2"}))
+    effortful.kind = "litellm_gateway"
+    default_only = _DefaultOnlyLocal(id="local-model-a0g3", advertised_models=frozenset({"model-a0g2"}))
+    default_only.kind = "litellm_gateway"
+    with TestClient(create_app(backends=[effortful, default_only])) as client:
+        ids = {m["id"] for m in client.get("/v1/models").json()["data"]}
+    # Bare local pins for both.
+    assert {"callosum:local/model-a0d2", "callosum:local/model-a0g2"} <= ids
+    # Effort variants only for the model that advertises those levels.
+    assert "callosum:local/model-a0d2:high" in ids
+    assert "callosum:local/model-a0d2:low" in ids
+    # default-only model gets NO effort variant, and "default" is never pinned.
+    assert not any(i.startswith("callosum:local/model-a0g2:") for i in ids)
+    assert "callosum:local/model-a0d2:default" not in ids
+    # Single-model lookup resolves a local effort variant.
+    with TestClient(create_app(backends=[effortful, default_only])) as client:
+        r = client.get("/v1/models/callosum:local/model-a0d2:high")
+    assert r.status_code == 200
+
+
 def test_v1_models_selector_lookup() -> None:
     backend = InMemoryFakeBackend(id="alpha", advertised_models=frozenset({"model-a0e7"}))
     with TestClient(create_app(backends=[backend])) as client:

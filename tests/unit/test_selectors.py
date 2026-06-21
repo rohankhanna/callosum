@@ -28,6 +28,15 @@ from callosum.selectors import (
             "callosum:local/model-a0b6".replace(":30b", ""),  # plain local pin
             SelectorDecision(source="local", pinned_model="model-a0d4"),
         ),
+        (
+            # Local pins accept an effort symmetric to remote ().
+            # The parser gates only on REASONING_LEVELS; per-model support is
+            # enforced downstream (catalog advertise + dispatch 503).
+            "callosum:local/model-a0d2:high",
+            SelectorDecision(
+                source="local", pinned_model="model-a0d2", pinned_effort="high"
+            ),
+        ),
     ],
 )
 def test_parse_valid(model, expected):
@@ -67,10 +76,11 @@ def test_remote_pin_invalid_effort_rejected():
         parse_selector("callosum:remote/model-a0e8:ultra")
 
 
-def test_local_pin_with_effort_rejected():
-    # Whether local effort levels exist is the open question ().
+def test_local_pin_invalid_effort_rejected():
+    # Resolved (): local pins accept an effort, but it must be
+    # a syntactically valid reasoning level — same gate as remote.
     with pytest.raises(SelectorError):
-        parse_selector("callosum:local/model-a0d4:high")
+        parse_selector("callosum:local/model-a0d4:ultra")
 
 
 def test_empty_and_missing_model_rejected():
