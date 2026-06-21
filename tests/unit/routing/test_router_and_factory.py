@@ -3,13 +3,60 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
 from callosum.cell_grid import Cell
 from callosum.routing.factory import RoutingConfig, build_router
 from callosum.routing.protocols import CellCapabilities
-from callosum.routing.router import NoCompatibleCellError
+from callosum.routing.router import NoCompatibleCellError, _task_difficulty
+
+
+def _features(*, text="", tokens=0, needs_tools=False, modalities=("text",)):
+    return SimpleNamespace(
+        text=text,
+        tokens=tokens,
+        needs_tools=needs_tools,
+        modalities=frozenset(modalities),
+    )
+
+
+def test_task_difficulty_trivial_and_moderate_baseline() -> None:
+    """A tiny plain prompt is simple; a mid-size or moderate-term prompt
+    is at least moderate."""
+    assert _task_difficulty(_features(text="hello", tokens=5)) == 1
+    assert _task_difficulty(_features(text="hello", tokens=3_000)) == 2
+    assert _task_difficulty(_features(text="explain the design", tokens=50)) == 2
+
+
+def test_task_difficulty_size_alone_caps_at_hard_not_extreme() -> None:
+    """Tuned 2026-06-21: a huge but content-simple prompt is a window
+    concern, not an extreme-reasoning one. Size alone tops out at tier 3,
+    never tier 4 — request-log evidence shows the largest prompts consume
+    the least reasoning."""
+    assert _task_difficulty(_features(text="fix this typo", tokens=200_000)) == 3
+    # Even a large tool-using prompt without a hard signal stays at 3.
+    assert (
+        _task_difficulty(_features(text="run the linter", tokens=200_000, needs_tools=True))
+        == 3
+    )
+
+
+def test_task_difficulty_extreme_requires_a_real_difficulty_signal() -> None:
+    """Tier 4 is reserved for a genuine hard-task term carried out at
+    scale, or via tools — not raw token count."""
+    assert (
+        _task_difficulty(_features(text="debug this failing build", tokens=50_000)) == 4
+    )
+    assert (
+        _task_difficulty(
+            _features(text="refactor the module", tokens=100, needs_tools=True)
+        )
+        == 4
+    )
+    # A hard term on a small, non-agentic prompt is hard but not extreme.
+    assert _task_difficulty(_features(text="review this architecture", tokens=100)) == 3
 
 # Hand-built capabilities map for testing.
 LOCAL = Cell(model="local-llm", reasoning_effort="default")
@@ -127,9 +174,10 @@ def test_router_picks_only_tool_capable_cell() -> None:
 
 def test_router_prefers_large_context_cell_when_prompt_is_huge() -> None:
     """A 250K-token prompt no longer EXCLUDES LOCAL (128K) — the filter
-    is soft, not hard. The cold-start suitability layer treats this as
-    an extreme request, and the Router's window-fit scaling then favors
-    the strongest large-window compatible cell."""
+    is soft, not hard. Raw size alone is a window concern, not an
+    extreme-difficulty signal (see _task_difficulty), so the win here is
+    driven by the Router's window-fit scaling favoring the strongest
+    large-window compatible cell, not by an inflated difficulty tier."""
     router = _build()
     huge = "x" * 750_000  # ~250K tokens at chars/3
     body = {"messages": [{"role": "user", "content": huge}]}

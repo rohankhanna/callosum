@@ -104,14 +104,34 @@ def _task_difficulty(features: Any) -> int:
     when the configured predictor has no differentiated opinion, so it
     keeps cold-start routing from collapsing to "cheapest compatible"
     while avoiding a second LLM call on the hot path.
+
+    Sizing note (tuned against the request log, 2026-06-21): raw prompt
+    size is NOT a reliable proxy for reasoning difficulty. In this
+    corpus the largest prompts (whole-codebase context, "fix this one
+    thing") consume the LEAST reasoning — controlling for served
+    high/xhigh effort, mean reasoning tokens *decline* from the 2-16K
+    band (~214) through 16-64K (~186) to >=64K (~143). A big prompt is
+    primarily a context-window concern, which is already handled
+    separately by `_window_fit_factor`. So size alone caps difficulty at
+    tier 3 (a moderate-high floor that keeps huge requests off the
+    weakest cell), and the extreme tier is reserved for prompts that
+    carry a genuine difficulty signal — an explicit hard-task term, or a
+    tool-driven (agentic) task — at scale. See
+    scripts/analyze_cold_start_difficulty.py to re-tune against fresh
+    logs.
     """
     text = features.text.lower()
-    if features.tokens >= 64_000 or (features.needs_tools and features.tokens >= 16_000):
+    hard = any(term in text for term in _HARD_PROMPT_TERMS)
+    large = features.tokens >= 16_000
+    # Extreme: a genuinely hard task carried out at scale, or a large
+    # agentic (tool-using) task. Size on its own does not qualify.
+    if hard and (large or features.needs_tools):
         return 4
-    if (
-        features.tokens >= 16_000
-        or any(term in text for term in _HARD_PROMPT_TERMS)
-    ):
+    # Hard: an explicit hard-task signal, or a large prompt. The
+    # size-only contribution is capped here rather than escalated to
+    # extreme — a big-but-simple prompt does not need the most expensive
+    # high-effort cell, just one with enough window (handled elsewhere).
+    if hard or large:
         return 3
     if (
         features.needs_tools
