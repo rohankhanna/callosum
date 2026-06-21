@@ -157,8 +157,10 @@ _MIGRATIONS = [
     # Quality labeling for cost-optimal router training: user feedback and automated signals.
     "ALTER TABLE requests ADD COLUMN quality_score INTEGER",  # -1, 0, +1; NULL = unlabeled
     "ALTER TABLE requests ADD COLUMN quality_label_method TEXT",  # 'user', 'llm_judge_v1', etc
-    # Prompt complexity classification for cost-per-complexity routing.
-    "ALTER TABLE requests ADD COLUMN prompt_complexity_class INTEGER",  # 1, 2, 3; NULL = not classified
+    # Retired marker-only complexity label (). Column kept to
+    # preserve existing rows until an approved migration; no longer populated for
+    # new requests (always NULL).
+    "ALTER TABLE requests ADD COLUMN prompt_complexity_class INTEGER",  # legacy; archival-only
     # Text extraction for label UI keyword search.
     "ALTER TABLE requests ADD COLUMN prompt_text TEXT",
     "ALTER TABLE requests ADD COLUMN response_text TEXT",

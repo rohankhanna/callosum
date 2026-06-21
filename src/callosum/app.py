@@ -98,14 +98,12 @@ _EXHAUSTED_STATUS: dict[ErrorClass, int] = {
 # and read by response handlers to include in X-Proxy-Request-ID header.
 _request_id_context: ContextVar[int | None] = ContextVar("request_id", default=None)
 
-# Deprecated collection flag for marker-only prompt complexity labels.
-# New requests keep this False; scrubbers may still remove legacy/context-poisoned
-# markers from output, but the bare numeric class is no longer collected as
-# routing evidence because it lacks judge/model provenance.
-_extract_complexity_context: ContextVar[bool] = ContextVar("extract_complexity", default=False)
-
-# Context variable to store the extracted complexity class (1, 2, or 3) after response is processed.
-_complexity_class_context: ContextVar[int | None] = ContextVar("complexity_class", default=None)
+# The marker-only prompt-complexity label is retired (): the
+# bare {{{1|2|3}}} class lacked judge/model provenance and was never an input to
+# the live router, so collection is removed. Output scrubbers below still strip
+# any stray marker a model voluntarily emits, and the legacy
+# `prompt_complexity_class` column is preserved (always NULL for new rows) until
+# an explicit data migration is approved.
 
 # Context variable carrying the per-request effective routing mode — the
 # mode this specific request was processed under. Set at the routing
@@ -1566,8 +1564,6 @@ def create_app(
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         _request_id_context.set(None)  # Reset context for this request
-        _extract_complexity_context.set(False)
-        _complexity_class_context.set(None)
         result = await _dispatch_route(
             body,
             request=request,
@@ -1610,8 +1606,6 @@ def create_app(
         Generic OpenAI clients should keep using /v1/responses (no
         client-specific transforms applied)."""
         _request_id_context.set(None)
-        _extract_complexity_context.set(False)
-        _complexity_class_context.set(None)
         result = await _dispatch_route(
             body,
             request=request,
@@ -1644,8 +1638,6 @@ def create_app(
     @app.post("/v1/responses")
     async def responses(request: Request, body: dict[str, Any]) -> Any:
         _request_id_context.set(None)  # Reset context for this request
-        _extract_complexity_context.set(False)
-        _complexity_class_context.set(None)
         result = await _dispatch_route(
             body,
             request=request,
@@ -2489,11 +2481,10 @@ async def _dispatch_nonstream(
         ts_end = time.time()
         _remember_binding(session_registry, session_id, backend.id)
 
-        # Always extract and strip complexity markers from responses
-        # (auto-learning requests track the class; regular requests just clean the output)
-        complexity_class, result = _extract_and_strip_complexity(result)
-        if _extract_complexity_context.get():
-            _complexity_class_context.set(complexity_class)
+        # Defensively strip any stray complexity marker a model voluntarily
+        # emits so it never leaks to the client. The marker-only class itself is
+        # retired () and no longer recorded.
+        _, result = _extract_and_strip_complexity(result)
 
         _log_attempt(
             usage_log,
@@ -2513,7 +2504,7 @@ async def _dispatch_nonstream(
             requested_model=requested_model,
             requested_reasoning_effort=requested_reasoning_effort,
             routing_mode=routing_mode,
-            prompt_complexity_class=_complexity_class_context.get(),
+            prompt_complexity_class=None,  # retired: marker-only label no longer collected
             recommender_classifier_cell=recommender_classifier_cell,
             recommender_raw_output=recommender_raw_output,
             recommender_source=recommender_source,
@@ -3129,23 +3120,16 @@ async def _extract_complexity_from_stream(
         # A) strict {{{N}}}
         match = re.match(r"^\s*\{\{\{([123])\}\}\}", accumulated_text)
         if match:
-            if _extract_complexity_context.get():
-                _complexity_class_context.set(int(match.group(1)))
             return _strip_and_flush(match.end())
 
         # B) any {{{...}}}
         match = re.match(r"^\s*\{\{\{[^}]*\}\}\}", accumulated_text)
         if match:
-            inner = match.group(0).strip().strip("{").strip("}").strip()
-            if inner in ("1", "2", "3") and _extract_complexity_context.get():
-                _complexity_class_context.set(int(inner))
             return _strip_and_flush(match.end())
 
         # C) bare digit followed by blank line
         match = re.match(r"^\s*([123])[ \t]*\n[ \t]*\n", accumulated_text)
         if match:
-            if _extract_complexity_context.get():
-                _complexity_class_context.set(int(match.group(1)))
             return _strip_and_flush(match.end())
 
         stripped_acc = accumulated_text.lstrip()
@@ -3427,7 +3411,7 @@ async def _log_on_complete(
         requested_model=requested_model,
         requested_reasoning_effort=requested_reasoning_effort,
         routing_mode=routing_mode,
-        prompt_complexity_class=_complexity_class_context.get(),
+        prompt_complexity_class=None,  # retired: marker-only label no longer collected
         recommender_classifier_cell=recommender_classifier_cell,
         recommender_raw_output=recommender_raw_output,
         recommender_source=recommender_source,
