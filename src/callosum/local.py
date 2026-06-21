@@ -62,6 +62,12 @@ class ModelEntry:
     context_window: int | None
     api_surfaces: tuple[str, ...]
     enabled: bool
+    #: Ordered reasoning-effort levels the model exposes, per local LLM gateway's
+    #: registry. Always begins with "default". model-a0d2 cells advertise
+    #: ("default", "low", "medium", "high"); reason-by-default models (model-a0g2,
+    #: nemotron reasoning, phi-4-reasoning-plus) advertise only ("default",).
+    #: Defaults to ("default",) when the field is absent (older hub builds).
+    supported_reasoning_levels: tuple[str, ...] = ("default",)
 
     @classmethod
     def from_cli_entry(cls, entry: dict[str, Any]) -> ModelEntry | None:
@@ -90,6 +96,16 @@ class ModelEntry:
         else:
             api_surfaces = ()
         ctx = m.get("context_window")
+        levels_raw = m.get("supported_reasoning_levels")
+        levels = (
+            tuple(s for s in levels_raw if isinstance(s, str) and s)
+            if isinstance(levels_raw, list)
+            else ()
+        )
+        # Contract guarantees "default" leads the list; default to it when the
+        # field is absent (older hub builds) or parsed empty.
+        if not levels:
+            levels = ("default",)
         return cls(
             id=model_id,
             endpoint=endpoint,
@@ -99,6 +115,7 @@ class ModelEntry:
             context_window=int(ctx) if isinstance(ctx, int) and ctx > 0 else None,
             api_surfaces=api_surfaces,
             enabled=bool(m.get("enabled", True)),
+            supported_reasoning_levels=levels,
         )
 
 

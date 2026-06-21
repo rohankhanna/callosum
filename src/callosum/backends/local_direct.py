@@ -136,7 +136,7 @@ class LocalModelRegistryBackend:
                 supported_in_api=True,
                 visibility="list",
                 priority=LOCAL_PRIORITY_OFFSET + idx,
-                supported_reasoning_levels=("default",),
+                supported_reasoning_levels=m.supported_reasoning_levels,
                 context_window=m.context_window,
             )
         return out
