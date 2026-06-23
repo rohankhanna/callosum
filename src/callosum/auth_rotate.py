@@ -59,7 +59,6 @@ from typing import Any
 # configs can pass `--config` to override.
 _DEFAULT_CONFIG_PATHS: tuple[Path, ...] = (
     Path.home() / ".config" / "callosum" / "config.toml",
-    Path.home() / ".config" / "codex-proxy" / "config.toml",
 )
 
 
@@ -380,7 +379,7 @@ def add_subparser(sub: Any) -> None:
     p.add_argument(
         "--config",
         help="Path to callosum config.toml (default: auto-detect under "
-        "~/.config/callosum/ then ~/.config/codex-proxy/).",
+        "~/.config/callosum/).",
     )
     p.add_argument(
         "--backend",
