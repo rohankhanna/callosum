@@ -64,53 +64,6 @@ async def test_auto_learning_rewrites_body_and_logs_router_columns(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_synthetic_virtual_model_tags_rows_separately(tmp_path: Path) -> None:
-    # `auto-learning-synthetic` should rewrite to a real cell AND log
-    # routing_mode='auto-learning-synthetic' so synthetic rows don't double-
-    # count organic coverage.
-    log = UsageLog(tmp_path / "u.sqlite")
-    backend = _backend()
-    async with _client(backends=[backend], usage_log=log) as client:
-        r = await client.post(
-            "/v1/responses",
-            json={"model": "auto-learning-synthetic", "input": []},
-        )
-    assert r.status_code == 200
-
-    conn = sqlite3.connect(tmp_path / "u.sqlite")
-    row = conn.execute("SELECT requested_model, routing_mode, model, reasoning_effort FROM requests").fetchone()
-    assert row is not None
-    requested_model, routing_mode, model, reasoning = row
-    assert requested_model == "auto-learning-synthetic"
-    assert routing_mode == "auto-learning-synthetic"
-    assert model in DEFAULT_MODELS
-    assert reasoning in REASONING_LEVELS
-
-
-@pytest.mark.asyncio
-async def test_synthetic_and_organic_are_logged_as_distinct_routing_modes(tmp_path: Path) -> None:
-    # Fire one organic + one synthetic. Both go through the same recommender,
-    # but the request log must preserve which virtual-model name the client
-    # sent so synthetic-tier velocity can be measured separately from organic
-    # traffic. With no recommender configured, both fall back to the same
-    # cheap cell — so they'll match on (model, effort) but differ in routing_mode.
-    log = UsageLog(tmp_path / "u.sqlite")
-    backend = _backend()
-    async with _client(backends=[backend], usage_log=log) as client:
-        await client.post("/v1/responses", json={"model": "auto-learning", "input": []})
-        await client.post("/v1/responses", json={"model": "auto-learning-synthetic", "input": []})
-
-    conn = sqlite3.connect(tmp_path / "u.sqlite")
-    rows = conn.execute("SELECT routing_mode, model, reasoning_effort FROM requests ORDER BY id").fetchall()
-    assert len(rows) == 2
-    organic = [r for r in rows if r[0] == "auto-learning"]
-    synthetic = [r for r in rows if r[0] == "auto-learning-synthetic"]
-    assert len(organic) == 1 and len(synthetic) == 1
-    # No recommender → both fall back to the same cheap cell.
-    assert organic[0][1:] == synthetic[0][1:]
-
-
-@pytest.mark.asyncio
 async def test_explicit_model_request_routes_through_router(tmp_path: Path) -> None:
     """All requests route through the learning router now — explicit-model
     requests included. routing_mode records the originally-requested name
@@ -155,31 +108,10 @@ def _served_cells(db: Path, routing_mode: str) -> list[tuple[str, str]]:
 
 
 @pytest.mark.asyncio
-async def test_synthetic_exploration_spreads_across_cells(tmp_path: Path) -> None:
-    """Synthetic traffic must sample the least-covered cell each time, so a
-    burst of synthetics spreads across the grid instead of collapsing to the
-    single cost-cheapest cell."""
-    db = tmp_path / "u.sqlite"
-    log = UsageLog(db)
-    backend = _backend()
-    async with _client(backends=[backend], usage_log=log) as client:
-        for _ in range(16):
-            r = await client.post(
-                "/v1/responses",
-                json={"model": "auto-learning-synthetic", "input": []},
-            )
-            assert r.status_code == 200
-    served = _served_cells(db, "auto-learning-synthetic")
-    assert len(served) == 16
-    # Round-robin over under-sampled arms => broad coverage, not a collapse.
-    distinct = set(served)
-    assert len(distinct) >= 10
-
-
-@pytest.mark.asyncio
 async def test_organic_traffic_does_not_explore(tmp_path: Path) -> None:
-    """Organic auto traffic keeps the cost-optimal pick — it must NOT spread
-    across cells the way synthetic exploration does."""
+    """Organic auto traffic keeps the cost-optimal pick and collapses to a
+    single cell — the cold-start baseline the exploration quota is built to
+    break ()."""
     db = tmp_path / "u.sqlite"
     log = UsageLog(db)
     backend = _backend()
@@ -189,29 +121,7 @@ async def test_organic_traffic_does_not_explore(tmp_path: Path) -> None:
             assert r.status_code == 200
     served = _served_cells(db, "auto-learning")
     assert len(served) == 8
-    # No exploration => every organic request collapses to the same cell.
-    assert len(set(served)) == 1
-
-
-@pytest.mark.asyncio
-async def test_exploration_can_be_disabled(tmp_path: Path) -> None:
-    """With exploration_enabled=False, even synthetic traffic collapses to the
-    cost-cheapest cell (legacy behavior)."""
-    from callosum.config import AutoRouterConfig
-
-    db = tmp_path / "u.sqlite"
-    log = UsageLog(db)
-    backend = _backend()
-    cfg = AutoRouterConfig(exploration_enabled=False)
-    async with _client(backends=[backend], usage_log=log, auto_router_config=cfg) as client:
-        for _ in range(8):
-            r = await client.post(
-                "/v1/responses",
-                json={"model": "auto-learning-synthetic", "input": []},
-            )
-            assert r.status_code == 200
-    served = _served_cells(db, "auto-learning-synthetic")
-    assert len(served) == 8
+    # No exploration yet => every organic request collapses to the same cell.
     assert len(set(served)) == 1
 
 

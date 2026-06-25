@@ -20,14 +20,14 @@ DEFAULT_MODELS: tuple[str, ...] = (
     "model-a0e6",
 )
 
-# Virtual model names a client can pick to opt into router behavior. All three
-# now route through the same cell recommender; the names are preserved in the
-# request log's `routing_mode` column so synthetic vs organic traffic stays
-# distinguishable for observability.
-# - "auto":                    primary name (recommender-driven)
-# - "auto-learning":           backward-compat alias (recommender-driven)
-# - "auto-learning-synthetic": synthetic background topper (recommender-driven)
-VIRTUAL_MODELS: frozenset[str] = frozenset({"auto-learning", "auto-learning-synthetic", "auto"})
+# Virtual model names a client can pick to opt into router behavior. Both route
+# through the same cell recommender; the names are preserved in the request
+# log's `routing_mode` column for observability.
+# - "auto":          primary name (recommender-driven)
+# - "auto-learning": backward-compat alias (recommender-driven)
+# (The "auto-learning-synthetic" background-topper tier was removed —
+# .)
+VIRTUAL_MODELS: frozenset[str] = frozenset({"auto-learning", "auto"})
 
 # Known context window limits per model. Used as a fallback when the API
 # response doesn't include context_length. This map is volatile — models churn
@@ -247,9 +247,9 @@ def coverage_from_db(
     Only counts successful requests (status = 200) — failed requests don't help
     fit a cost model. Cells with zero samples are present in the dict with value 0.
 
-    `routing_mode` selects which tier to count: 'auto-learning' (organic) is the
-    default; 'auto-learning-synthetic' counts the background-topper tier
-    independently so the two tiers don't double-count each other.
+    `routing_mode` selects which logged tier to count; 'auto-learning' (organic)
+    is the default. (The exploration-quota enforcer will extend this to count
+    coverage across a lane's organic traffic — .)
     """
     counts: dict[Cell, int] = dict.fromkeys(cells, 0)
     if not usage_log_path.exists():

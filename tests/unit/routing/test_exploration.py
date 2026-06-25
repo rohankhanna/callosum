@@ -1,23 +1,11 @@
 from __future__ import annotations
 
 from callosum.cell_grid import Cell, CellCoverage
-from callosum.routing.exploration import (
-    SYNTHETIC_ROUTING_MODE,
-    exploration_order,
-    is_exploration_request,
-)
+from callosum.routing.exploration import exploration_order
 
 
 def _cell(model: str, effort: str) -> Cell:
     return Cell(model=model, reasoning_effort=effort)
-
-
-def test_is_exploration_request_only_for_synthetic() -> None:
-    assert is_exploration_request(SYNTHETIC_ROUTING_MODE) is True
-    assert is_exploration_request("auto") is False
-    assert is_exploration_request("auto-learning") is False
-    assert is_exploration_request("model-a0e8") is False
-    assert is_exploration_request(None) is False
 
 
 def test_exploration_order_puts_least_sampled_first() -> None:

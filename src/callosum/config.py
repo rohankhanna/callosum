@@ -121,61 +121,18 @@ class CodexCatalogConfig(BaseModel):
 
 
 class AutoRouterConfig(BaseModel):
-    """Background synthetic-request worker for the auto-learning explorer.
+    """Auto-router configuration: the learning-router pipeline plus live
+    operational knobs (context-safety margin, cooldown prober, cost/time
+    estimators).
 
-    The PRIMARY controller is per-account weekly-exhaustion: every tick,
-    for each account, fire synthetics at the rate that lands weekly at
-    100% by reset, given projected human burn (last N hours of organic
-    rate × safety margin). This honors the invariant "weekly capacity
-    is never wasted" since paid-monthly weekly slots can't be regained.
-
-    The FALLBACK controller is the original floor + pct + ceiling logic.
-    It runs only when no quota snapshot is available yet (cold start —
-    backend hasn't served a request yet, so we don't know weekly state),
-    or as an absolute safety cap.
-
-    All synthetic_* defaults are 0 (worker disabled). Set non-zero values
-    to enable — either the floor (cold-start mode) or just plug it in and
-    let the weekly-exhaustion controller do its thing once quota snapshots
-    arrive.
+    The former synthetic background-topper worker (auto-learning-synthetic)
+    has been removed (); its only surviving piece is the
+    coverage machinery (CellCoverage / exploration_order), now reused by
+    the per-cell exploration quota. See docs/architecture/exploration_quota.md.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    # Cold-start fallback bounds (used when no quota_snapshot is available).
-    # All synthetic_* defaults are 0 (worker disabled). Set non-zero values to enable.
-    synthetic_floor_per_day: int = 0
-    synthetic_pct_of_organic: float = 0.0
-    synthetic_hard_ceiling_per_day: int = 0
-    # How often the worker wakes to check whether to fire another synthetic.
-    synthetic_check_interval_seconds: int = 300
-
-    # Weekly-exhaustion controller knobs. Sensible defaults baked in.
-    # `pct_per_synthetic_estimate`: cost of one synthetic request, in weekly%
-    # points. Hand-set v1; learned by the cost model in v2.
-    pct_per_synthetic_estimate: float = 0.1
-    # `prediction_window_hours`: how far back to look when estimating organic
-    # burn rate per account. 168h = 7d.
-    prediction_window_hours: int = 168
-    # `prediction_safety_margin`: multiplier on projected human burn so the
-    # controller errs toward leaving the human room (1.20 = +20%).
-    prediction_safety_margin: float = 1.20
-    # Per-tick cap on synthetics fired (one tick interval). Spreads connection
-    # load even if the math says fire many.
-    max_synthetics_per_tick: int = 10
-    # Stop firing on an account once weekly_used_percent crosses this — close
-    # enough to 100 that we don't risk a 429 on a real human request.
-    weekly_target_pct: float = 95.0
-    # Pause firing on an account when 5h is near-exhausted (otherwise we'd
-    # 429-loop until the 5h window rolls).
-    five_hourly_pause_pct: float = 95.0
-    # Aggressive-exhaustion mode: when weekly_used_percent meets this threshold,
-    # bypass normal pacing and fire continuously until confirmed 429 from upstream.
-    aggressive_exhaustion_pct: float = 98.0
-    # How many consecutive 429 responses confirm real exhaustion (vs transient).
-    aggressive_exhaustion_consecutive_429s: int = 3
-    # Max requests per aggressive burst (safety cap per backend per tick).
-    aggressive_exhaustion_max_per_burst: int = 50
     # Context-safe routing: min headroom (tokens) to leave above current session size
     # when picking a model. Prevents routing to models with insufficient context.
     router_context_safety_margin: int = 8192
@@ -194,13 +151,6 @@ class AutoRouterConfig(BaseModel):
     # produce local-first cost-ordered routing without any ML deps. Phases
     # 4+ swap in BGE embeddings, a k-NN predictor, and the labeler.
     routing: RoutingConfig = Field(default_factory=lambda: RoutingConfig())
-
-    # Arm-level exploration. When enabled, synthetic auto-learning traffic
-    # (requested_model == "auto-learning-synthetic") targets the LEAST-sampled
-    # compatible cell instead of the cost-cheapest one, so coverage
-    # accumulates across the whole (model, reasoning_effort) grid. Organic
-    # traffic is never affected. See callosum.routing.exploration.
-    exploration_enabled: bool = True
 
     # Dynamic per-model cost_rank derived from MEASURED weekly-quota burn
     # (weekly_used_percent deltas in the request log), replacing the flat

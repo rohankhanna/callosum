@@ -34,7 +34,6 @@ from callosum.cell_grid import (
     Cell,
     ModelMetadata,
     build_cells,
-    coverage_from_db,
     live_completion_models,
     reasoning_levels_for,
 )
@@ -49,7 +48,6 @@ from callosum.routing.cost_estimator import (
     CostUsageEstimator,
 )
 from callosum.routing.cost_model import CostRankProvider
-from callosum.routing.exploration import exploration_order, is_exploration_request
 from callosum.routing.factory import build_router
 from callosum.routing.features import _approx_tokens
 from callosum.routing.protocols import CellCapabilities
@@ -134,6 +132,13 @@ class _PeerQualityCapture:
     opinions: list[PeerQualityOpinion] = field(default_factory=list)
     echo_count: int = 0
     malformed_count: int = 0
+    # Injection-side diagnosability (). Set by
+    # _inject_peer_quality_prompt so the metrics row records whether the qop
+    # instruction was actually sent, how many cross-cell prose subjects were
+    # tagged, and — when not injected — why injection no-opped.
+    injected_fired: bool = False
+    subject_count: int = 0
+    skip_reason: str | None = None
     _seen_markers: set[str] = field(default_factory=set)
 
     def apply(self, text: str) -> str:
@@ -184,17 +189,24 @@ def _inject_peer_quality_prompt(
     explicit output-token reservation instead of the rough chars/3 estimate.
     """
     if usage_log is None or session_id is None:
+        capture.skip_reason = "no_session_or_log"
         return body
     if body.get("tools") or body.get("functions"):
+        capture.skip_reason = "had_tools"
         return body
     turns = usage_log.recent_session_assistant_turns(session_id, limit=_PEER_QUALITY_MAX_PRIORS * 2)
     if not turns:
+        capture.skip_reason = "no_turns"
         return body
     subjects = _peer_quality_subjects(turns, current_cell=current_cell)
     if not subjects:
+        # The dominant real-traffic case (): every prior turn is
+        # same-cell (self) or has no prose response_text to judge.
+        capture.skip_reason = "no_eligible_subject"
         return body
     out = _tag_peer_quality_subjects(body, subjects)
     if out is body:
+        capture.skip_reason = "no_text_match"
         return body
     instruction = _peer_quality_instruction(capture.nonce)
     injected = _append_peer_quality_instruction(out, instruction)
@@ -202,9 +214,13 @@ def _inject_peer_quality_prompt(
     projected_tokens = _approx_tokens(json.dumps(injected, separators=(",", ":")))
     overhead_tokens = max(0, projected_tokens - base_tokens)
     if overhead_tokens > _PEER_QUALITY_OVERHEAD_TOKEN_BUDGET:
+        capture.skip_reason = "overhead_budget"
         return body
     if context_window_tokens is not None and projected_tokens + safety_margin_tokens > context_window_tokens:
+        capture.skip_reason = "context_window"
         return body
+    capture.injected_fired = True
+    capture.subject_count = len(subjects)
     return injected
 
 
@@ -1811,12 +1827,11 @@ async def _dispatch_internal(
         auto_cfg = AutoRouterConfig()
     if live_cells_fn is None:
         live_cells_fn = build_cells
-    """Dispatch core, no Request dependency. Used by the HTTP entry-points and
-    by the synthetic-request worker.
+    """Dispatch core, no Request dependency. Used by the HTTP entry-points.
 
-    `forced_backend_id` constrains the selector to a single backend (the
-    synthetic worker uses this to land synthetics on the account it picked).
-    HTTP entry-points never set it.
+    `forced_backend_id` constrains the selector to a single backend. HTTP
+    entry-points never set it; it remains for in-process callers that need to
+    pin dispatch to one account.
     """
     requested_model = _require_model(body)
     requested_reasoning = _extract_reasoning_effort(body)
@@ -2051,27 +2066,11 @@ async def _dispatch_internal(
                 detail=f"no cell can serve this request: {exc}",
             ) from exc
         chosen = decision.cell
-        # Arm-level exploration: synthetic auto-learning traffic deliberately
-        # samples the LEAST-covered compatible cell so coverage accumulates
-        # across the whole cell grid instead of collapsing to the cost-
-        # cheapest one. Organic traffic keeps the router's optimal pick. Only
-        # synthetic requests pay the coverage query — low volume, off the hot
-        # organic path. See callosum.routing.exploration.
+        # The router's cost/quality-optimal pick stands by default. The per-cell
+        # exploration quota (deficit-fill toward under-covered cells on
+        # text-eligible, non-hard turns) hooks in here — see
+        # docs/architecture/exploration_quota.md ().
         _ordered_candidates: tuple[Cell, ...] = decision.candidates
-        if (
-            auto_cfg.exploration_enabled
-            and is_exploration_request(requested_model)
-            and usage_log is not None
-            and len(decision.candidates) > 1
-        ):
-            _coverage = coverage_from_db(
-                usage_log.path,
-                list(decision.candidates),
-                routing_mode=requested_model,
-            )
-            _explore = exploration_order(decision.candidates, _coverage)
-            chosen = _explore[0]
-            _ordered_candidates = tuple(_explore)
         body["model"] = chosen.model
         _stamp_reasoning_effort(body, chosen.reasoning_effort)
         # Per-cell transforms. Empty registry → no-op. Each registered
@@ -3613,6 +3612,9 @@ def _log_attempt(
             echo_count=peer_quality_capture.echo_count,
             malformed_count=peer_quality_capture.malformed_count,
             created_at=ts_end,
+            injected_fired=peer_quality_capture.injected_fired,
+            subject_count=peer_quality_capture.subject_count,
+            skip_reason=peer_quality_capture.skip_reason,
         )
     # Store request_id in context for response handlers to access
     _request_id_context.set(request_id)
