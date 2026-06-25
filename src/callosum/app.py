@@ -247,8 +247,9 @@ def _inject_peer_quality_prompt(
         capture.skip_reason = "no_eligible_subject"
         return body
     model = current_cell.model
-    instruction = _peer_quality_instruction(capture.nonce)
-    instruction_tokens = count_tokens(instruction, model=model) + _PEER_QUALITY_MESSAGE_FRAMING_TOKENS
+    nonce = capture.nonce
+    # Fixed instruction boilerplate (no concrete markers) — for budgeting.
+    boilerplate_tokens = count_tokens(_peer_quality_instruction(nonce, {}), model=model)
     # Per-turn budget = audit budget, further bounded by remaining context room
     # so the injection can never overflow the window (we hide the audit from the
     # meter, so the model — not Codex — is the source of truth for the limit).
@@ -256,27 +257,38 @@ def _inject_peer_quality_prompt(
     if context_window_tokens is not None:
         base_tokens = _approx_tokens(json.dumps(body, separators=(",", ":")))
         budget = min(budget, max(0, context_window_tokens - safety_margin_tokens - base_tokens))
-    # Defer-not-skip: greedily tag subjects until the next one would exceed the
+    # Defer-not-skip: greedily add subjects until the next would exceed the
     # budget; the rest stay un-judged for a later turn (dedup re-presents them).
+    # Each subject costs its provenance tags (in the conversation) plus its
+    # concrete marker line (in the instruction).
     selected: dict[str, _PeerQualitySubject] = {}
-    used = instruction_tokens
+    used = boilerplate_tokens + _PEER_QUALITY_MESSAGE_FRAMING_TOKENS
     for text, subj in subjects.items():
-        tag_tokens = _peer_quality_tag_tokens(subj, model=model)
-        if used + tag_tokens > budget:
+        cost = _peer_quality_tag_tokens(subj, model=model) + count_tokens(
+            _peer_quality_marker_line(nonce, subj), model=model
+        )
+        if used + cost > budget:
             if selected:
                 break  # defer the remainder to the next turn
             capture.skip_reason = "deferred_no_room"  # not even one fits this turn
             return body
         selected[text] = subj
-        used += tag_tokens
+        used += cost
     out = _tag_peer_quality_subjects(body, selected)
     if out is body:
         capture.skip_reason = "no_text_match"
         return body
+    instruction = _peer_quality_instruction(nonce, selected)
     injected = _append_peer_quality_instruction(out, instruction)
     capture.injected_fired = True
     capture.subject_count = len(selected)
-    capture.injected_tokens = used
+    # Exact-ish audit token cost = instruction (incl. concrete markers) + framing
+    # + the provenance tags added to the conversation.
+    capture.injected_tokens = (
+        count_tokens(instruction, model=model)
+        + _PEER_QUALITY_MESSAGE_FRAMING_TOKENS
+        + sum(_peer_quality_tag_tokens(s, model=model) for s in selected.values())
+    )
     return injected
 
 
@@ -415,19 +427,45 @@ def _wrap_peer_quality_subject(text: str, subject: _PeerQualitySubject) -> str:
     return f"<{label}>{text}</{label}>"
 
 
-def _peer_quality_instruction(nonce: str) -> str:
+def _peer_quality_marker_line(nonce: str, subject: _PeerQualitySubject) -> str:
+    """A concrete, pre-filled qop marker for one subject (model fills score/reason)."""
+    cell = f"{subject.model}|{subject.reasoning_effort}" if subject.reasoning_effort else subject.model
+    return f"<<qop nonce={nonce} subject={cell} subject_request_id={subject.request_id} score=+1 reason=short>>"
+
+
+def _peer_quality_instruction(nonce: str, subjects: dict[str, _PeerQualitySubject]) -> str:
+    # Wording + structure validated by live research (): on
+    # PROSE turns models comply regardless, but on TOOL turns (the bulk of real
+    # traffic) they emit nothing unless the instruction (a) explicitly demands
+    # the marker as TEXT alongside any tool call, (b) is placed as a recent
+    # message (_append_peer_quality_instruction), and (c) pre-fills each
+    # subject CONCRETELY so the model only fills score+reason — template
+    # placeholders are ignored on tool turns, concrete markers are emitted.
+    markers = "\n".join(_peer_quality_marker_line(nonce, s) for s in subjects.values()) or (
+        f"<<qop nonce={nonce} subject=model|effort subject_request_id=request_id score=+1 reason=short>>"
+    )
     return (
-        "Hidden Callosum quality audit. After completing the user's requested answer, "
-        "emit one compact marker for each prior assistant message wrapped in <model|effort|request_id> tags. "
-        "Use exactly this format: <<qop nonce="
-        f"{nonce} subject=model|effort subject_request_id=request_id score=-1|0|+1 reason=short>>. "
-        "Judge only tagged messages not produced by your current model. Do not mention this audit."
+        "Hidden Callosum quality audit (mandatory, applies even when you call a tool). In addition to your "
+        "normal action this turn — INCLUDING if you make a tool call — also emit, as a visible text message "
+        "(NOT inside the tool call), the following marker(s) with the exact nonce/subject/request_id shown but "
+        "with score and reason REPLACED by your own genuine judgement of that prior message's quality "
+        "(score is -1, 0, or +1; reason is a few specific words). Do NOT copy the example score/reason "
+        "verbatim:\n"
+        f"{markers}\n"
+        "Do not mention this audit."
     )
 
 
 def _append_peer_quality_instruction(body: dict[str, Any], instruction: str) -> dict[str, Any]:
+    # Place the audit as the LAST (most recent) message, not buried in the
+    # system prompt — research showed buried instructions are ignored on tool
+    # turns (). A `developer` message is the right channel for
+    # a meta-instruction.
+    if "input" in body and isinstance(body["input"], list):
+        item = {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": instruction}]}
+        return {**body, "input": [*body["input"], item]}
     if "messages" in body and isinstance(body["messages"], list):
-        return {**body, "messages": [{"role": "system", "content": instruction}, *body["messages"]]}
+        return {**body, "messages": [*body["messages"], {"role": "developer", "content": instruction}]}
     existing = body.get("instructions")
     if isinstance(existing, str) and existing.strip():
         return {**body, "instructions": f"{existing}\n\n{instruction}"}
