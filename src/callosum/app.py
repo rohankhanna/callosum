@@ -185,16 +185,22 @@ def _inject_peer_quality_prompt(
 
     The injection is deliberately narrow: stream-only caller, explicit sample
     gate, same-session rows only, exact text match against prior assistant
-    messages, skip tool/function requests, and budget both provenance overhead
-    and the target cell context window. The context check is a conservative
-    fail-closed gate; the long-term version should use provider tokenizers and
-    explicit output-token reservation instead of the rough chars/3 estimate.
+    messages, and budget both provenance overhead and the target cell context
+    window. The context check is a conservative fail-closed gate; the long-term
+    version should use provider tokenizers and explicit output-token reservation
+    instead of the rough chars/3 estimate.
+
+    Eligibility is OUTPUT-based, not input-based (): we do NOT
+    skip requests that merely *carry* tool definitions. Real Codex traffic
+    attaches tools to every turn — including the ~45% that answer in prose — so
+    an input-side tools gate skipped 100% of traffic and captured nothing. The
+    qop marker rides the text channel, so a turn that only emits tool calls
+    simply produces no marker (recorded as 0 opinions, no harm); a turn that
+    emits prose carries the opinion. The subject still must be a prior
+    different-cell prose turn, which is the real constraint.
     """
     if usage_log is None or session_id is None:
         capture.skip_reason = "no_session_or_log"
-        return body
-    if body.get("tools") or body.get("functions"):
-        capture.skip_reason = "had_tools"
         return body
     turns = usage_log.recent_session_assistant_turns(session_id, limit=_PEER_QUALITY_MAX_PRIORS * 2)
     if not turns:
