@@ -62,6 +62,16 @@ router after the cost-weighted selector picks its optimal cell.
    distinguishable in the log: excludable from "what would the router naturally
    do" baselines, while their quality labels are still usable.
 
+### Observability
+
+`/status` carries a `router.exploration_quota` block: the `enabled` flag plus a
+per-cell coverage report (samples, share, floor, `under_floor`, bootstrap
+`phase`/`bootstrap_remaining`) and rollups (`cells_cleared_threshold`,
+`cells_in_bootstrap`, `cells_under_floor`), reported least-sampled-first — so
+coverage is visible even before forcing is enabled. Forced turns are also
+counted under `effective_routing_mode = "quota_explore"` in `/status`'s
+per-mode stats.
+
 ### After data accrues
 
 Once cells clear the per-cell sample threshold and the peer-quality matrix has

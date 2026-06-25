@@ -1210,6 +1210,30 @@ def create_app(
                     "available": False,
                     "reason": "report_failed",
                 }
+            # Per-cell exploration-quota coverage: how full each cell is vs its
+            # floor and bootstrap progress (). Always reported
+            # so an operator can see coverage even before enabling forcing.
+            quota_block: dict[str, Any] = {"enabled": auto_cfg.exploration_quota_enabled}
+            try:
+                from callosum.routing.quota import exploration_quota_report
+
+                _grid = build_cells()
+                _cov = cell_sample_counts(
+                    usage_log.path, _grid, window_seconds=auto_cfg.quota_window_seconds
+                )
+                quota_block.update(
+                    exploration_quota_report(
+                        _grid,
+                        _cov,
+                        maintenance_floor_pct=auto_cfg.quota_maintenance_floor_pct,
+                        bootstrap_floor_pct=auto_cfg.quota_bootstrap_floor_pct,
+                        bootstrap_sample_threshold=auto_cfg.quota_bootstrap_sample_threshold,
+                    )
+                )
+            except Exception:
+                logger.exception("status: exploration-quota report failed")
+                quota_block["available"] = False
+            router_block["exploration_quota"] = quota_block
         # Canary baseline block: current effective percent given live
         # quota state, plus rolling per-mode failure rates over 1h /
         # 6h / 24h windows. The dev loop polls this same data via SQL
