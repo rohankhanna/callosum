@@ -60,6 +60,7 @@ from callosum.routing.usage_rates import usage_rate_report
 from callosum.selector import BackendSnapshot, blocking_meters, constraining_meter, select
 from callosum.selectors import SelectorError, is_selector, parse_selector
 from callosum.session import SessionRegistry
+from callosum.tokenization import count_tokens
 from callosum.usage_log import RoutingAttempt, SessionAssistantTurn, UsageLog, UsageLogEntry
 
 logger = logging.getLogger("callosum.startup")
@@ -117,8 +118,19 @@ _request_id_context: ContextVar[int | None] = ContextVar("request_id", default=N
 _effective_routing_mode_context: ContextVar[str | None] = ContextVar("effective_routing_mode", default=None)
 
 _PEER_QUALITY_CAPTURE_RATE_ENV = "CALLOSUM_PEER_QUALITY_CAPTURE_RATE"
-_PEER_QUALITY_MAX_PRIORS = 4
+# Recent session assistant turns to scan for un-judged subjects. No hard cap on
+# how many get judged () — judging is bounded per turn by the
+# token budget below (defer-not-skip), not by a fixed count.
+_PEER_QUALITY_MAX_SCAN = 50
+# Per-turn audit token budget: judge as many un-judged subjects as fit this many
+# tokens; the rest are deferred to later turns (picked up via dedup), never
+# skipped outright. Also bounded by remaining context room so the injection can
+# never overflow the model window.
 _PEER_QUALITY_OVERHEAD_TOKEN_BUDGET = 1200
+# Approx framing tokens for the injected system message (role + delimiters);
+# folded into the exact subtraction, biased to slightly over-count so the audit
+# can never appear on the meter.
+_PEER_QUALITY_MESSAGE_FRAMING_TOKENS = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +153,10 @@ class _PeerQualityCapture:
     injected_fired: bool = False
     subject_count: int = 0
     skip_reason: str | None = None
+    # Exact token cost of the injected audit (instruction + provenance tags),
+    # computed with the model's real tokenizer (). Subtracted
+    # from the Codex-facing usage so the audit never moves the context meter.
+    injected_tokens: int = 0
     _seen_markers: set[str] = field(default_factory=set)
 
     def apply(self, text: str) -> str:
@@ -198,38 +214,97 @@ def _inject_peer_quality_prompt(
     simply produces no marker (recorded as 0 opinions, no harm); a turn that
     emits prose carries the opinion. The subject still must be a prior
     different-cell prose turn, which is the real constraint.
+
+    Judging is DEDUPED, UNCAPPED, and DEFERRED (): only
+    present subjects this judge cell hasn't already rated; judge as many as fit
+    a per-turn token budget (and the remaining context room); leave the rest
+    un-judged so the next turn picks them up. `capture.injected_tokens` records
+    the exact audit cost so it can be subtracted from the Codex-facing usage.
     """
     if usage_log is None or session_id is None:
         capture.skip_reason = "no_session_or_log"
         return body
-    turns = usage_log.recent_session_assistant_turns(session_id, limit=_PEER_QUALITY_MAX_PRIORS * 2)
+    turns = usage_log.recent_session_assistant_turns(session_id, limit=_PEER_QUALITY_MAX_SCAN)
     if not turns:
         capture.skip_reason = "no_turns"
         return body
-    subjects = _peer_quality_subjects(turns, current_cell=current_cell)
+    # Dedup: drop subjects this judge cell has already rated (the model can't
+    # remember across calls — we enforce it from the opinions table).
+    already_judged = usage_log.judged_subject_request_ids(
+        session_id=session_id,
+        judge_model=current_cell.model,
+        judge_reasoning_effort=current_cell.reasoning_effort or None,
+    )
+    subjects = _peer_quality_subjects(
+        turns, current_cell=current_cell, exclude_request_ids=already_judged
+    )
+    # Only subjects whose text is actually present in this request can be tagged.
+    present_texts = _body_assistant_texts(body)
+    subjects = {text: subj for text, subj in subjects.items() if text in present_texts}
     if not subjects:
-        # The dominant real-traffic case (): every prior turn is
-        # same-cell (self) or has no prose response_text to judge.
+        # Every cross-cell prose subject is already judged or not in this turn's
+        # history ( / ).
         capture.skip_reason = "no_eligible_subject"
         return body
-    out = _tag_peer_quality_subjects(body, subjects)
+    model = current_cell.model
+    instruction = _peer_quality_instruction(capture.nonce)
+    instruction_tokens = count_tokens(instruction, model=model) + _PEER_QUALITY_MESSAGE_FRAMING_TOKENS
+    # Per-turn budget = audit budget, further bounded by remaining context room
+    # so the injection can never overflow the window (we hide the audit from the
+    # meter, so the model — not Codex — is the source of truth for the limit).
+    budget = _PEER_QUALITY_OVERHEAD_TOKEN_BUDGET
+    if context_window_tokens is not None:
+        base_tokens = _approx_tokens(json.dumps(body, separators=(",", ":")))
+        budget = min(budget, max(0, context_window_tokens - safety_margin_tokens - base_tokens))
+    # Defer-not-skip: greedily tag subjects until the next one would exceed the
+    # budget; the rest stay un-judged for a later turn (dedup re-presents them).
+    selected: dict[str, _PeerQualitySubject] = {}
+    used = instruction_tokens
+    for text, subj in subjects.items():
+        tag_tokens = _peer_quality_tag_tokens(subj, model=model)
+        if used + tag_tokens > budget:
+            if selected:
+                break  # defer the remainder to the next turn
+            capture.skip_reason = "deferred_no_room"  # not even one fits this turn
+            return body
+        selected[text] = subj
+        used += tag_tokens
+    out = _tag_peer_quality_subjects(body, selected)
     if out is body:
         capture.skip_reason = "no_text_match"
         return body
-    instruction = _peer_quality_instruction(capture.nonce)
     injected = _append_peer_quality_instruction(out, instruction)
-    base_tokens = _approx_tokens(json.dumps(body, separators=(",", ":")))
-    projected_tokens = _approx_tokens(json.dumps(injected, separators=(",", ":")))
-    overhead_tokens = max(0, projected_tokens - base_tokens)
-    if overhead_tokens > _PEER_QUALITY_OVERHEAD_TOKEN_BUDGET:
-        capture.skip_reason = "overhead_budget"
-        return body
-    if context_window_tokens is not None and projected_tokens + safety_margin_tokens > context_window_tokens:
-        capture.skip_reason = "context_window"
-        return body
     capture.injected_fired = True
-    capture.subject_count = len(subjects)
+    capture.subject_count = len(selected)
+    capture.injected_tokens = used
     return injected
+
+
+def _peer_quality_tag_tokens(subject: _PeerQualitySubject, *, model: str) -> int:
+    """Exact token cost of the open+close provenance tags for one subject."""
+    cell = f"{subject.model}|{subject.reasoning_effort}" if subject.reasoning_effort else subject.model
+    label = f"{cell}|{subject.request_id}"
+    return count_tokens(f"<{label}>", model=model) + count_tokens(f"</{label}>", model=model)
+
+
+def _body_assistant_texts(body: dict[str, Any]) -> set[str]:
+    """All assistant-message text strings present in the outbound body."""
+    texts: set[str] = set()
+    for key in ("messages", "input"):
+        items = body.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict) or item.get("role") != "assistant":
+                continue
+            content = item.get("content")
+            if isinstance(content, str):
+                texts.add(content)
+            elif isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and isinstance(part.get("text"), str):
+                        texts.add(part["text"])
+    return texts
 
 
 def _context_window_for_cell(backends_list: Sequence[Backend], cell: Cell) -> int | None:
@@ -253,11 +328,20 @@ def _peer_quality_subjects(
     turns: list[SessionAssistantTurn],
     *,
     current_cell: Cell,
+    exclude_request_ids: frozenset[int] | set[int] = frozenset(),
 ) -> dict[str, _PeerQualitySubject]:
+    """Eligible un-judged subjects keyed by their response text.
+
+    Excludes self (same cell) and any subject this judge cell already rated
+    (exclude_request_ids). No count cap — the per-turn token budget bounds
+    how many actually get tagged ().
+    """
     subjects: dict[str, _PeerQualitySubject] = {}
     current_effort = current_cell.reasoning_effort or None
     for turn in turns:
         if turn.model == current_cell.model and turn.reasoning_effort == current_effort:
+            continue
+        if turn.request_id in exclude_request_ids:
             continue
         subjects.setdefault(
             turn.response_text,
@@ -267,8 +351,6 @@ def _peer_quality_subjects(
                 reasoning_effort=turn.reasoning_effort,
             ),
         )
-        if len(subjects) >= _PEER_QUALITY_MAX_PRIORS:
-            break
     return subjects
 
 
@@ -3363,13 +3445,46 @@ async def _strip_peer_quality_markers_from_stream(
                 except (json.JSONDecodeError, ValueError):
                     new_lines.append(line)
                     continue
-                if _scrub_peer_quality_from_event(data, capture=capture):
+                mutated = _scrub_peer_quality_from_event(data, capture=capture)
+                # Subtract the audit's token cost from the usage the client sees,
+                # so the hidden injection never moves Codex's context meter
+                # (; Codex reads usage.input_tokens).
+                mutated = _subtract_audit_tokens_from_event(data, capture=capture) or mutated
+                if mutated:
                     new_lines.append("data: " + json.dumps(data))
                 else:
                     new_lines.append(line)
             yield ("\n".join(new_lines)).encode("utf-8") + b"\n\n"
     if leftover:
         yield leftover
+
+
+def _subtract_audit_tokens_from_event(data: dict[str, Any], *, capture: _PeerQualityCapture) -> bool:
+    """Subtract the injected audit tokens from a response's usage block.
+
+    Codex derives "Context X% left" from the response usage.input_tokens
+    (verified against codex-rs core/src/client.rs). The audit's input tokens are
+    real, so without this they would shrink the meter. We subtract the exact
+    injected count from the client-facing input_tokens/total_tokens so
+    the meter reflects only the user's real conversation. callosum's own quota
+    accounting reads the upstream usage separately and is unaffected.
+    """
+    n = capture.injected_tokens
+    if n <= 0:
+        return False
+    usage = data.get("usage")
+    if not isinstance(usage, dict):
+        resp = data.get("response")
+        usage = resp.get("usage") if isinstance(resp, dict) else None
+    if not isinstance(usage, dict):
+        return False
+    changed = False
+    for key in ("input_tokens", "prompt_tokens", "total_tokens"):
+        val = usage.get(key)
+        if isinstance(val, int):
+            usage[key] = max(0, val - n)
+            changed = True
+    return changed
 
 
 async def _strip_trailing_complexity_marker(

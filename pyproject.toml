@@ -12,6 +12,10 @@ dependencies = [
     "pydantic>=2.6",
     "argon2-cffi>=23.1",
     "numpy>=1.26",
+    # Exact token counting for the peer-quality audit overhead, so the audit's
+    # tokens are subtracted exactly from the Codex-facing usage and never move
+    # the context meter (). Small pure-data wheels.
+    "tiktoken>=0.7",
 ]
 
 [project.optional-dependencies]

@@ -643,6 +643,39 @@ class UsageLog:
                 rows,
             )
 
+    def judged_subject_request_ids(
+        self,
+        *,
+        session_id: str | None,
+        judge_model: str,
+        judge_reasoning_effort: str | None,
+    ) -> frozenset[int]:
+        """Subject request ids this judge cell has already rated in this session.
+
+        Powers capture dedup (): a judge never re-rates a
+        message it already judged. Matches on the (session, judge model, judge
+        effort) cell; NULL-effort is compared with IS NULL.
+        """
+        if session_id is None:
+            return frozenset()
+        effort_clause = (
+            "judge_reasoning_effort IS NULL"
+            if judge_reasoning_effort is None
+            else "judge_reasoning_effort = ?"
+        )
+        params: list[object] = [session_id, judge_model]
+        if judge_reasoning_effort is not None:
+            params.append(judge_reasoning_effort)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT DISTINCT subject_request_id FROM peer_quality_opinions"
+                " WHERE session_id = ? AND judge_model = ? AND "
+                + effort_clause
+                + " AND subject_request_id IS NOT NULL",
+                params,
+            ).fetchall()
+        return frozenset(int(r[0]) for r in rows)
+
     def record_peer_quality_capture_metrics(
         self,
         *,
