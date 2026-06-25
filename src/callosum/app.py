@@ -1217,7 +1217,11 @@ def create_app(
             try:
                 from callosum.routing.quota import exploration_quota_report
 
-                _grid = build_cells()
+                # Report over the LIVE cell grid the router actually uses
+                # (upstream-advertised models, version-ranked), not the static
+                # DEFAULT_MODELS — so de-listed models (e.g. model-a0e6) drop out
+                # and current ones (model-a0e8) appear, matching what gets routed.
+                _grid = _live_cells()
                 _cov = cell_sample_counts(
                     usage_log.path, _grid, window_seconds=auto_cfg.quota_window_seconds
                 )
