@@ -3042,9 +3042,17 @@ def _scrub_full_text_event(data: dict[str, Any]) -> bool:
 
 def _hold_trailing_partial(text: str) -> tuple[str, str]:
     """Split into (emit, hold): hold is a trailing substring that could be the
-    start of a provenance tag or qop marker, kept back until the next delta
-    completes or drops it. Only tag-shaped prefixes are held — ordinary text
-    (incl. "x < y") is emitted whole."""
+    start of a provenance tag or a qop marker, kept back until the next delta
+    completes it (so the marker is reassembled and recorded, not split-and-lost
+    — critical for the reasoning channels, which have no full-text .done net).
+
+    An unclosed <<qop is held whole even though it contains spaces, so the
+    opinion is recorded; otherwise only space-less tag-shaped prefixes are held,
+    so ordinary text (incl. "x < y") is emitted immediately."""
+    # An opened-but-not-closed qop marker: hold from it until `>>` arrives.
+    qop = text.rfind("<<qop")
+    if qop != -1 and ">>" not in text[qop:]:
+        return text[:qop], text[qop:]
     m = _PARTIAL_TAG_PREFIX_RE.search(text)
     if m is None:
         return text, ""
