@@ -227,6 +227,18 @@ END""",
     "ALTER TABLE peer_quality_opinions ADD COLUMN subject_request_id INTEGER",
     "CREATE INDEX IF NOT EXISTS idx_peer_quality_opinions_subject_request_id "
     "ON peer_quality_opinions(subject_request_id)",
+    # Capture diagnosability (): the metrics row is written for
+    # every *sampled* streaming request, but injection silently no-ops when there
+    # is no eligible cross-cell prose subject (tool turns, single-cell sessions,
+    # budget). Without these columns `opinion_count=0` cannot distinguish "model
+    # was asked and stayed silent" from "the qop instruction was never sent", so
+    # the shadow report cannot tell whether the soak is starved or non-compliant.
+    # injected_fired=1 means the instruction was actually appended; subject_count
+    # is how many distinct cross-cell prose priors were tagged; skip_reason names
+    # the early-return cause when injected_fired=0. Pre-existing rows stay NULL.
+    "ALTER TABLE peer_quality_capture_metrics ADD COLUMN injected_fired INTEGER",
+    "ALTER TABLE peer_quality_capture_metrics ADD COLUMN subject_count INTEGER",
+    "ALTER TABLE peer_quality_capture_metrics ADD COLUMN skip_reason TEXT",
 ]
 
 
@@ -644,14 +656,23 @@ class UsageLog:
         echo_count: int,
         malformed_count: int,
         created_at: float,
+        injected_fired: bool = False,
+        subject_count: int = 0,
+        skip_reason: str | None = None,
     ) -> None:
-        """Persist request-level qop capture counters for observability."""
+        """Persist request-level qop capture counters for observability.
+
+        `injected_fired`/`subject_count`/`skip_reason` ()
+        distinguish a sampled-but-not-injected request from one where the
+        model was actually asked for an opinion and stayed silent.
+        """
         with self._lock:
             self._conn.execute(
                 "INSERT OR REPLACE INTO peer_quality_capture_metrics"
                 " (request_id, session_id, judge_backend_id, judge_model, judge_reasoning_effort,"
-                "  nonce, opinion_count, echo_count, malformed_count, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "  nonce, opinion_count, echo_count, malformed_count, created_at,"
+                "  injected_fired, subject_count, skip_reason)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     request_id,
                     session_id,
@@ -663,6 +684,9 @@ class UsageLog:
                     echo_count,
                     malformed_count,
                     created_at,
+                    1 if injected_fired else 0,
+                    subject_count,
+                    skip_reason,
                 ),
             )
 
