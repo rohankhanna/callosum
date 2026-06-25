@@ -1,80 +1,55 @@
 # Per-cell exploration quota
 
-> Status: in progress (). Supersedes the removed synthetic
-> exploration tier ().
+> Status: live (). Replaces the removed synthetic exploration
+> tier ().
 
 ## Why this exists
 
-The learning router (`routing/router.py`) is supposed to route each request to
-the best `(model, reasoning_effort)` **cell** for the cost. It can't, because
-its quality signal is empty: `quality_score` is NULL on ~100% of request rows,
-so the predictor is the `uniform` stub and the cost-weighted selector collapses
-all traffic to one cell (today: `model-a0e8`). See `docs/glossary.md` for the I/O
-and routing vocabulary used here.
+The learning router routes each request to a `(model, reasoning_effort)`
+**cell**. Its quality signal starts empty (`quality_score` NULL on ~all rows),
+so the predictor is uniform and the cost-weighted selector collapses all traffic
+to one cell (e.g. `model-a0e8`). To learn whether a cheaper cell is good enough, the
+router has to actually use it sometimes. See `docs/glossary.md` for vocabulary.
 
-To earn cost-efficient routing you must first **measure** how each cell
-performs — which requires routing some traffic to cells the selector would not
-naturally pick. That is exploration, and its price is paid up front. The two
-data consumers that need this coverage:
+## The rule
 
-- the **peer-quality matrix** (one cell rates a prior *different-cell text
-  turn*; `peer_quality.py`), and
-- the **quality predictor** (`routing/predictor/knn.py`).
+**Every compatible cell, within its lane, must get at least `quota_floor_pct`
+(default 1%) of recent traffic. Mandatory; no exceptions.**
 
-The **root cause** the soak hit (): real Codex traffic
-routes all message-text turns to one cell and uses other cells only for tool
-turns (no judgeable text), so cross-cell text pairs — the only thing the matrix
-feeds on — essentially never co-occur. A coverage floor manufactures them.
+When a candidate cell is below its floor, the turn is steered to it
+(least-sampled first); once every candidate meets its floor, routing is
+untouched. Lane scope is implicit — the enforcer runs on the router's post-gate
+candidate pool, which is already filtered to the lane (`auto` floors all cells,
+`remote-only` remote cells, `local-only` local cells).
 
-## What was removed
+## Mechanism
 
-The synthetic traffic tier (`auto-learning-synthetic`) was deleted: it was a
-dead, unbuilt emitter (no worker loop ever consumed its `synthetic_*` config;
-the May-2026 batch came from an external driver, was non-streaming, stored no
-text, and was never labeled — so it produced coverage counts but never a
-quality label). Its reusable coverage machinery — `CellCoverage` and the
-least-covered-first `exploration_order` — is **kept** and repurposed as the
-quota-floor engine.
+1. The router picks its cost/quality-optimal `chosen` cell as usual.
+2. `cell_sample_counts` reads each candidate cell's successful-served count over
+   the `quota_window_seconds` window (30 days).
+3. `select_quota_deficit_cell` (`routing/quota.py`): if any candidate's share of
+   that traffic is below `quota_floor_pct`, return the least-sampled such cell;
+   else `None`.
+4. If a deficit cell is returned, route the turn there and stamp
+   `effective_routing_mode = "quota_explore"` so forced turns are distinguishable
+   in the log (excludable from natural-routing baselines, quality labels still
+   usable).
 
-## Design
+There is no count cap, no bootstrap rate, no difficulty exception, and no
+tool-turn exception: a turn forced to an under-floor cell is forced regardless of
+its shape. The floor is the only knob.
 
-A per-cell **minimum-usage floor** on organic traffic, enforced inside the
-router after the cost-weighted selector picks its optimal cell.
+## Observability
 
-| Decision | Choice |
-|---|---|
-| Quota unit | **per cell** `(model, reasoning_effort)` — full grid coverage, accepting that callosum overrides the client's requested effort |
-| Rate | **bootstrap then taper** — force ~5% of compatible turns per under-covered cell until it reaches the per-cell sample threshold, then drop that cell to a 1% maintenance floor |
-| Hard turns | **protected** — turns at/above the router's `_task_difficulty` cutoff are never force-routed; they take the optimal cell |
-| Eligibility | floor enforced only on **text-producing turns**, never pure tool/exec turns (a tool turn yields no opinion; upgrading its effort is pure cost) |
-| Lane scope | enforced over the **post-gate candidate pool**, which the gate stack has already filtered to the lane — so `auto` floors all cells, `remote-only` floors remote cells, `local-only` floors local cells, for free |
+`/status` carries `router.exploration_quota`: the `enabled` flag, `floor_pct`,
+per-cell `{samples, share, under_floor}` (least-sampled first), and
+`{total_samples, cells_total, cells_under_floor}`. Forced turns are also counted
+under `effective_routing_mode = "quota_explore"` in `/status`'s per-mode stats.
+The grid is the live, upstream-advertised, version-ranked cell set (de-listed
+models drop out automatically).
 
-### Mechanism
+## Config
 
-1. Router selects the optimal `chosen` cell as today.
-2. If the turn is text-eligible and below the hard-difficulty cutoff, read the
-   rolling per-cell served-share + sample-count over a recent window
-   (`CellCoverage` / `coverage_from_db`, scoped to the lane's candidate set).
-3. If any compatible candidate cell is **below its floor** (bootstrap floor
-   while under threshold, else maintenance floor), steer to the most-deficient
-   such cell (`exploration_order`) and override `reasoning_effort` to it.
-4. Stamp provenance (`routing_mode = "quota-explore"`) so forced turns are
-   distinguishable in the log: excludable from "what would the router naturally
-   do" baselines, while their quality labels are still usable.
-
-### Observability
-
-`/status` carries a `router.exploration_quota` block: the `enabled` flag plus a
-per-cell coverage report (samples, share, floor, `under_floor`, bootstrap
-`phase`/`bootstrap_remaining`) and rollups (`cells_cleared_threshold`,
-`cells_in_bootstrap`, `cells_under_floor`), reported least-sampled-first — so
-coverage is visible even before forcing is enabled. Forced turns are also
-counted under `effective_routing_mode = "quota_explore"` in `/status`'s
-per-mode stats.
-
-### After data accrues
-
-Once cells clear the per-cell sample threshold and the peer-quality matrix has
-enough labeled opinions ( P3 thresholds), revisit flipping
-the predictor from `uniform` to `knn` so routing becomes quality-driven and the
-floor drops to maintenance. The floor is the bootstrap, not the destination.
+`[auto_router]` in `~/.config/callosum/config.toml`:
+`exploration_quota_enabled` (on/off), `quota_floor_pct` (default 0.01),
+`quota_window_seconds` (default 30 days).

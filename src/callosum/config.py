@@ -152,28 +152,15 @@ class AutoRouterConfig(BaseModel):
     # 4+ swap in BGE embeddings, a k-NN predictor, and the labeler.
     routing: RoutingConfig = Field(default_factory=lambda: RoutingConfig())
 
-    # Per-cell exploration quota (). Forces a minimum-usage
-    # floor on each compatible (model, reasoning_effort) cell so the quality
-    # signal can accrue across the grid instead of collapsing to one cell. Off
-    # by default (opt-in): enabling it deliberately degrades a bounded slice of
-    # real turns to gather coverage. See docs/architecture/exploration_quota.md.
+    # Per-cell exploration quota (). Every compatible
+    # (model, reasoning_effort) cell, within its lane, must get at least
+    # `quota_floor_pct` of recent traffic; when a cell is below floor a turn is
+    # steered to it, otherwise routing is untouched. See
+    # docs/architecture/exploration_quota.md.
     exploration_quota_enabled: bool = False
-    # Floor a cell must hold once it has cleared the bootstrap sample threshold.
-    quota_maintenance_floor_pct: float = 0.01
-    # Higher floor applied to a cell while it is still under the sample
-    # threshold, to escape the cold start faster.
-    quota_bootstrap_floor_pct: float = 0.05
-    # Per-cell successful-sample count at which a cell graduates from the
-    # bootstrap floor to the maintenance floor. Aligned with the P3 peer-quality
-    # readiness minimum ().
-    quota_bootstrap_sample_threshold: int = 20
-    # Turns at or above this cold-start difficulty tier (1=simple..4=extreme,
-    # router._task_difficulty) are PROTECTED — never force-routed off the
-    # optimal cell. 4 protects only the hardest (extreme) turns; lower to widen
-    # protection at the cost of slower/biased coverage.
-    quota_protect_difficulty_at_or_above: int = 4
-    # Only successful rows newer than this feed the per-cell share (bounds the
-    # scan, tracks the current regime). 30 days.
+    # Minimum share of recent traffic each compatible cell must hold.
+    quota_floor_pct: float = 0.01
+    # Window over which a cell's share is measured. 30 days.
     quota_window_seconds: int = 2_592_000
 
     # Dynamic per-model cost_rank derived from MEASURED weekly-quota burn

@@ -53,7 +53,7 @@ from callosum.routing.factory import build_router
 from callosum.routing.features import _approx_tokens
 from callosum.routing.protocols import CellCapabilities
 from callosum.routing.quota import select_quota_deficit_cell
-from callosum.routing.router import NoCompatibleCellError, Router, _task_difficulty
+from callosum.routing.router import NoCompatibleCellError, Router
 from callosum.routing.time_estimator import TimeModelProvider, TimeUsageEstimator
 from callosum.routing.usage_estimate import EstimateInput, OutputTokenForecaster
 from callosum.routing.usage_rates import usage_rate_report
@@ -1314,13 +1314,7 @@ def create_app(
                     usage_log.path, _grid, window_seconds=auto_cfg.quota_window_seconds
                 )
                 quota_block.update(
-                    exploration_quota_report(
-                        _grid,
-                        _cov,
-                        maintenance_floor_pct=auto_cfg.quota_maintenance_floor_pct,
-                        bootstrap_floor_pct=auto_cfg.quota_bootstrap_floor_pct,
-                        bootstrap_sample_threshold=auto_cfg.quota_bootstrap_sample_threshold,
-                    )
+                    exploration_quota_report(_grid, _cov, floor_pct=auto_cfg.quota_floor_pct)
                 )
             except Exception:
                 logger.exception("status: exploration-quota report failed")
@@ -2185,19 +2179,16 @@ async def _dispatch_internal(
             ) from exc
         chosen = decision.cell
         # Per-cell exploration quota (): the router's
-        # cost/quality-optimal pick stands by default, but on text-eligible,
-        # non-hard turns we steer toward an under-floor cell so the quality
-        # signal accrues across the grid. Eligibility mirrors the peer-quality
-        # capture (skip tool/function turns — they yield no judgeable text).
-        # Lane scope is implicit: decision.candidates is already the post-gate,
-        # lane-filtered pool. See docs/architecture/exploration_quota.md.
+        # cost/quality-optimal pick stands by default; when any compatible cell
+        # is below its floor, steer this turn to it so every cell gets at least
+        # quota_floor_pct of traffic. Lane scope is implicit: decision.candidates
+        # is already the post-gate, lane-filtered pool. See
+        # docs/architecture/exploration_quota.md.
         _ordered_candidates: tuple[Cell, ...] = decision.candidates
         if (
             auto_cfg.exploration_quota_enabled
             and usage_log is not None
             and len(decision.candidates) > 1
-            and not (body.get("tools") or body.get("functions"))
-            and _task_difficulty(decision.features) < auto_cfg.quota_protect_difficulty_at_or_above
         ):
             _quota_coverage = cell_sample_counts(
                 usage_log.path,
@@ -2207,9 +2198,7 @@ async def _dispatch_internal(
             _forced = select_quota_deficit_cell(
                 decision.candidates,
                 _quota_coverage,
-                maintenance_floor_pct=auto_cfg.quota_maintenance_floor_pct,
-                bootstrap_floor_pct=auto_cfg.quota_bootstrap_floor_pct,
-                bootstrap_sample_threshold=auto_cfg.quota_bootstrap_sample_threshold,
+                floor_pct=auto_cfg.quota_floor_pct,
             )
             if _forced is not None and _forced != chosen:
                 chosen = _forced

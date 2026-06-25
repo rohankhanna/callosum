@@ -157,10 +157,10 @@ async def test_quota_enabled_spreads_and_stamps_provenance(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
-async def test_quota_skips_tool_turns(tmp_path: Path) -> None:
-    """Tool/function turns are NOT eligible for forced exploration (they yield
-    no judgeable text), so even with the quota on they collapse to the optimal
-    cell and are never stamped quota_explore."""
+async def test_quota_forces_tool_turns_too(tmp_path: Path) -> None:
+    """The quota has no tools exception: tool-bearing turns (all real Codex
+    traffic) are forced toward under-floor cells like any other, so they spread
+    and carry the quota_explore marker ()."""
     from callosum.config import AutoRouterConfig
 
     db = tmp_path / "u.sqlite"
@@ -169,13 +169,13 @@ async def test_quota_skips_tool_turns(tmp_path: Path) -> None:
     cfg = AutoRouterConfig(exploration_quota_enabled=True)
     tools = [{"type": "function", "name": "noop", "parameters": {"type": "object", "properties": {}}}]
     async with _client(backends=[backend], usage_log=log, auto_router_config=cfg) as client:
-        for _ in range(8):
+        for _ in range(16):
             r = await client.post("/v1/responses", json={"model": "auto-learning", "input": [], "tools": tools})
             assert r.status_code == 200
     served = _served_cells(db, "auto-learning")
-    assert len(served) == 8
-    assert len(set(served)) == 1  # tool turns never forced => collapse
-    assert "quota_explore" not in _effective_modes(db)
+    assert len(served) == 16
+    assert len(set(served)) >= 8  # forced despite tools => spreads
+    assert _effective_modes(db).count("quota_explore") >= 1
 
 
 # ---------- measured dynamic cost_rank ------------------------------------
