@@ -2924,8 +2924,18 @@ _TEXT_BEARING_DELTA_EVENT_TYPES: frozenset[str] = frozenset(
     {
         "response.output_text.delta",
         "response.reasoning_summary_text.delta",
+        "response.reasoning_text.delta",
     }
 )
+
+# A trailing partial tag held back across SSE deltas. The reasoning channels
+# have no full-text `.done` safety net, and a provenance tag (~6 tokens) always
+# streams split across deltas, so per-delta stripping alone misses them. We hold
+# back any trailing substring that could be the START of a `<...|...|digits>`
+# provenance tag (or a `<<qop` marker) until the next delta completes or drops
+# it. The pattern only matches tag-shaped prefixes, so ordinary "x < y" text is
+# emitted immediately rather than buffered.
+_PARTIAL_TAG_PREFIX_RE = re.compile(r"<<?[A-Za-z0-9._-]*(?:\|[A-Za-z0-9._-]*){0,2}$")
 
 # Final / accumulated-text events. These carry the FULL response text after
 # streaming completes, and Hermes / codex-cli often read from them for the
@@ -3030,32 +3040,57 @@ def _scrub_full_text_event(data: dict[str, Any]) -> bool:
     return True
 
 
-def _scrub_peer_quality_from_event(data: dict[str, Any], *, capture: _PeerQualityCapture) -> bool:
-    """Strip qop markers from user-visible text fields and collect valid opinions."""
+def _hold_trailing_partial(text: str) -> tuple[str, str]:
+    """Split into (emit, hold): hold is a trailing substring that could be the
+    start of a provenance tag or qop marker, kept back until the next delta
+    completes or drops it. Only tag-shaped prefixes are held — ordinary text
+    (incl. "x < y") is emitted whole."""
+    m = _PARTIAL_TAG_PREFIX_RE.search(text)
+    if m is None:
+        return text, ""
+    return text[: m.start()], text[m.start() :]
+
+
+def _buffered_strip(channel: str, delta: str, *, capture: _PeerQualityCapture, tails: dict[str, str]) -> str:
+    """Strip qop markers + provenance tags from one delta of a text channel,
+    carrying a per-channel tail across deltas so tags split across deltas (the
+    reasoning channels have no full-text safety net) are caught."""
+    combined = tails.get(channel, "") + delta
+    cleaned = capture.apply(combined)  # strips complete qop markers + provenance tags
+    emit, hold = _hold_trailing_partial(cleaned)
+    tails[channel] = hold
+    return emit
+
+
+def _scrub_peer_quality_from_event(
+    data: dict[str, Any], *, capture: _PeerQualityCapture, tails: dict[str, str]
+) -> bool:
+    """Strip qop markers + echoed provenance tags from user-visible text fields
+    and collect valid opinions. Delta channels are buffered via `tails`."""
     modified = False
     try:
         choices = data.get("choices")
         if choices and len(choices) > 0:
             delta = choices[0].get("delta", {})
-            content = delta.get("content") or ""
-            if isinstance(content, str) and "<<qop" in content:
-                cleaned = capture.apply(content)
-                if cleaned != content:
-                    delta["content"] = cleaned
+            content = delta.get("content")
+            if isinstance(content, str):
+                emit = _buffered_strip("chat", content, capture=capture, tails=tails)
+                if emit != content:
+                    delta["content"] = emit
                     choices[0]["delta"] = delta
                     data["choices"] = choices
                     modified = True
         elif data.get("type") in _TEXT_BEARING_DELTA_EVENT_TYPES:
-            delta_text = data.get("delta") or ""
-            if isinstance(delta_text, str) and "<<qop" in delta_text:
-                cleaned = capture.apply(delta_text)
-                if cleaned != delta_text:
-                    data["delta"] = cleaned
+            delta_text = data.get("delta")
+            if isinstance(delta_text, str):
+                emit = _buffered_strip(str(data["type"]), delta_text, capture=capture, tails=tails)
+                if emit != delta_text:
+                    data["delta"] = emit
                     modified = True
         elif data.get("type") in _FULL_TEXT_EVENT_PATHS:
             path = _FULL_TEXT_EVENT_PATHS[data["type"]]
             text = _get_at_path(data, path)
-            if isinstance(text, str) and "<<qop" in text:
+            if isinstance(text, str) and text:
                 cleaned = capture.apply(text)
                 if cleaned != text:
                     modified = _set_at_path(data, path, cleaned)
@@ -3402,11 +3437,15 @@ async def _strip_peer_quality_markers_from_stream(
     *,
     capture: _PeerQualityCapture,
 ) -> AsyncIterator[bytes]:
-    """Strip nonce-bound peer-quality markers from text-bearing SSE events.
+    """Strip nonce-bound peer-quality markers and echoed provenance tags from
+    text-bearing SSE events.
 
-    This pass is intentionally limited to user-visible text fields. Tool-call
-    argument deltas and reasoning structures are passed through unchanged.
+    Limited to user-visible text fields (message text + reasoning summaries/text).
+    Tool-call argument deltas and other structures pass through unchanged. A
+    per-channel `tails` buffer carries trailing partial tags across deltas so a
+    tag split across deltas is still caught.
     """
+    tails: dict[str, str] = {}
     leftover = b""
     async for chunk in source:
         combined = leftover + chunk
@@ -3434,7 +3473,7 @@ async def _strip_peer_quality_markers_from_stream(
                 except (json.JSONDecodeError, ValueError):
                     new_lines.append(line)
                     continue
-                mutated = _scrub_peer_quality_from_event(data, capture=capture)
+                mutated = _scrub_peer_quality_from_event(data, capture=capture, tails=tails)
                 # Subtract the audit's token cost from the usage the client sees,
                 # so the hidden injection never moves Codex's context meter
                 # (; Codex reads usage.input_tokens).
@@ -3618,6 +3657,7 @@ def _clean_sse_blob(blob: bytes | None, *, peer_quality_capture: _PeerQualityCap
         text = blob.decode("utf-8")
         lines = text.split("\n")
         cleaned_lines = []
+        tails: dict[str, str] = {}
 
         for line in lines:
             # Check if this is a data line with JSON content
@@ -3632,8 +3672,10 @@ def _clean_sse_blob(blob: bytes | None, *, peer_quality_capture: _PeerQualityCap
                         if isinstance(delta, str) and delta:
                             _, cleaned_delta = _extract_complexity_class(delta)
                             cleaned_delta = _strip_trailing_complexity_marker_text(cleaned_delta)
-                            if peer_quality_capture is not None and "<<qop" in cleaned_delta:
-                                cleaned_delta = peer_quality_capture.apply(cleaned_delta)
+                            if peer_quality_capture is not None:
+                                cleaned_delta = _buffered_strip(
+                                    str(data["type"]), cleaned_delta, capture=peer_quality_capture, tails=tails
+                                )
                             data["delta"] = cleaned_delta
 
                     # Handle full-text 'done' events (Hermes / codex-cli often
@@ -3641,7 +3683,7 @@ def _clean_sse_blob(blob: bytes | None, *, peer_quality_capture: _PeerQualityCap
                     elif data.get("type") in _FULL_TEXT_EVENT_PATHS:
                         _scrub_full_text_event(data)
                         if peer_quality_capture is not None:
-                            _scrub_peer_quality_from_event(data, capture=peer_quality_capture)
+                            _scrub_peer_quality_from_event(data, capture=peer_quality_capture, tails=tails)
 
                     # Handle chat completions format (choices[0].delta.content)
                     elif "choices" in data and len(data.get("choices", [])) > 0:
@@ -3650,8 +3692,10 @@ def _clean_sse_blob(blob: bytes | None, *, peer_quality_capture: _PeerQualityCap
                         if isinstance(content, str) and content:
                             _, cleaned_content = _extract_complexity_class(content)
                             cleaned_content = _strip_trailing_complexity_marker_text(cleaned_content)
-                            if peer_quality_capture is not None and "<<qop" in cleaned_content:
-                                cleaned_content = peer_quality_capture.apply(cleaned_content)
+                            if peer_quality_capture is not None:
+                                cleaned_content = _buffered_strip(
+                                    "chat", cleaned_content, capture=peer_quality_capture, tails=tails
+                                )
                             delta["content"] = cleaned_content
                             data["choices"][0]["delta"] = delta
 
