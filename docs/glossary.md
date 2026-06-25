@@ -65,7 +65,15 @@ A single turn's output may contain any combination of the three.
 | **Selector** | A virtual model name the *client* sends to delegate the choice to callosum: `callosum:auto`, `callosum:remote-only`, `callosum:local-only`, `callosum:offline`. The router resolves it to a concrete **cell**. |
 | **Pin** | A request fixed to a concrete model/cell — either by the client naming it, or by an operator backend pin. A **selector is the opposite of a pin**: it hands the choice to the router. |
 | **Organic traffic** | Real user/Codex requests. |
-| **Synthetic traffic** | Sacrificial requests (`requested_model == "auto-learning-synthetic"`) whose purpose is *exploration*, not serving a user — so a cheap/unproven cell can be probed without degrading a real turn. (Currently no live emitter; see .) |
 | **Exploration vs exploitation** | *Exploitation* = route to the cell believed best now. *Exploration* = deliberately route elsewhere to *learn* a cell's quality. You cannot route "cheap when it's just as good" until exploration has *measured* "just as good." Quality data is the price of efficiency, paid up front. |
+| **Exploration quota** | A per-cell minimum-usage floor on organic traffic that forces under-covered cells to get a bootstrap/maintenance share of eligible turns. The live replacement for the removed synthetic tier. See `docs/architecture/exploration_quota.md`. |
 | **Quality signal** | `quality_score` (-1/0/+1) per request, populated by a labeler. When empty, the predictor is uniform and the cost selector collapses all traffic to one cell. |
 | **Peer-quality opinion** | An in-band judgment one cell emits about a *prior different-cell text turn* in the same session, wrapped in a `<<qop ...>>` marker (message-text channel), stripped before the user sees it. Feeds the cross-model quality matrix. |
+
+## Overloaded names — disambiguate explicitly
+
+| Term | Two meanings |
+|---|---|
+| **`/status`** | (1) **callosum's HTTP endpoint** `GET http://127.0.0.1:8765/status` — a JSON document of backend health, quota, router config, and the `router.exploration_quota` / `router.peer_quality_shadow` reports. Auth-exempt (only `/v1/*` and `/diagnose/*` require an API key). (2) The **CLI slash command** typed inside Codex or Claude Code — unrelated to callosum. Always write "callosum's `GET /status` endpoint" vs "the CLI `/status` command". |
+| **`/model`** | (1) The **Codex CLI slash command** that opens the model picker (driven by callosum's reconciled catalog JSON). (2) Not a callosum HTTP route — callosum advertises models at `GET /v1/models`. |
+| **Selector** | (1) **Client routing selector** — a `callosum:` model id (`selectors.py`). (2) **Cell selector** — the `CostWeightedSelector` *select* stage inside the router (`routing/selector/`). Different layers. |
