@@ -2931,11 +2931,12 @@ _TEXT_BEARING_DELTA_EVENT_TYPES: frozenset[str] = frozenset(
 # A trailing partial tag held back across SSE deltas. The reasoning channels
 # have no full-text `.done` safety net, and a provenance tag (~6 tokens) always
 # streams split across deltas, so per-delta stripping alone misses them. We hold
-# back any trailing substring that could be the START of a `<...|...|digits>`
-# provenance tag (or a `<<qop` marker) until the next delta completes or drops
-# it. The pattern only matches tag-shaped prefixes, so ordinary "x < y" text is
-# emitted immediately rather than buffered.
-_PARTIAL_TAG_PREFIX_RE = re.compile(r"<<?[A-Za-z0-9._-]*(?:\|[A-Za-z0-9._-]*){0,2}$")
+# back any trailing substring that could be the START of a provenance tag —
+# opening `<model|...|digits>` OR closing `</model|...|digits>` — (or a `<<qop`
+# marker) until the next delta completes or drops it. `<[</]?` admits the `<`,
+# `</` (closing), and `<<` (qop) lead-ins. The pattern only matches tag-shaped
+# prefixes, so ordinary "x < y" text is emitted immediately rather than buffered.
+_PARTIAL_TAG_PREFIX_RE = re.compile(r"<[</]?[A-Za-z0-9._-]*(?:\|[A-Za-z0-9._-]*){0,2}$")
 
 # Final / accumulated-text events. These carry the FULL response text after
 # streaming completes, and Hermes / codex-cli often read from them for the
