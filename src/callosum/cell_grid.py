@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -262,6 +263,46 @@ def coverage_from_db(
             " WHERE routing_mode = ? AND status = 200"
             " GROUP BY model, reasoning_effort",
             (routing_mode,),
+        ).fetchall()
+    finally:
+        conn.close()
+    cell_lookup = {c.as_tuple(): c for c in cells}
+    for model, reasoning, count in rows:
+        cell = cell_lookup.get((model, reasoning))
+        if cell is not None:
+            counts[cell] = count
+    return CellCoverage(counts=counts)
+
+
+def cell_sample_counts(
+    usage_log_path: Path,
+    cells: list[Cell],
+    *,
+    window_seconds: int,
+    now: float | None = None,
+) -> CellCoverage:
+    """Per-cell successful-served counts over a recent time window.
+
+    Counts every status-200 request served by each (model, reasoning_effort)
+    cell within window_seconds — regardless of which virtual-model name or
+    routing mode produced it — so the exploration-quota enforcer can compute a
+    cell's share of recent traffic. Lane scope is implicit in cells: pass
+    the lane's candidate cells and only those are counted. Cells with no rows
+    are present with value 0. (Contrast coverage_from_db, which counts a
+    single routing_mode tier over all time.) See .
+    """
+    counts: dict[Cell, int] = dict.fromkeys(cells, 0)
+    if not usage_log_path.exists():
+        return CellCoverage(counts=counts)
+    cutoff = (time.time() if now is None else now) - window_seconds
+    conn = sqlite3.connect(usage_log_path)
+    try:
+        rows = conn.execute(
+            "SELECT model, reasoning_effort, COUNT(*)"
+            " FROM requests"
+            " WHERE status = 200 AND ts_start >= ?"
+            " GROUP BY model, reasoning_effort",
+            (cutoff,),
         ).fetchall()
     finally:
         conn.close()

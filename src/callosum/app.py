@@ -34,6 +34,7 @@ from callosum.cell_grid import (
     Cell,
     ModelMetadata,
     build_cells,
+    cell_sample_counts,
     live_completion_models,
     reasoning_levels_for,
 )
@@ -51,7 +52,8 @@ from callosum.routing.cost_model import CostRankProvider
 from callosum.routing.factory import build_router
 from callosum.routing.features import _approx_tokens
 from callosum.routing.protocols import CellCapabilities
-from callosum.routing.router import NoCompatibleCellError, Router
+from callosum.routing.quota import select_quota_deficit_cell
+from callosum.routing.router import NoCompatibleCellError, Router, _task_difficulty
 from callosum.routing.time_estimator import TimeModelProvider, TimeUsageEstimator
 from callosum.routing.usage_estimate import EstimateInput, OutputTokenForecaster
 from callosum.routing.usage_rates import usage_rate_report
@@ -2066,11 +2068,40 @@ async def _dispatch_internal(
                 detail=f"no cell can serve this request: {exc}",
             ) from exc
         chosen = decision.cell
-        # The router's cost/quality-optimal pick stands by default. The per-cell
-        # exploration quota (deficit-fill toward under-covered cells on
-        # text-eligible, non-hard turns) hooks in here — see
-        # docs/architecture/exploration_quota.md ().
+        # Per-cell exploration quota (): the router's
+        # cost/quality-optimal pick stands by default, but on text-eligible,
+        # non-hard turns we steer toward an under-floor cell so the quality
+        # signal accrues across the grid. Eligibility mirrors the peer-quality
+        # capture (skip tool/function turns — they yield no judgeable text).
+        # Lane scope is implicit: decision.candidates is already the post-gate,
+        # lane-filtered pool. See docs/architecture/exploration_quota.md.
         _ordered_candidates: tuple[Cell, ...] = decision.candidates
+        if (
+            auto_cfg.exploration_quota_enabled
+            and usage_log is not None
+            and len(decision.candidates) > 1
+            and not (body.get("tools") or body.get("functions"))
+            and _task_difficulty(decision.features) < auto_cfg.quota_protect_difficulty_at_or_above
+        ):
+            _quota_coverage = cell_sample_counts(
+                usage_log.path,
+                list(decision.candidates),
+                window_seconds=auto_cfg.quota_window_seconds,
+            )
+            _forced = select_quota_deficit_cell(
+                decision.candidates,
+                _quota_coverage,
+                maintenance_floor_pct=auto_cfg.quota_maintenance_floor_pct,
+                bootstrap_floor_pct=auto_cfg.quota_bootstrap_floor_pct,
+                bootstrap_sample_threshold=auto_cfg.quota_bootstrap_sample_threshold,
+            )
+            if _forced is not None and _forced != chosen:
+                chosen = _forced
+                _ordered_candidates = (_forced, *(c for c in decision.candidates if c != _forced))
+                # Mark this turn as quota-forced so it is distinguishable in the
+                # log: excludable from natural-routing baselines while its
+                # quality label stays usable.
+                _effective_routing_mode_context.set("quota_explore")
         body["model"] = chosen.model
         _stamp_reasoning_effort(body, chosen.reasoning_effort)
         # Per-cell transforms. Empty registry → no-op. Each registered

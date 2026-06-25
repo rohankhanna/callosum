@@ -8,6 +8,7 @@ from callosum.cell_grid import (
     REASONING_LEVELS,
     CellCoverage,
     build_cells,
+    cell_sample_counts,
     coverage_from_db,
     is_completion_model,
     live_completion_models,
@@ -52,6 +53,45 @@ def test_coverage_from_missing_db_is_all_zero(tmp_path: Path) -> None:
     cells = build_cells()
     cov = coverage_from_db(tmp_path / "nonexistent.sqlite", cells)
     assert all(cov.counts[c] == 0 for c in cells)
+
+
+def test_cell_sample_counts_windows_and_ignores_routing_mode(tmp_path: Path) -> None:
+    db = tmp_path / "u.sqlite"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        """
+        CREATE TABLE requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            model TEXT, reasoning_effort TEXT, routing_mode TEXT,
+            status INTEGER, ts_start REAL
+        )
+        """
+    )
+    now = 1_000_000.0
+    conn.executemany(
+        "INSERT INTO requests (model, reasoning_effort, routing_mode, status, ts_start)"
+        " VALUES (?, ?, ?, ?, ?)",
+        [
+            # Counted regardless of routing_mode (unlike coverage_from_db):
+            ("model-a0c3", "low", "auto", 200, now - 10),
+            ("model-a0c3", "low", "pass-through", 200, now - 20),
+            ("model-a0c3", "low", "quota_explore", 200, now - 30),
+            # Excluded: failure status
+            ("model-a0c3", "low", "auto", 500, now - 40),
+            # Excluded: outside the window
+            ("model-a0c3", "low", "auto", 200, now - 10_000),
+            # Different cell, in window
+            ("model-a0e7", "xhigh", "auto", 200, now - 5),
+        ],
+    )
+    conn.commit()
+    conn.close()
+    cells = build_cells()
+    cov = cell_sample_counts(db, cells, window_seconds=1_000, now=now)
+    mini_low = next(c for c in cells if c.model == "model-a0c3" and c.reasoning_effort == "low")
+    xhigh = next(c for c in cells if c.model == "model-a0e7" and c.reasoning_effort == "xhigh")
+    assert cov.counts[mini_low] == 3  # 3 successes in window across routing modes
+    assert cov.counts[xhigh] == 1
 
 
 def test_coverage_only_counts_auto_learning_successes(tmp_path: Path) -> None:
