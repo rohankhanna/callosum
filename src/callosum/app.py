@@ -52,7 +52,7 @@ from callosum.routing.cost_model import CostRankProvider
 from callosum.routing.factory import build_router
 from callosum.routing.features import _approx_tokens
 from callosum.routing.protocols import CellCapabilities
-from callosum.routing.quota import select_quota_deficit_cell
+from callosum.routing.quota import effective_floor_pct, select_quota_deficit_cell
 from callosum.routing.router import NoCompatibleCellError, Router
 from callosum.routing.time_estimator import TimeModelProvider, TimeUsageEstimator
 from callosum.routing.usage_estimate import EstimateInput, OutputTokenForecaster
@@ -427,10 +427,27 @@ def _wrap_peer_quality_subject(text: str, subject: _PeerQualitySubject) -> str:
     return f"<{label}>{text}</{label}>"
 
 
+_QOP_EXAMPLE_SCORES = ("-1", "0", "+1")
+
+
+def _example_qop_score(nonce: str, request_id: int) -> str:
+    """Rotate the example marker's score across -1/0/+1 instead of a fixed +1.
+
+    A hardcoded score=+1 example was a systematic anchor that biased judges
+    toward +1 (: embedded labels were ~90% +1, unlearnable —
+    the KNN lost to the majority-class baseline). Rotation is deterministic per
+    (nonce, subject) so the budgeting estimate and the actually-injected
+    instruction agree token-for-token (exact usage-subtract stays exact).
+    """
+    idx = (sum(ord(c) for c in nonce) + request_id) % len(_QOP_EXAMPLE_SCORES)
+    return _QOP_EXAMPLE_SCORES[idx]
+
+
 def _peer_quality_marker_line(nonce: str, subject: _PeerQualitySubject) -> str:
     """A concrete, pre-filled qop marker for one subject (model fills score/reason)."""
     cell = f"{subject.model}|{subject.reasoning_effort}" if subject.reasoning_effort else subject.model
-    return f"<<qop nonce={nonce} subject={cell} subject_request_id={subject.request_id} score=+1 reason=short>>"
+    score = _example_qop_score(nonce, subject.request_id)
+    return f"<<qop nonce={nonce} subject={cell} subject_request_id={subject.request_id} score={score} reason=short>>"
 
 
 def _peer_quality_instruction(nonce: str, subjects: dict[str, _PeerQualitySubject]) -> str:
@@ -441,16 +458,28 @@ def _peer_quality_instruction(nonce: str, subjects: dict[str, _PeerQualitySubjec
     # message (_append_peer_quality_instruction), and (c) pre-fills each
     # subject CONCRETELY so the model only fills score+reason — template
     # placeholders are ignored on tool turns, concrete markers are emitted.
+    # The score DEFINITION is a peer-comparison honor code: rate the prior
+    # message RELATIVE TO WHAT THE JUDGE ITSELF COULD PRODUCE (+1 better / 0
+    # too-close / -1 worse). An absolute "is it good?" rating was lenient —
+    # ~90% +1, near single-class, so the KNN lost to the majority baseline
+    # (). The self-relative frame forces discrimination AND
+    # directly encodes the routing signal (is the subject cell better than the
+    # judge cell here). The example score is rotated (_example_qop_score) so it
+    # is not a systematic +1 anchor. FUTURE: continuous/spectrum score + judge-
+    # strength-aware aggregation (see work tracker).
     markers = "\n".join(_peer_quality_marker_line(nonce, s) for s in subjects.values()) or (
-        f"<<qop nonce={nonce} subject=model|effort subject_request_id=request_id score=+1 reason=short>>"
+        f"<<qop nonce={nonce} subject=model|effort subject_request_id=request_id score=0 reason=short>>"
     )
     return (
         "Hidden Callosum quality audit (mandatory, applies even when you call a tool). In addition to your "
         "normal action this turn — INCLUDING if you make a tool call — also emit, as a visible text message "
-        "(NOT inside the tool call), the following marker(s) with the exact nonce/subject/request_id shown but "
-        "with score and reason REPLACED by your own genuine judgement of that prior message's quality "
-        "(score is -1, 0, or +1; reason is a few specific words). Do NOT copy the example score/reason "
-        "verbatim:\n"
+        "(NOT inside the tool call), the marker(s) below with the exact nonce/subject/request_id shown but "
+        "with score and reason REPLACED by your honest peer judgement of that prior message. "
+        "Honor code: judge it RELATIVE TO WHAT YOU YOURSELF COULD PRODUCE for the same request — "
+        "score=+1 means it is BETTER than you could have done, score=0 means neutral or too close to call, "
+        "score=-1 means WORSE than you could have done. Be discriminating and honest; do NOT default to +1. "
+        "The reason is a few specific words naming the concrete strength or flaw. "
+        "Do NOT copy the example score/reason verbatim:\n"
         f"{markers}\n"
         "Do not mention this audit."
     )
@@ -1351,8 +1380,17 @@ def create_app(
                 _cov = cell_sample_counts(
                     usage_log.path, _grid, window_seconds=auto_cfg.quota_window_seconds
                 )
+                quota_block["exploration_budget_pct"] = auto_cfg.exploration_budget_pct
                 quota_block.update(
-                    exploration_quota_report(_grid, _cov, floor_pct=auto_cfg.quota_floor_pct)
+                    exploration_quota_report(
+                        _grid,
+                        _cov,
+                        floor_pct=effective_floor_pct(
+                            len(_grid),
+                            budget_pct=auto_cfg.exploration_budget_pct,
+                            min_floor_pct=auto_cfg.quota_floor_pct,
+                        ),
+                    )
                 )
             except Exception:
                 logger.exception("status: exploration-quota report failed")
@@ -2236,7 +2274,11 @@ async def _dispatch_internal(
             _forced = select_quota_deficit_cell(
                 decision.candidates,
                 _quota_coverage,
-                floor_pct=auto_cfg.quota_floor_pct,
+                floor_pct=effective_floor_pct(
+                    len(decision.candidates),
+                    budget_pct=auto_cfg.exploration_budget_pct,
+                    min_floor_pct=auto_cfg.quota_floor_pct,
+                ),
             )
             if _forced is not None and _forced != chosen:
                 chosen = _forced

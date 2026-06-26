@@ -158,8 +158,19 @@ class AutoRouterConfig(BaseModel):
     # steered to it, otherwise routing is untouched. See
     # docs/architecture/exploration_quota.md.
     exploration_quota_enabled: bool = False
-    # Minimum share of recent traffic each compatible cell must hold.
-    quota_floor_pct: float = 0.01
+    # Total exploration budget: the fraction of recent traffic reserved for the
+    # per-cell floor, split EVENLY across the lane's candidate cells, so each
+    # cell's effective floor is `exploration_budget_pct / n_candidates`. This
+    # keeps total forced exploration bounded by the budget no matter how many
+    # cells the grid grows to — a flat per-cell floor is only feasible while
+    # n <= 1/floor and silently crowds out exploitation as the grid grows.
+    # At n=10 a 0.10 budget reproduces the old flat 1% per cell.
+    exploration_budget_pct: float = 0.10
+    # Optional absolute minimum per-cell floor; 0 disables (pure even split).
+    # Safety net so the even-split floor never decays to ~0 on very large grids.
+    # When set above budget/n for some cell it overrides the even split there
+    # (and total forced exploration can then exceed the budget — opt-in).
+    quota_floor_pct: float = 0.0
     # Window over which a cell's share is measured. 30 days.
     quota_window_seconds: int = 2_592_000
 
