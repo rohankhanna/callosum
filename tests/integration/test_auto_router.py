@@ -108,21 +108,23 @@ def _served_cells(db: Path, routing_mode: str) -> list[tuple[str, str]]:
 
 
 @pytest.mark.asyncio
-async def test_organic_traffic_does_not_explore(tmp_path: Path) -> None:
-    """Organic auto traffic keeps the cost-optimal pick and collapses to a
-    single cell — the cold-start baseline the exploration quota is built to
-    break ()."""
+async def test_organic_cold_start_explores_across_cells(tmp_path: Path) -> None:
+    """Cold start has no learned quality signal, so organic auto traffic
+    EXPLORES — it spreads randomly across compatible cells instead of
+    collapsing onto one. This replaces the old cost-steered single-cell
+    collapse: 'cheapest capable' selection is deferred to the exploit phase
+    once a quality model exists. (Effort/cost are no longer guessed cold.)"""
     db = tmp_path / "u.sqlite"
     log = UsageLog(db)
     backend = _backend()
     async with _client(backends=[backend], usage_log=log) as client:
-        for _ in range(8):
+        for _ in range(30):
             r = await client.post("/v1/responses", json={"model": "auto-learning", "input": []})
             assert r.status_code == 200
     served = _served_cells(db, "auto-learning")
-    assert len(served) == 8
-    # No exploration yet => every organic request collapses to the same cell.
-    assert len(set(served)) == 1
+    assert len(served) == 30
+    # Random cold-start exploration spreads across the grid, not a single cell.
+    assert len(set(served)) > 1
 
 
 def _effective_modes(db: Path) -> list[str]:
@@ -220,10 +222,12 @@ def _seed_quota_rows(db: Path, model: str, n: int, *, before: int, after: int) -
 
 
 @pytest.mark.asyncio
-async def test_measured_cost_rank_steers_organic_routing(tmp_path: Path) -> None:
-    """Organic routing should prefer the model that MEASURABLY burns less
-    weekly quota, not a flat-cost arbitrary pick. Seed the request log so one
-    model is demonstrably cheaper, then confirm organic traffic lands there."""
+async def test_cost_rank_does_not_steer_cold_start_exploration(tmp_path: Path) -> None:
+    """Measured cost rank steers the EXPLOIT phase (cheapest capable cell once
+    a quality model exists), NOT cold start. Even with one model demonstrably
+    cheaper, cold-start organic traffic still explores randomly rather than
+    collapsing onto the cheapest. (Cost-steering in exploit is covered by the
+    cost-model unit tests; an exploit-mode integration test lands with P3.)"""
     db = tmp_path / "u.sqlite"
     log = UsageLog(db)
     # model-a0c3 burns +1% per call; model-a0e6 burns +5%. Both clear the
@@ -232,8 +236,9 @@ async def test_measured_cost_rank_steers_organic_routing(tmp_path: Path) -> None
     _seed_quota_rows(db, "model-a0e6", 12, before=22, after=27)
     backend = _backend()
     async with _client(backends=[backend], usage_log=log) as client:
-        r = await client.post("/v1/responses", json={"model": "auto-learning", "input": []})
-        assert r.status_code == 200
-        served = r.json()["model"]
-    # Cheapest measured burn wins under the cold-start (uniform) predictor.
-    assert served == "model-a0c3"
+        for _ in range(30):
+            r = await client.post("/v1/responses", json={"model": "auto-learning", "input": []})
+            assert r.status_code == 200
+    served = _served_cells(db, "auto-learning")
+    # Cold start explores; it does NOT collapse onto the cheapest measured model.
+    assert len(set(served)) > 1

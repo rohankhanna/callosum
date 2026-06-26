@@ -10,6 +10,7 @@ construction.
 
 from __future__ import annotations
 
+import random
 from typing import Any
 
 from callosum.cell_grid import Cell
@@ -41,39 +42,6 @@ class NoCompatibleCellError(RuntimeError):
 # 256K-window cell.
 _OUTPUT_HEADROOM_TOKENS = 4096
 
-_EFFORT_RANK: dict[str, int] = {
-    "default": 1,
-    "low": 1,
-    "medium": 2,
-    "high": 3,
-    "xhigh": 4,
-}
-
-_HARD_PROMPT_TERMS = (
-    "architecture",
-    "debug",
-    "diagnose",
-    "failing",
-    "failure",
-    "implement",
-    "refactor",
-    "review",
-    "roadmap",
-    "root cause",
-    "test failure",
-    "traceback",
-)
-
-_MODERATE_PROMPT_TERMS = (
-    "analyze",
-    "compare",
-    "design",
-    "explain",
-    "plan",
-    "summarize",
-)
-
-
 def _window_fit_factor(window: int, prompt_tokens: int) -> float:
     """Multiplicative score factor in (0, 1] reflecting how comfortably
     a cell's advertised context window fits the estimated prompt size.
@@ -96,107 +64,11 @@ def _window_fit_factor(window: int, prompt_tokens: int) -> float:
     return max(0.1, window / max(1, budget))
 
 
-def _task_difficulty(features: Any) -> int:
-    """Return a cold-start difficulty tier: 1=simple, 2=moderate,
-    3=hard, 4=extreme.
-
-    This is intentionally deterministic and conservative. It only fires
-    when the configured predictor has no differentiated opinion, so it
-    keeps cold-start routing from collapsing to "cheapest compatible"
-    while avoiding a second LLM call on the hot path.
-
-    Sizing note (tuned against the request log, 2026-06-21): raw prompt
-    size is NOT a reliable proxy for reasoning difficulty. In this
-    corpus the largest prompts (whole-codebase context, "fix this one
-    thing") consume the LEAST reasoning — controlling for served
-    high/xhigh effort, mean reasoning tokens *decline* from the 2-16K
-    band (~214) through 16-64K (~186) to >=64K (~143). A big prompt is
-    primarily a context-window concern, which is already handled
-    separately by `_window_fit_factor`. So size alone caps difficulty at
-    tier 3 (a moderate-high floor that keeps huge requests off the
-    weakest cell), and the extreme tier is reserved for prompts that
-    carry a genuine difficulty signal — an explicit hard-task term, or a
-    tool-driven (agentic) task — at scale. See
-    scripts/analyze_cold_start_difficulty.py to re-tune against fresh
-    logs.
-    """
-    text = features.text.lower()
-    hard = any(term in text for term in _HARD_PROMPT_TERMS)
-    large = features.tokens >= 16_000
-    # Extreme: a genuinely hard task carried out at scale, or a large
-    # agentic (tool-using) task. Size on its own does not qualify.
-    if hard and (large or features.needs_tools):
-        return 4
-    # Hard: an explicit hard-task signal, or a large prompt. The
-    # size-only contribution is capped here rather than escalated to
-    # extreme — a big-but-simple prompt does not need the most expensive
-    # high-effort cell, just one with enough window (handled elsewhere).
-    if hard or large:
-        return 3
-    if (
-        features.needs_tools
-        or features.modalities - {"text"}
-        or features.tokens >= 2_000
-        or any(term in text for term in _MODERATE_PROMPT_TERMS)
-    ):
-        return 2
-    return 1
-
-
-def _effective_effort_rank(cell: Cell, capabilities: Any) -> int:
-    """Reasoning-effort rank with a local-model fallback.
-
-    Local cells often expose only `default`, which says nothing about
-    actual model size. When parameter_count is known, let a larger local
-    model qualify for moderate/hard cold-start tasks without inventing
-    fake reasoning-effort names.
-    """
-    rank = _EFFORT_RANK.get(cell.reasoning_effort, 1)
-    params = getattr(capabilities, "parameter_count", None)
-    if params is None:
-        return rank
-    if params >= 70_000_000_000:
-        return max(rank, 3)
-    if params >= 30_000_000_000:
-        return max(rank, 2)
-    return rank
-
-
 def _has_differentiated_predictions(predictions: dict[Cell, float]) -> bool:
     if len(predictions) < 2:
         return False
     vals = list(predictions.values())
     return max(vals) - min(vals) > 0.01
-
-
-def _cold_start_predictions(
-    predictions: dict[Cell, float],
-    capabilities: dict[Cell, Any],
-    features: Any,
-) -> dict[Cell, float]:
-    """Replace flat predictor priors with deterministic suitability scores.
-
-    The selector treats 0.5 as the "qualifies" boundary. Scores below
-    that boundary tell the selector "do not pick this cheap cell unless
-    every other option is also unsuitable." This is the missing guard
-    against cold-start routing hard prompts to arbitrary cheapest cells.
-    """
-    if _has_differentiated_predictions(predictions):
-        return predictions
-
-    difficulty = _task_difficulty(features)
-    adjusted: dict[Cell, float] = {}
-    for cell, prior in predictions.items():
-        caps = capabilities[cell]
-        effort_gap = _effective_effort_rank(cell, caps) - difficulty
-        if effort_gap >= 0:
-            score = 0.58 + min(0.08, effort_gap * 0.02)
-        elif effort_gap == -1:
-            score = 0.48
-        else:
-            score = 0.40
-        adjusted[cell] = min(0.95, max(0.05, (prior - 0.5) + score))
-    return adjusted
 
 
 class Router:
@@ -238,27 +110,53 @@ class Router:
             )
         predictions = self._predictor.predict(features, compatible)
         capabilities_map = {c: self._filter._capabilities_of(c) for c in compatible}
-        predictions = _cold_start_predictions(predictions, capabilities_map, features)
-        # Soft window-fit: scale each cell's predicted satisfaction by
-        # how comfortably its advertised window fits our token estimate.
-        # Cells with full headroom keep their score; tighter cells get
-        # progressively penalized but never excluded. See
-        # _window_fit_factor docstring for the rationale (proxy estimate
-        # is unreliable; upstream is source of truth for actual overflow).
+
+        if not _has_differentiated_predictions(predictions):
+            # COLD START — no learned quality signal yet. Do NOT guess quality
+            # from heuristics: the removed difficulty->effort prior biased every
+            # turn to the highest effort (xhigh) and skewed the very dataset the
+            # model will learn from. EXPLORE instead — pick a RANDOM capable
+            # cell so coverage accrues unbiased. Restrict to cells that fully
+            # fit the context window so we don't 4xx on overflow; fall back to
+            # the whole compatible pool when nothing fully fits. Once enough
+            # peer-quality data exists, the KNN predictor returns differentiated
+            # scores and the exploit branch below takes over per-prompt.
+            fitting = [
+                c
+                for c in compatible
+                if _window_fit_factor(capabilities_map[c].context_window, features.tokens) >= 1.0
+            ]
+            chosen = random.choice(fitting or compatible)
+            # Retry order still prefers fitting, cheap cells (Dispatch retries
+            # on 5xx); the random PRIMARY pick is what drives exploration.
+            rest = sorted(
+                (c for c in compatible if c != chosen),
+                key=lambda c: (
+                    -_window_fit_factor(capabilities_map[c].context_window, features.tokens),
+                    capabilities_map[c].cost_rank,
+                ),
+            )
+            return RoutingDecision(
+                cell=chosen,
+                features=features,
+                predictions={f"{c.model} {c.reasoning_effort}": p for c, p in predictions.items()},
+                candidates=(chosen, *rest),
+                predictor_id=self._predictor.id,
+            )
+
+        # EXPLOIT — differentiated quality signal from the model. Soft
+        # window-fit scaling (tighter-fitting cells penalized but never
+        # excluded), then cost-weighted selection (cheapest capable cell above
+        # the 0.5 quality bar).
         scaled_predictions = {
             c: predictions[c] * _window_fit_factor(capabilities_map[c].context_window, features.tokens)
             for c in compatible
         }
-        # When the window-fit scaling pushes EVERY cell below the
-        # selector's 0.5 qualification threshold, the selector's
-        # fallback rule ("cheapest, best-effort") picks the cheapest
-        # cell regardless of size — the wrong call when window fit
-        # is the reason nothing qualifies. In that specific case, the
-        # Router overrides selection with the best-fitting cell so the
-        # primary attempt has the highest chance of actually fitting
-        # upstream. (Dispatch retries on 5xx only, not on context-
-        # overflow 4xx, so the first pick really has to be the best
-        # bet.) Cost still tiebreaks among equally-good fits.
+        # When window-fit pushes EVERY cell below the 0.5 bar, the selector's
+        # "cheapest best-effort" fallback would ignore fit — the wrong call when
+        # fit is the reason nothing qualifies. Override with the best-fitting
+        # cell so the primary attempt has the best chance upstream (Dispatch
+        # retries 5xx only, not context-overflow 4xx). Cost tiebreaks equal fits.
         if all(p < 0.5 for p in scaled_predictions.values()):
             chosen = max(
                 compatible,

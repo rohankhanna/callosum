@@ -3,60 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 
 import pytest
 
 from callosum.cell_grid import Cell
 from callosum.routing.factory import RoutingConfig, build_router
 from callosum.routing.protocols import CellCapabilities
-from callosum.routing.router import NoCompatibleCellError, _task_difficulty
-
-
-def _features(*, text="", tokens=0, needs_tools=False, modalities=("text",)):
-    return SimpleNamespace(
-        text=text,
-        tokens=tokens,
-        needs_tools=needs_tools,
-        modalities=frozenset(modalities),
-    )
-
-
-def test_task_difficulty_trivial_and_moderate_baseline() -> None:
-    """A tiny plain prompt is simple; a mid-size or moderate-term prompt
-    is at least moderate."""
-    assert _task_difficulty(_features(text="hello", tokens=5)) == 1
-    assert _task_difficulty(_features(text="hello", tokens=3_000)) == 2
-    assert _task_difficulty(_features(text="explain the design", tokens=50)) == 2
-
-
-def test_task_difficulty_size_alone_caps_at_hard_not_extreme() -> None:
-    """Tuned 2026-06-21: a huge but content-simple prompt is a window
-    concern, not an extreme-reasoning one. Size alone tops out at tier 3,
-    never tier 4 — request-log evidence shows the largest prompts consume
-    the least reasoning."""
-    assert _task_difficulty(_features(text="fix this typo", tokens=200_000)) == 3
-    # Even a large tool-using prompt without a hard signal stays at 3.
-    assert (
-        _task_difficulty(_features(text="run the linter", tokens=200_000, needs_tools=True))
-        == 3
-    )
-
-
-def test_task_difficulty_extreme_requires_a_real_difficulty_signal() -> None:
-    """Tier 4 is reserved for a genuine hard-task term carried out at
-    scale, or via tools — not raw token count."""
-    assert (
-        _task_difficulty(_features(text="debug this failing build", tokens=50_000)) == 4
-    )
-    assert (
-        _task_difficulty(
-            _features(text="refactor the module", tokens=100, needs_tools=True)
-        )
-        == 4
-    )
-    # A hard term on a small, non-agentic prompt is hard but not extreme.
-    assert _task_difficulty(_features(text="review this architecture", tokens=100)) == 3
+from callosum.routing.router import NoCompatibleCellError
 
 # Hand-built capabilities map for testing.
 LOCAL = Cell(model="local-llm", reasoning_effort="default")
@@ -91,59 +44,32 @@ def _build():
 
 def test_factory_defaults_yield_a_working_cold_start_router() -> None:
     """RoutingConfig() with no overrides → no-op embedding + uniform
-    predictor + cost-weighted selector → a working pipeline. For a
-    simple prompt, the cold-start suitability layer still lets the
-    cheapest compatible cell win."""
+    predictor + cost-weighted selector → a working pipeline. With no quality
+    signal, cold start EXPLORES: a random capable cell is chosen."""
     router = _build()
     body = {"messages": [{"role": "user", "content": "hello"}]}
     decision = asyncio.run(router.route(body, [LOCAL, REMOTE_MID, REMOTE_HIGH]))
-    assert decision.cell == LOCAL  # cheapest compatible
+    assert decision.cell in (LOCAL, REMOTE_MID, REMOTE_HIGH)
     assert decision.predictor_id == "uniform"
 
 
-def test_cold_start_router_promotes_harder_prompt_past_cheapest_default_cell() -> None:
-    """Flat predictions should not send a hard design/debug prompt to
-    the cheapest default-effort cell just because it is compatible."""
+def test_cold_start_explores_randomly_across_capable_cells() -> None:
+    """With a uniform (undifferentiated) predictor there is no quality signal,
+    so cold start must NOT collapse to one cell (cheapest, or a heuristic
+    'hardest') — it picks randomly so coverage accrues unbiased. Over many
+    runs every capable cell should get chosen at least once."""
     router = _build()
-    body = {
-        "messages": [
-            {
-                "role": "user",
-                "content": (
-                    "Debug this failing architecture and propose an "
-                    "implementation roadmap with tests."
-                ),
-            }
-        ]
+    body = {"messages": [{"role": "user", "content": "hello"}]}
+    seen = {
+        asyncio.run(router.route(body, [LOCAL, REMOTE_MID, REMOTE_HIGH])).cell
+        for _ in range(200)
     }
-    decision = asyncio.run(router.route(body, [LOCAL, REMOTE_MID, REMOTE_HIGH]))
-    assert decision.cell == REMOTE_HIGH
+    assert seen == {LOCAL, REMOTE_MID, REMOTE_HIGH}
 
 
-def test_cold_start_router_lets_large_local_model_handle_moderate_tasks() -> None:
-    """A local `default` cell is not automatically weak when the backend
-    reports enough parameter_count to make it a plausible moderate-task
-    target."""
-    local_large = Cell(model="local-large", reasoning_effort="default")
-    caps = {
-        local_large: CellCapabilities(
-            context_window=128_000,
-            modalities=frozenset({"text"}),
-            supports_tools=False,
-            cost_rank=0,
-            parameter_count=31_000_000_000,
-        ),
-        REMOTE_MID: CAPS[REMOTE_MID],
-    }
-    router = build_router(RoutingConfig(), capabilities_of=caps.__getitem__)
-    body = {"messages": [{"role": "user", "content": "Explain the routing design."}]}
-    decision = asyncio.run(router.route(body, [local_large, REMOTE_MID]))
-    assert decision.cell == local_large
-
-
-def test_router_picks_only_modality_capable_cell() -> None:
-    """Image-bearing prompt → LOCAL drops out (text-only), MID and HIGH
-    survive, cheapest (MID) wins."""
+def test_cold_start_never_picks_an_incompatible_cell() -> None:
+    """Random exploration is among CAPABILITY-FILTERED cells only — a
+    text-only cell is never chosen for an image prompt, across many runs."""
     router = _build()
     body = {
         "messages": [
@@ -156,55 +82,53 @@ def test_router_picks_only_modality_capable_cell() -> None:
             }
         ]
     }
-    decision = asyncio.run(router.route(body, [LOCAL, REMOTE_MID, REMOTE_HIGH]))
-    assert decision.cell == REMOTE_MID
+    for _ in range(100):
+        decision = asyncio.run(router.route(body, [LOCAL, REMOTE_MID, REMOTE_HIGH]))
+        assert decision.cell in (REMOTE_MID, REMOTE_HIGH)  # LOCAL is text-only
+        assert LOCAL not in decision.candidates
 
 
 def test_router_picks_only_tool_capable_cell() -> None:
-    """tools field present → LOCAL drops out (supports_tools=False),
-    cheapest tool-capable (MID) wins."""
+    """tools field present → LOCAL drops out (supports_tools=False); only
+    tool-capable cells remain in the pool, across many runs."""
     router = _build()
     body = {
         "messages": [{"role": "user", "content": "hi"}],
         "tools": [{"type": "function", "function": {"name": "f"}}],
     }
-    decision = asyncio.run(router.route(body, [LOCAL, REMOTE_MID, REMOTE_HIGH]))
-    assert decision.cell == REMOTE_MID
+    for _ in range(100):
+        decision = asyncio.run(router.route(body, [LOCAL, REMOTE_MID, REMOTE_HIGH]))
+        assert decision.cell in (REMOTE_MID, REMOTE_HIGH)
+        assert LOCAL not in decision.candidates
 
 
-def test_router_prefers_large_context_cell_when_prompt_is_huge() -> None:
-    """A 250K-token prompt no longer EXCLUDES LOCAL (128K) — the filter
-    is soft, not hard. Raw size alone is a window concern, not an
-    extreme-difficulty signal (see _task_difficulty), so the win here is
-    driven by the Router's window-fit scaling favoring the strongest
-    large-window compatible cell, not by an inflated difficulty tier."""
+def test_cold_start_explores_only_among_cells_that_fit_the_window() -> None:
+    """A 250K-token prompt still fits MID (256K) and HIGH (400K) but overflows
+    LOCAL (128K). Cold-start exploration restricts the random pick to fully-
+    fitting cells, so LOCAL is never the primary — but it stays a candidate
+    (soft preference, not exclusion)."""
     router = _build()
     huge = "x" * 750_000  # ~250K tokens at chars/3
     body = {"messages": [{"role": "user", "content": huge}]}
-    decision = asyncio.run(router.route(body, [LOCAL, REMOTE_MID, REMOTE_HIGH]))
-    assert decision.cell == REMOTE_HIGH
-    # LOCAL must still be in the candidate list — soft preference, not exclusion.
-    assert LOCAL in decision.candidates
+    for _ in range(100):
+        decision = asyncio.run(router.route(body, [LOCAL, REMOTE_MID, REMOTE_HIGH]))
+        assert decision.cell in (REMOTE_MID, REMOTE_HIGH)
+        assert LOCAL in decision.candidates
 
 
-def test_router_falls_back_to_overflowing_cell_when_nothing_fits() -> None:
-    """When every cell looks too small for the (over-counted) estimate,
-    the Router still returns a decision. The least-bad cell wins —
-    largest window, then cheapest. Upstream is the source of truth on
-    whether the prompt actually overflows."""
+def test_router_falls_back_to_some_cell_when_nothing_fits() -> None:
+    """When every cell overflows the (over-counted) estimate, exploration
+    falls back to the whole compatible pool and still returns a decision;
+    the retry order still prefers the biggest-window cells."""
     router = _build()
-    huge = "x" * 1_500_000  # ~500K tokens at chars/3 — exceeds even HIGH's 400K
+    huge = "x" * 1_500_000  # ~500K tokens — exceeds even HIGH's 400K window
     body = {"messages": [{"role": "user", "content": huge}]}
     decision = asyncio.run(router.route(body, [LOCAL, REMOTE_MID, REMOTE_HIGH]))
-    # All three overflow → all scaled below 0.5 → selector falls back to
-    # cheapest overall, but in proportion to fit ratio. HIGH has the best
-    # fit ratio (400/504 vs 256/504 vs 128/504), so candidates should be
-    # ordered with HIGH near the top of the retry list.
     assert decision.cell in (LOCAL, REMOTE_MID, REMOTE_HIGH)
-    # The biggest-window cell should appear before the smallest one in
-    # the candidate retry order.
-    cands = list(decision.candidates)
-    assert cands.index(REMOTE_HIGH) < cands.index(LOCAL)
+    # Retry order (the non-primary candidates) prefers larger windows.
+    rest = [c for c in decision.candidates if c != decision.cell]
+    if REMOTE_HIGH in rest and LOCAL in rest:
+        assert rest.index(REMOTE_HIGH) < rest.index(LOCAL)
 
 
 def test_router_raises_when_nothing_compatible() -> None:
@@ -246,13 +170,13 @@ def test_factory_rejects_unknown_impl_names() -> None:
 
 def test_decision_carries_predictions_keyed_by_cell_string() -> None:
     """RoutingDecision.predictions is keyed by 'model effort' strings so
-    the request-log writer can serialize without a custom encoder. With
-    the cold-start suitability layer active, these are adjusted scores,
-    not the raw uniform predictor's 0.5 priors."""
+    the request-log writer can serialize without a custom encoder. In cold
+    start these are the raw uniform priors (0.5), not heuristic-adjusted —
+    the difficulty heuristic was removed in favor of random exploration."""
     router = _build()
     body = {"messages": [{"role": "user", "content": "hi"}]}
     decision = asyncio.run(router.route(body, [LOCAL, REMOTE_MID]))
     assert decision.predictions == {
-        "local-llm default": 0.58,
-        "remote-mid medium": 0.6,
+        "local-llm default": 0.5,
+        "remote-mid medium": 0.5,
     }
