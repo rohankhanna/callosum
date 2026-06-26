@@ -50,6 +50,21 @@ dev = [
     "mypy>=1.10",
     "httpx>=0.27",
 ]
+# Mirror of the `embeddings` extra as a dependency-group so it can be made a
+# default install for `uv run` / `uv sync` (uv 0.11 has no `default-extras`,
+# only `default-groups`). The extra above stays for `pip install -e '.[embeddings]'`
+# users. Keeps the BGE provider's torch/sentence-transformers stack present
+# across restarts and reboots ().
+embeddings = [
+    "sentence-transformers>=3.0",
+]
+
+[tool.uv]
+# Install the embeddings group by default so the systemd ExecStart
+# (`uv run callosum serve`) and any `uv sync` retain sentence-transformers,
+# which the live BGE embedding provider requires. `dev` is listed explicitly
+# because setting default-groups overrides uv's implicit ["dev"] default.
+default-groups = ["dev", "embeddings"]
 
 [build-system]
 requires = ["hatchling"]

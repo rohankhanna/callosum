@@ -108,6 +108,9 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "ruff" },
 ]
+embeddings = [
+    { name = "sentence-transformers" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -130,6 +133,7 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=0.23" },
     { name = "ruff", specifier = ">=0.4" },
 ]
+embeddings = [{ name = "sentence-transformers", specifier = ">=3.0" }]
 
 [[package]]
 name = "certifi"
