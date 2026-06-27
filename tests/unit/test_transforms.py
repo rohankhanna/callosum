@@ -108,18 +108,13 @@ def test_empty_registry_is_response_noop() -> None:
     assert reg.apply_response(body, _ctx()) == body
 
 
-def test_build_default_registry_registers_inband_reasoning() -> None:
-    """The default registry ships the self-gating in-band reasoning
-    transform. It is inert for any cell whose reasoning_channel finding
-    isn't `inband_tags`, so registering it is still a no-op for the vast
-    majority of cells — but it must be present so inband cells get the
-    fix without per-operator wiring."""
+def test_build_default_registry_starts_empty() -> None:
+    """The default registry shipped at startup carries no transforms.
+    If we ever change this, the change should be deliberate — tests
+    catch the moment a default-registered transform shows up."""
     reg = build_default_registry()
-    assert reg.names() == ["inband_reasoning"]
-    # Inert for a cell with no capability profile: applies_to is False, so
-    # apply_response leaves the body untouched.
-    body = {"output": [{"type": "message", "content": [{"type": "output_text", "text": "<think>x</think>hi"}]}]}
-    assert reg.apply_response(body, _ctx()) == body
+    assert len(reg) == 0
+    assert reg.names() == []
 
 
 # ---------- registration ---------------------------------------------------

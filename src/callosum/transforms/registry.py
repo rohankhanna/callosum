@@ -131,24 +131,10 @@ class TransformRegistry:
 def build_default_registry() -> TransformRegistry:
     """Build the standard registry callosum uses at startup.
 
-    Adding a new transform is one new module under callosum/transforms/
-    plus one line in this function. Centralizing the wiring here keeps
+    Currently empty: no transforms are shipped by default. Adding a
+    new transform is one new module under callosum/transforms/ plus
+    one line in this function. Centralizing the wiring here keeps
     discovery explicit — there's no auto-import magic that could
     activate a transform someone didn't know was shipped.
-
-    Registered transforms are self-gating: each fires only for cells
-    whose capability profile matches its `applies_to`, so registering
-    one here is still a no-op for every cell that doesn't exhibit the
-    targeted quirk.
     """
-    from callosum.transforms.inband_reasoning import (
-        TRANSFORM as inband_reasoning_transform,
-    )
-
-    registry = TransformRegistry()
-    # In-band reasoning re-routing: inert unless a cell's reasoning_channel
-    # capability finding is `inband_tags` (only cells callosum translates
-    # chat→Responses for can ever be classified that way). See
-    # transforms/inband_reasoning.py for the pass-through invariant.
-    registry.register(inband_reasoning_transform)
-    return registry
+    return TransformRegistry()
