@@ -185,6 +185,51 @@ def tool_call_simple_body() -> dict[str, Any]:
     }
 
 
+# --------------------------------------------------------------------
+# Reasoning-channel probe — a small no-tools prompt that reliably
+# elicits chain-of-thought from thinking-class models. The classic
+# bat-and-ball puzzle is sticky enough that thinking models almost
+# always show their work, which is exactly what the reasoning_channel
+# dimension needs to observe HOW that CoT is delivered (separate field,
+# in-band tags, or not at all).
+# --------------------------------------------------------------------
+
+_REASONING_INSTRUCTIONS = (
+    "You are a careful problem solver. Think through the problem step "
+    "by step before committing to a final answer, then state the answer."
+)
+
+
+def reasoning_channel_probe_body() -> dict[str, Any]:
+    """A small (~1KB) no-tools request designed to trigger visible
+    reasoning. The dimension probe inspects the RESPONSE to classify
+    where the chain-of-thought arrived (native field, in-band tags, or
+    none) — the prompt only needs to provoke thinking, not test it."""
+    return {
+        "model": "",  # caller sets via /admin/cell-call
+        "instructions": _REASONING_INSTRUCTIONS,
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": (
+                            "A bat and a ball cost $1.10 in total. The bat "
+                            "costs $1.00 more than the ball. How much does "
+                            "the ball cost? Show your reasoning, then give "
+                            "the final answer."
+                        ),
+                    }
+                ],
+            }
+        ],
+        "tool_choice": "none",
+        "stream": False,
+    }
+
+
 def tool_call_with_context_body(target_user_chars: int) -> dict[str, Any]:
     """A tool-using request padded with a fake-but-coherent prior
     conversation history so total prompt size approaches

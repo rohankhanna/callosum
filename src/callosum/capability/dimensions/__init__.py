@@ -16,7 +16,11 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from callosum.capability.dimensions import tool_call_at_scale, tool_call_shape
+from callosum.capability.dimensions import (
+    reasoning_channel,
+    tool_call_at_scale,
+    tool_call_shape,
+)
 from callosum.capability.profile import CapabilityProfile, DimensionFinding
 
 # Type alias for the probe callable each dimension implements.
@@ -30,6 +34,7 @@ ProbeFn = Callable[
 DIMENSIONS: list[tuple[str, ProbeFn]] = [
     ("tool_call_shape", tool_call_shape.probe),
     ("tool_call_at_scale", tool_call_at_scale.probe),
+    ("reasoning_channel", reasoning_channel.probe),
 ]
 
 
