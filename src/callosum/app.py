@@ -38,7 +38,7 @@ from callosum.cell_grid import (
     live_completion_models,
     reasoning_levels_for,
 )
-from callosum.config import AutoRouterConfig
+from callosum.config import LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S, AutoRouterConfig
 from callosum.errors import RETRYABLE, BackendError, ErrorClass
 from callosum.fallback import FallbackExecutor, should_attempt_fallback
 from callosum.label_ui import install_label_ui
@@ -654,6 +654,34 @@ def _composite_cost_estimate_for_body(body: dict[str, Any], *, model: str) -> An
     except Exception:
         logger.debug("composite cost estimate failed", exc_info=True)
         return None
+
+
+def _time_estimate_for_body(body: dict[str, Any], *, model: str) -> Any:
+    estimator = _TIME_ESTIMATOR
+    forecaster = _OUTPUT_FORECASTER
+    if estimator is None or forecaster is None:
+        return None
+    try:
+        cell = Cell(model=model, reasoning_effort=_extract_reasoning_effort(body) or "")
+        input_tokens = _approx_body_tokens(body)
+        forecast = forecaster.forecast(cell, input_tokens)
+        return estimator.estimate(
+            EstimateInput(
+                cell=cell,
+                input_tokens=input_tokens,
+                output=forecast,
+            )
+        )
+    except Exception:
+        logger.debug("time estimate failed", exc_info=True)
+        return None
+
+
+def _cell_is_latency_feasible_for_body(body: dict[str, Any], cell: Cell) -> bool:
+    estimate = _time_estimate_for_body(body, model=cell.model)
+    if estimate is None:
+        return True
+    return float(estimate.high) <= (LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S * 1000.0)
 
 
 def _time_sample_count(estimator: TimeUsageEstimator, cell: Cell) -> int | None:
@@ -2266,16 +2294,19 @@ async def _dispatch_internal(
             and usage_log is not None
             and len(decision.candidates) > 1
         ):
+            _quota_candidates = tuple(
+                c for c in decision.candidates if _cell_is_latency_feasible_for_body(body, c)
+            )
             _quota_coverage = cell_sample_counts(
                 usage_log.path,
-                list(decision.candidates),
+                list(_quota_candidates),
                 window_seconds=auto_cfg.quota_window_seconds,
             )
             _forced = select_quota_deficit_cell(
-                decision.candidates,
+                _quota_candidates,
                 _quota_coverage,
                 floor_pct=effective_floor_pct(
-                    len(decision.candidates),
+                    len(_quota_candidates),
                     budget_pct=auto_cfg.exploration_budget_pct,
                     min_floor_pct=auto_cfg.quota_floor_pct,
                 ),
@@ -2482,6 +2513,7 @@ def _remember_binding(registry: SessionRegistry, session_id: str | None, backend
 # user-perceived latency. There's no wall-clock cap; latency is bounded
 # only by upstream timeouts.
 MAX_CELL_ATTEMPTS = 3
+MAX_CELL_RETRY_BUDGET_MS = int(LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S * 1000)
 
 
 async def _dispatch_nonstream_with_cell_retry(
@@ -2506,6 +2538,7 @@ async def _dispatch_nonstream_with_cell_retry(
 
     attempts: list[RoutingAttempt] = []
     final_request_id: int | None = None
+    loop_start = time.time()
 
     for cell_idx, cell in enumerate(cells_to_try):
         body["model"] = cell.model
@@ -2533,9 +2566,24 @@ async def _dispatch_nonstream_with_cell_retry(
                     error_message=(str(exc.detail)[:500] if exc.detail else None),
                 )
             )
+            elapsed_ms = int((time.time() - loop_start) * 1000)
             # 4xx → non-retryable (auth_invalid, malformed request, etc).
             # 5xx + cells remaining → reroute. 5xx + no cells left → propagate.
-            if exc.status_code < 500 or cell_idx + 1 >= len(cells_to_try):
+            if exc.status_code < 500 or cell_idx + 1 >= len(cells_to_try) or elapsed_ms >= MAX_CELL_RETRY_BUDGET_MS:
+                if elapsed_ms >= MAX_CELL_RETRY_BUDGET_MS:
+                    attempts[-1] = RoutingAttempt(
+                        attempt_idx=cell_idx,
+                        backend_id=None,
+                        model=cell.model,
+                        reasoning_effort=cell.reasoning_effort,
+                        status=exc.status_code,
+                        classification="failed_budget_exhausted",
+                        latency_ms=attempt_ms,
+                        error_message=(
+                            f"{str(exc.detail)[:480]}; aggregate cell-retry budget "
+                            f"{MAX_CELL_RETRY_BUDGET_MS}ms exhausted after {elapsed_ms}ms"
+                        ),
+                    )
                 if usage_log is not None and final_request_id is not None:
                     usage_log.record_routing_attempts(final_request_id, attempts)
                 raise
@@ -2589,6 +2637,7 @@ async def _dispatch_stream_with_cell_retry(
 
     attempts: list[RoutingAttempt] = []
     final_request_id: int | None = None
+    loop_start = time.time()
 
     for cell_idx, cell in enumerate(cells_to_try):
         body["model"] = cell.model
@@ -2613,7 +2662,22 @@ async def _dispatch_stream_with_cell_retry(
                     error_message=(str(exc.detail)[:500] if exc.detail else None),
                 )
             )
-            if exc.status_code < 500 or cell_idx + 1 >= len(cells_to_try):
+            elapsed_ms = int((time.time() - loop_start) * 1000)
+            if exc.status_code < 500 or cell_idx + 1 >= len(cells_to_try) or elapsed_ms >= MAX_CELL_RETRY_BUDGET_MS:
+                if elapsed_ms >= MAX_CELL_RETRY_BUDGET_MS:
+                    attempts[-1] = RoutingAttempt(
+                        attempt_idx=cell_idx,
+                        backend_id=None,
+                        model=cell.model,
+                        reasoning_effort=cell.reasoning_effort,
+                        status=exc.status_code,
+                        classification="failed_budget_exhausted",
+                        latency_ms=attempt_ms,
+                        error_message=(
+                            f"{str(exc.detail)[:480]}; aggregate cell-retry budget "
+                            f"{MAX_CELL_RETRY_BUDGET_MS}ms exhausted after {elapsed_ms}ms"
+                        ),
+                    )
                 if usage_log is not None and final_request_id is not None:
                     usage_log.record_routing_attempts(final_request_id, attempts)
                 raise
