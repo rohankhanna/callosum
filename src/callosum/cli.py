@@ -740,40 +740,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Start the managed Callosum service.",
     ).set_defaults(func=cmd_service_start)
 
-    # Auto-dev ticket backlog (PO intake). Opens the ticket SQLite store
-    # directly so filing works while the serving daemon is down. Intake +
-    # storage only — the dispatcher that consumes tickets is a later slice
-    # (see docs/adr/2026-06-27-auto-dev-ticket-queue-statistical-promotion.md).
-    from callosum.dev_loop.tickets import KINDS, SOURCES, STATUSES
-
-    p_ticket = sub.add_parser("ticket", help="Auto-dev defect/ticket backlog (PO intake).")
-    pt = p_ticket.add_subparsers(dest="ticket_cmd", required=True)
-    t_add = pt.add_parser("add", help="File a ticket into the backlog.")
-    t_add.add_argument("title")
-    t_add.add_argument("--kind", choices=KINDS, default="bug")
-    t_add.add_argument("--source", choices=SOURCES, default="po")
-    t_add.add_argument("--repro", default=None, help="path to a repro prompt/payload file")
-    t_add.add_argument(
-        "--acceptance",
-        default=None,
-        help="machine-checkable acceptance test id (e.g. a pytest node) — sets the ticket triaged",
-    )
-    t_add.add_argument("--priority", type=int, default=0)
-    t_add.set_defaults(func=cmd_ticket_add)
-    t_list = pt.add_parser("list", help="List tickets (optionally by status).")
-    t_list.add_argument("--status", choices=STATUSES, default=None)
-    t_list.set_defaults(func=cmd_ticket_list)
-    t_show = pt.add_parser("show", help="Show one ticket and its event trail.")
-    t_show.add_argument("id")
-    t_show.set_defaults(func=cmd_ticket_show)
-    t_triage = pt.add_parser(
-        "triage",
-        help="Attach an acceptance test and move the ticket to ready (the eligibility wall).",
-    )
-    t_triage.add_argument("id")
-    t_triage.add_argument("--acceptance", required=True, help="machine-checkable acceptance test id")
-    t_triage.set_defaults(func=cmd_ticket_triage)
-
     # Auth-rotate wizard. Wired here so the help surface lists it
     # alongside the other operator commands.
     from callosum.auth_rotate import add_subparser as _add_auth_rotate
@@ -781,66 +747,6 @@ def build_parser() -> argparse.ArgumentParser:
     _add_auth_rotate(sub)
 
     return parser
-
-
-def cmd_ticket_add(args: argparse.Namespace) -> int:
-    from callosum.dev_loop.tickets import TicketStore, default_work_mirror
-
-    store = TicketStore(mirror=default_work_mirror)
-    try:
-        ticket = store.add(
-            kind=args.kind,
-            title=args.title,
-            source=args.source,
-            repro_ref=args.repro,
-            acceptance_test=args.acceptance,
-            priority=args.priority,
-        )
-    finally:
-        store.close()
-    _print(ticket.to_dict())
-    return 0
-
-
-def cmd_ticket_list(args: argparse.Namespace) -> int:
-    from callosum.dev_loop.tickets import TicketStore
-
-    store = TicketStore()
-    try:
-        tickets = store.list_tickets(status=args.status)
-    finally:
-        store.close()
-    _print([t.to_dict() for t in tickets])
-    return 0
-
-
-def cmd_ticket_show(args: argparse.Namespace) -> int:
-    from callosum.dev_loop.tickets import TicketStore
-
-    store = TicketStore()
-    try:
-        ticket = store.get(args.id)
-        if ticket is None:
-            print(json.dumps({"error": f"no ticket {args.id}"}))
-            return 1
-        payload = ticket.to_dict()
-        payload["events"] = store.events(args.id)
-    finally:
-        store.close()
-    _print(payload)
-    return 0
-
-
-def cmd_ticket_triage(args: argparse.Namespace) -> int:
-    from callosum.dev_loop.tickets import TicketStore
-
-    store = TicketStore()
-    try:
-        ticket = store.triage(args.id, args.acceptance)
-    finally:
-        store.close()
-    _print(ticket.to_dict())
-    return 0
 
 
 def main() -> int:

@@ -174,6 +174,15 @@ class AutoRouterConfig(BaseModel):
     # Window over which a cell's share is measured. 30 days.
     quota_window_seconds: int = 2_592_000
 
+    # Temporary guardrail for remote reasoning-cost blowups: once xhigh cells
+    # account for this share of recent successful traffic, keep automatic
+    # routing away from xhigh while non-xhigh alternatives are available.
+    # Explicit callosum:<source>/<model>:xhigh pins remain available.
+    xhigh_cap_enabled: bool = True
+    xhigh_cap_pct: float = 0.01
+    # Seven days keeps the cap aligned with the upstream weekly quota window.
+    xhigh_cap_window_seconds: int = 604_800
+
     # Dynamic per-model cost_rank derived from MEASURED weekly-quota burn
     # (weekly_used_percent deltas in the request log), replacing the flat
     # remote constant. Catalog priority is the cold-start prior; the override

@@ -66,6 +66,22 @@ tool-turn exception: a turn forced to an under-floor cell is forced regardless o
 its shape. The exploration budget (and the optional minimum floor) are the only
 knobs.
 
+## Temporary xhigh cap
+
+While the peer-quality and cost models are still stabilizing, automatic routing
+also applies a temporary `xhigh` guardrail before the router and exploration
+quota see the candidate pool. If recent successful `xhigh` traffic is at or
+above `xhigh_cap_pct` (default 1%) over `xhigh_cap_window_seconds` (default seven
+days), or if the next `xhigh` choice would push the share over that cap, `xhigh`
+cells are removed from automatic routing while non-`xhigh` alternatives are
+available. Explicit `callosum:<source>/<model>:xhigh` pins are not filtered; if
+the only viable lane is `xhigh`, the pool is preserved rather than fabricating
+an outage.
+
+This is intentionally a temporary operating cap, not a learned quality claim.
+work tracker tracks the later removal once the learned router has enough reliable
+cost/quality evidence to spend high reasoning effort deliberately.
+
 ## Observability
 
 `/status` carries `router.exploration_quota`: the `enabled` flag,
@@ -76,10 +92,15 @@ under `effective_routing_mode = "quota_explore"` in `/status`'s per-mode stats.
 The grid is the live, upstream-advertised, version-ranked cell set (de-listed
 models drop out automatically).
 
+`/status` also carries `router.xhigh_cap` with the enabled flag, cap percentage,
+and cap window.
+
 ## Config
 
 `[auto_router]` in `~/.config/callosum/config.toml`:
 `exploration_quota_enabled` (on/off), `exploration_budget_pct` (default 0.10 —
 total exploration budget split evenly across the lane's candidates),
 `quota_floor_pct` (default 0.0 — optional absolute minimum per-cell floor),
-`quota_window_seconds` (default 30 days).
+`quota_window_seconds` (default 30 days), `xhigh_cap_enabled` (default on),
+`xhigh_cap_pct` (default 0.01), and `xhigh_cap_window_seconds` (default seven
+days).

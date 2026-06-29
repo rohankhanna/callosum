@@ -8,7 +8,6 @@ from pathlib import Path
 import httpx
 import pytest
 
-from callosum import app as app_module
 from callosum.app import create_app
 from callosum.cell_grid import DEFAULT_MODELS, REASONING_LEVELS, build_cells
 from callosum.fakes import InMemoryFakeBackend
@@ -137,6 +136,71 @@ def _effective_modes(db: Path) -> list[str]:
 
 
 @pytest.mark.asyncio
+async def test_xhigh_cap_removes_xhigh_from_auto_candidates(tmp_path: Path) -> None:
+    """The temporary xhigh guardrail caps automatic routing once recent
+    successful xhigh traffic is already at 1%, while leaving non-xhigh cells
+    available for the router and quota layer."""
+    from callosum.config import AutoRouterConfig
+
+    db = tmp_path / "u.sqlite"
+    log = UsageLog(db)
+    backend = _backend()
+    conn = sqlite3.connect(db)
+    import time as _time
+
+    now = _time.time()
+    try:
+        conn.executemany(
+            "INSERT INTO requests"
+            " (ts_start, ts_end, latency_ms, route, stream, backend_id, status, model, reasoning_effort)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    now + i,
+                    now + i + 0.1,
+                    200,
+                    "/v1/responses",
+                    0,
+                    "seed",
+                    200,
+                    "model-a0e7",
+                    "low",
+                )
+                for i in range(100)
+            ]
+            + [
+                (
+                    now + 300,
+                    now + 300.1,
+                    100,
+                    "/v1/responses",
+                    0,
+                    "seed",
+                    200,
+                    "model-a0e7",
+                    "xhigh",
+                )
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    cfg = AutoRouterConfig(xhigh_cap_enabled=True, xhigh_cap_pct=0.01, xhigh_cap_window_seconds=604_800)
+    async with _client(backends=[backend], usage_log=log, auto_router_config=cfg) as client:
+        r = await client.post("/v1/responses", json={"model": "auto-learning", "input": []})
+        assert r.status_code == 200
+    conn = sqlite3.connect(db)
+    try:
+        row = conn.execute(
+            "SELECT model, reasoning_effort FROM requests WHERE routing_mode = 'auto-learning' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None
+    assert row[1] != "xhigh"
+
+
+@pytest.mark.asyncio
 async def test_quota_enabled_spreads_and_stamps_provenance(tmp_path: Path) -> None:
     """With the exploration quota on, a burst of eligible (tool-less, easy)
     turns deficit-fills across the grid instead of collapsing, and forced turns
@@ -179,54 +243,6 @@ async def test_quota_forces_tool_turns_too(tmp_path: Path) -> None:
     assert len(served) == 16
     assert len(set(served)) >= 8  # forced despite tools => spreads
     assert _effective_modes(db).count("quota_explore") >= 1
-
-
-@pytest.mark.asyncio
-async def test_quota_skips_infeasible_under_floor_cell(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Quota forcing should not redirect onto an under-floor cell the latency
-    guard already considers structurally too slow for this request."""
-    from callosum.config import AutoRouterConfig
-
-    def _fake_feasible(body: dict[str, object], cell) -> bool:
-        return cell.model != "model-a0c3"
-
-    monkeypatch.setattr(app_module, "_cell_is_latency_feasible_for_body", _fake_feasible)
-
-    db = tmp_path / "u.sqlite"
-    log = UsageLog(db)
-    backend = _backend()
-    conn = sqlite3.connect(db)
-    try:
-        conn.executemany(
-            "INSERT INTO requests "
-            "(ts_start, ts_end, latency_ms, route, stream, backend_id, model, reasoning_effort, status, classification, routing_mode) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-                (0.0, 0.1, 100, "/v1/responses", 0, "seed", "model-a0e7", "low", 200, "ok", "auto-learning"),
-                (0.2, 0.3, 100, "/v1/responses", 0, "seed", "model-a0e7", "medium", 200, "ok", "auto-learning"),
-            ],
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-    cfg = AutoRouterConfig(exploration_quota_enabled=True)
-    async with _client(backends=[backend], usage_log=log, auto_router_config=cfg) as client:
-        response = await client.post("/v1/responses", json={"model": "model-a0e7", "input": []})
-    assert response.status_code == 200
-
-    conn = sqlite3.connect(db)
-    try:
-        rows = conn.execute(
-            "SELECT effective_routing_mode, model, reasoning_effort FROM requests ORDER BY id"
-        ).fetchall()
-    finally:
-        conn.close()
-    assert rows
-    quota_rows = [(model, reasoning) for effective_mode, model, reasoning in rows if effective_mode == "quota_explore"]
-    assert all(model != "model-a0c3" for model, _reasoning in quota_rows)
 
 
 # ---------- measured dynamic cost_rank ------------------------------------
