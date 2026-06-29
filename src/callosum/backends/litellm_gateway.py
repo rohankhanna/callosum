@@ -369,6 +369,18 @@ class LiteLLMGatewayBackend:
             stream_options = {}
         stream_options["include_usage"] = True
         out_body["stream_options"] = stream_options
+        # In-band reasoning re-routing. callosum's transform framework does
+        # not process streaming responses, and this translator is the sole
+        # place callosum owns the chat→Responses *stream* translation (it is
+        # never a byte-passed Responses stream), so the in-band splitter
+        # hooks here. The gate loads the cell's capability profile and
+        # returns a splitter only for `inband_tags` cells; for every other
+        # cell (native/none/unknown/unprobed) it returns None and the
+        # content path below is byte-for-byte unchanged. `body["model"]` is
+        # the cell id the profile is keyed by (before any runtime rewrite).
+        from callosum.transforms.inband_reasoning import inband_splitter_for_model
+
+        reasoning_splitter = inband_splitter_for_model(str(body.get("model", "")))
         seq = 0
 
         def _emit(event_type: str, payload: dict[str, Any]) -> bytes:
@@ -392,6 +404,97 @@ class LiteLLMGatewayBackend:
         resp_id = "resp-litellm"
         upstream_model = out_body.get("model", "")
         usage: dict[str, Any] | None = None
+
+        def _reasoning_events(text: str) -> list[bytes]:
+            """Emit a reasoning-summary delta, lazily opening the reasoning
+            output item on first use. Shared by the native `thinking`
+            channel and the in-band splitter so both feed one reasoning
+            item."""
+            nonlocal reasoning_output_index, reasoning_item_id, next_output_index, thinking_so_far
+            evs: list[bytes] = []
+            if reasoning_output_index is None:
+                reasoning_output_index = next_output_index
+                next_output_index += 1
+                reasoning_item_id = f"rs_{resp_id}_{reasoning_output_index}"
+                evs.append(
+                    _emit(
+                        "response.output_item.added",
+                        {
+                            "output_index": reasoning_output_index,
+                            "item": {
+                                "type": "reasoning",
+                                "id": reasoning_item_id,
+                                "summary": [],
+                            },
+                        },
+                    )
+                )
+            thinking_so_far += text
+            evs.append(
+                _emit(
+                    "response.reasoning_summary_text.delta",
+                    {
+                        "item_id": reasoning_item_id,
+                        "output_index": reasoning_output_index,
+                        "summary_index": 0,
+                        "delta": text,
+                    },
+                )
+            )
+            return evs
+
+        def _content_events(text: str) -> list[bytes]:
+            """Emit a visible output_text delta, lazily opening the message
+            output item on first use."""
+            nonlocal message_output_index, message_item_id, next_output_index, text_so_far
+            evs: list[bytes] = []
+            if message_output_index is None:
+                message_output_index = next_output_index
+                next_output_index += 1
+                message_item_id = f"msg_{resp_id}_{message_output_index}"
+                evs.append(
+                    _emit(
+                        "response.output_item.added",
+                        {
+                            "output_index": message_output_index,
+                            "item": {
+                                "type": "message",
+                                "id": message_item_id,
+                                "role": "assistant",
+                                "content": [],
+                                "status": "in_progress",
+                            },
+                        },
+                    )
+                )
+            text_so_far += text
+            evs.append(
+                _emit(
+                    "response.output_text.delta",
+                    {
+                        "item_id": message_item_id,
+                        "output_index": message_output_index,
+                        "content_index": 0,
+                        "delta": text,
+                    },
+                )
+            )
+            return evs
+
+        def _route_content(text: str) -> list[bytes]:
+            """Route a content delta to the right channel. With no in-band
+            splitter active this is just `_content_events(text)`. With one
+            active, each segment the splitter yields goes to the reasoning
+            or content channel; partial tags are held back across deltas."""
+            if reasoning_splitter is None:
+                return _content_events(text)
+            evs: list[bytes] = []
+            for channel, segment in reasoning_splitter.push(text):
+                if channel == "reasoning":
+                    evs.extend(_reasoning_events(segment))
+                else:
+                    evs.extend(_content_events(segment))
+            return evs
 
         try:
             stream_ctx = self._client.stream(
@@ -452,34 +555,12 @@ class LiteLLMGatewayBackend:
                     if not isinstance(delta, dict):
                         delta = {}
 
-                    # Thinking deltas (model-a0d5/model-a0g2/r1 thinking mode).
+                    # Thinking deltas (model-a0d5/model-a0g2/r1 thinking mode) arriving
+                    # in a native field.
                     thinking_delta = delta.get("thinking")
                     if isinstance(thinking_delta, str) and thinking_delta:
-                        if reasoning_output_index is None:
-                            reasoning_output_index = next_output_index
-                            next_output_index += 1
-                            reasoning_item_id = f"rs_{resp_id}_{reasoning_output_index}"
-                            yield _emit(
-                                "response.output_item.added",
-                                {
-                                    "output_index": reasoning_output_index,
-                                    "item": {
-                                        "type": "reasoning",
-                                        "id": reasoning_item_id,
-                                        "summary": [],
-                                    },
-                                },
-                            )
-                        thinking_so_far += thinking_delta
-                        yield _emit(
-                            "response.reasoning_summary_text.delta",
-                            {
-                                "item_id": reasoning_item_id,
-                                "output_index": reasoning_output_index,
-                                "summary_index": 0,
-                                "delta": thinking_delta,
-                            },
-                        )
+                        for ev in _reasoning_events(thinking_delta):
+                            yield ev
 
                     # Tool-call deltas.
                     tool_calls_delta = delta.get("tool_calls") or []
@@ -537,38 +618,21 @@ class LiteLLMGatewayBackend:
                                     },
                                 )
 
-                    # Message text delta.
+                    # Message text delta. Routed through the in-band splitter
+                    # when the cell is an `inband_tags` cell (else verbatim).
                     content_delta = delta.get("content")
                     if isinstance(content_delta, str) and content_delta:
-                        if message_output_index is None:
-                            message_output_index = next_output_index
-                            next_output_index += 1
-                            message_item_id = f"msg_{resp_id}_{message_output_index}"
-                            yield _emit(
-                                "response.output_item.added",
-                                {
-                                    "output_index": message_output_index,
-                                    "item": {
-                                        "type": "message",
-                                        "id": message_item_id,
-                                        "role": "assistant",
-                                        "content": [],
-                                        "status": "in_progress",
-                                    },
-                                },
-                            )
-                        text_so_far += content_delta
-                        yield _emit(
-                            "response.output_text.delta",
-                            {
-                                "item_id": message_item_id,
-                                "output_index": message_output_index,
-                                "content_index": 0,
-                                "delta": content_delta,
-                            },
-                        )
+                        for ev in _route_content(content_delta):
+                            yield ev
 
-            # Stream ended cleanly.
+            # Stream ended cleanly. Release any tag-fragment text the
+            # in-band splitter buffered at end-of-stream onto its active
+            # channel before the per-item .done events.
+            if reasoning_splitter is not None:
+                for channel, segment in reasoning_splitter.flush():
+                    events = _reasoning_events(segment) if channel == "reasoning" else _content_events(segment)
+                    for ev in events:
+                        yield ev
             # Emit per-item .done events in output order, then
             # response.output_item.done, then response.completed.
             if reasoning_output_index is not None:
