@@ -266,9 +266,18 @@ Current diagrams:
   component diagram for the proxy, backend lanes, persisted state,
   capability harness, canary/failure path, and scheduled auto-dev
   loop.
+- `docs/architecture/generated/call_graph_focus.dot` / `.svg` /
+  `.json` — code-generated static call graph for the runtime roots
+  (`_run_server`, `create_app`, request dispatch, router, and logging).
+- `docs/architecture/generated/control_flow_focus.dot` / `.svg` /
+  `.json` — code-generated statement-level control-flow sketches for
+  the dispatch and router hot paths.
 
 See `docs/architecture/README.md` for the full rendering procedure
-and the tooling-choice rationale.
+and the tooling-choice rationale, plus
+`docs/architecture/generated/README.md` for review-oriented drill-down
+entry points and the full repository-wide architecture review target
+inventory.
 
 ## Self-observation and self-adaptation
 

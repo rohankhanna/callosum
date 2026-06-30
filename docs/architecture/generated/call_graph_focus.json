@@ -1,0 +1,1609 @@
+{
+  "edges": [
+    {
+      "source": "callosum.__main__:_run_server",
+      "target": "callosum.app:create_app"
+    },
+    {
+      "source": "callosum.__main__:_run_server",
+      "target": "callosum.config:build_backends"
+    },
+    {
+      "source": "callosum.__main__:_run_server",
+      "target": "callosum.config:load_config"
+    },
+    {
+      "source": "callosum.__main__:_run_server",
+      "target": "callosum.local:LocalModelRegistrySource.is_available"
+    },
+    {
+      "source": "callosum.app:_buffered_strip",
+      "target": "callosum.app:_hold_trailing_partial"
+    },
+    {
+      "source": "callosum.app:_catalog_boot_resync",
+      "target": "callosum.app:_refresh_catalogs_pass"
+    },
+    {
+      "source": "callosum.app:_clean_sse_blob",
+      "target": "callosum.app:_buffered_strip"
+    },
+    {
+      "source": "callosum.app:_clean_sse_blob",
+      "target": "callosum.app:_extract_complexity_class"
+    },
+    {
+      "source": "callosum.app:_clean_sse_blob",
+      "target": "callosum.app:_scrub_full_text_event"
+    },
+    {
+      "source": "callosum.app:_clean_sse_blob",
+      "target": "callosum.app:_scrub_peer_quality_from_event"
+    },
+    {
+      "source": "callosum.app:_clean_sse_blob",
+      "target": "callosum.app:_strip_trailing_complexity_marker_text"
+    },
+    {
+      "source": "callosum.app:_collect_backend_status",
+      "target": "callosum.selector:blocking_meters"
+    },
+    {
+      "source": "callosum.app:_collect_backend_status",
+      "target": "callosum.selector:constraining_meter"
+    },
+    {
+      "source": "callosum.app:_composite_cost_estimate_for_body",
+      "target": "callosum.app:_approx_body_tokens"
+    },
+    {
+      "source": "callosum.app:_composite_cost_estimate_for_body",
+      "target": "callosum.app:_extract_reasoning_effort"
+    },
+    {
+      "source": "callosum.app:_diagnose_backend",
+      "target": "callosum.app:_evaluate_diagnostic"
+    },
+    {
+      "source": "callosum.app:_diagnose_backend",
+      "target": "callosum.cell_grid:live_completion_models"
+    },
+    {
+      "source": "callosum.app:_dispatch_internal",
+      "target": "callosum.app:_active_pool"
+    },
+    {
+      "source": "callosum.app:_dispatch_internal",
+      "target": "callosum.app:_context_window_for_cell"
+    },
+    {
+      "source": "callosum.app:_dispatch_internal",
+      "target": "callosum.app:_dispatch_nonstream_with_cell_retry"
+    },
+    {
+      "source": "callosum.app:_dispatch_internal",
+      "target": "callosum.app:_dispatch_stream_with_cell_retry"
+    },
+    {
+      "source": "callosum.app:_dispatch_internal",
+      "target": "callosum.app:_extract_reasoning_effort"
+    },
+    {
+      "source": "callosum.app:_dispatch_internal",
+      "target": "callosum.app:_filter_cells_to_routable"
+    },
+    {
+      "source": "callosum.app:_dispatch_internal",
+      "target": "callosum.app:_inject_peer_quality_prompt"
+    },
+    {
+      "source": "callosum.app:_dispatch_internal",
+      "target": "callosum.app:_peer_quality_capture_enabled"
+    },
+    {
+      "source": "callosum.app:_dispatch_internal",
+      "target": "callosum.app:_require_model"
+    },
+    {
+      "source": "callosum.app:_dispatch_internal",
+      "target": "callosum.app:_routable_backends"
+    },
+    {
+      "source": "callosum.app:_dispatch_internal",
+      "target": "callosum.app:_stamp_reasoning_effort"
+    },
+    {
+      "source": "callosum.app:_dispatch_internal",
+      "target": "callosum.cell_grid:cell_sample_counts"
+    },
+    {
+      "source": "callosum.app:_dispatch_internal",
+      "target": "callosum.routing.quota:effective_floor_pct"
+    },
+    {
+      "source": "callosum.app:_dispatch_internal",
+      "target": "callosum.routing.quota:filter_cells_by_effort_cap"
+    },
+    {
+      "source": "callosum.app:_dispatch_internal",
+      "target": "callosum.routing.quota:select_quota_deficit_cell"
+    },
+    {
+      "source": "callosum.app:_dispatch_internal",
+      "target": "callosum.selectors:parse_selector"
+    },
+    {
+      "source": "callosum.app:_dispatch_nonstream",
+      "target": "callosum.app:_collect_backend_status"
+    },
+    {
+      "source": "callosum.app:_dispatch_nonstream",
+      "target": "callosum.app:_composite_cost_estimate_for_body"
+    },
+    {
+      "source": "callosum.app:_dispatch_nonstream",
+      "target": "callosum.app:_extract_and_strip_complexity"
+    },
+    {
+      "source": "callosum.app:_dispatch_nonstream",
+      "target": "callosum.app:_log_attempt"
+    },
+    {
+      "source": "callosum.app:_dispatch_nonstream",
+      "target": "callosum.app:_no_viable"
+    },
+    {
+      "source": "callosum.app:_dispatch_nonstream",
+      "target": "callosum.app:_remember_binding"
+    },
+    {
+      "source": "callosum.app:_dispatch_nonstream",
+      "target": "callosum.app:_terminal_http"
+    },
+    {
+      "source": "callosum.app:_dispatch_nonstream",
+      "target": "callosum.fallback:should_attempt_fallback"
+    },
+    {
+      "source": "callosum.app:_dispatch_nonstream",
+      "target": "callosum.selector:select"
+    },
+    {
+      "source": "callosum.app:_dispatch_nonstream_with_cell_retry",
+      "target": "callosum.app:_dispatch_nonstream"
+    },
+    {
+      "source": "callosum.app:_dispatch_nonstream_with_cell_retry",
+      "target": "callosum.app:_stamp_reasoning_effort"
+    },
+    {
+      "source": "callosum.app:_dispatch_route",
+      "target": "callosum.app:_dispatch_internal"
+    },
+    {
+      "source": "callosum.app:_dispatch_route",
+      "target": "callosum.app:_session_id_from_request"
+    },
+    {
+      "source": "callosum.app:_dispatch_stream",
+      "target": "callosum.app:_collect_backend_status"
+    },
+    {
+      "source": "callosum.app:_dispatch_stream",
+      "target": "callosum.app:_composite_cost_estimate_for_body"
+    },
+    {
+      "source": "callosum.app:_dispatch_stream",
+      "target": "callosum.app:_empty_iter"
+    },
+    {
+      "source": "callosum.app:_dispatch_stream",
+      "target": "callosum.app:_extract_complexity_from_stream"
+    },
+    {
+      "source": "callosum.app:_dispatch_stream",
+      "target": "callosum.app:_log_attempt"
+    },
+    {
+      "source": "callosum.app:_dispatch_stream",
+      "target": "callosum.app:_log_on_complete"
+    },
+    {
+      "source": "callosum.app:_dispatch_stream",
+      "target": "callosum.app:_no_viable"
+    },
+    {
+      "source": "callosum.app:_dispatch_stream",
+      "target": "callosum.app:_prepend"
+    },
+    {
+      "source": "callosum.app:_dispatch_stream",
+      "target": "callosum.app:_remember_binding"
+    },
+    {
+      "source": "callosum.app:_dispatch_stream",
+      "target": "callosum.app:_safe_stream"
+    },
+    {
+      "source": "callosum.app:_dispatch_stream",
+      "target": "callosum.app:_scrub_full_text_events"
+    },
+    {
+      "source": "callosum.app:_dispatch_stream",
+      "target": "callosum.app:_strip_peer_quality_markers_from_stream"
+    },
+    {
+      "source": "callosum.app:_dispatch_stream",
+      "target": "callosum.app:_strip_trailing_complexity_marker"
+    },
+    {
+      "source": "callosum.app:_dispatch_stream",
+      "target": "callosum.app:_terminal_http"
+    },
+    {
+      "source": "callosum.app:_dispatch_stream",
+      "target": "callosum.fallback:should_attempt_fallback"
+    },
+    {
+      "source": "callosum.app:_dispatch_stream",
+      "target": "callosum.selector:select"
+    },
+    {
+      "source": "callosum.app:_dispatch_stream_with_cell_retry",
+      "target": "callosum.app:_dispatch_stream"
+    },
+    {
+      "source": "callosum.app:_dispatch_stream_with_cell_retry",
+      "target": "callosum.app:_stamp_reasoning_effort"
+    },
+    {
+      "source": "callosum.app:_eta_estimate_payload",
+      "target": "callosum.app:_estimate_confidence"
+    },
+    {
+      "source": "callosum.app:_eta_estimate_payload",
+      "target": "callosum.app:_time_sample_count"
+    },
+    {
+      "source": "callosum.app:_evaluate_diagnostic",
+      "target": "callosum.app:_evaluate_codex_diagnostic"
+    },
+    {
+      "source": "callosum.app:_evaluate_diagnostic",
+      "target": "callosum.app:_evaluate_generic_diagnostic"
+    },
+    {
+      "source": "callosum.app:_extract_and_strip_complexity",
+      "target": "callosum.app:_extract_complexity_class"
+    },
+    {
+      "source": "callosum.app:_extract_and_strip_complexity",
+      "target": "callosum.app:_strip_trailing_complexity_marker_text"
+    },
+    {
+      "source": "callosum.app:_extract_complexity_from_stream",
+      "target": "callosum.app:_event_delta_text"
+    },
+    {
+      "source": "callosum.app:_extract_complexity_from_stream",
+      "target": "callosum.app:_strip_chars_from_event"
+    },
+    {
+      "source": "callosum.app:_extract_tokens",
+      "target": "callosum.app:_int"
+    },
+    {
+      "source": "callosum.app:_inject_peer_quality_prompt",
+      "target": "callosum.app:_append_peer_quality_instruction"
+    },
+    {
+      "source": "callosum.app:_inject_peer_quality_prompt",
+      "target": "callosum.app:_body_assistant_texts"
+    },
+    {
+      "source": "callosum.app:_inject_peer_quality_prompt",
+      "target": "callosum.app:_peer_quality_instruction"
+    },
+    {
+      "source": "callosum.app:_inject_peer_quality_prompt",
+      "target": "callosum.app:_peer_quality_marker_line"
+    },
+    {
+      "source": "callosum.app:_inject_peer_quality_prompt",
+      "target": "callosum.app:_peer_quality_subjects"
+    },
+    {
+      "source": "callosum.app:_inject_peer_quality_prompt",
+      "target": "callosum.app:_peer_quality_tag_tokens"
+    },
+    {
+      "source": "callosum.app:_inject_peer_quality_prompt",
+      "target": "callosum.app:_tag_peer_quality_subjects"
+    },
+    {
+      "source": "callosum.app:_inject_peer_quality_prompt",
+      "target": "callosum.routing.features:_approx_tokens"
+    },
+    {
+      "source": "callosum.app:_inject_peer_quality_prompt",
+      "target": "callosum.tokenization:count_tokens"
+    },
+    {
+      "source": "callosum.app:_install_auth_routes",
+      "target": "callosum.app:_bearer"
+    },
+    {
+      "source": "callosum.app:_log_attempt",
+      "target": "callosum.app:_clean_sse_blob"
+    },
+    {
+      "source": "callosum.app:_log_attempt",
+      "target": "callosum.app:_extract_reasoning_effort"
+    },
+    {
+      "source": "callosum.app:_log_attempt",
+      "target": "callosum.app:_extract_tokens"
+    },
+    {
+      "source": "callosum.app:_log_on_complete",
+      "target": "callosum.app:_log_attempt"
+    },
+    {
+      "source": "callosum.app:_no_viable",
+      "target": "callosum.app:_utc_timestamp"
+    },
+    {
+      "source": "callosum.app:_peer_quality_capture_enabled",
+      "target": "callosum.app:_peer_quality_capture_rate"
+    },
+    {
+      "source": "callosum.app:_peer_quality_instruction",
+      "target": "callosum.app:_peer_quality_marker_line"
+    },
+    {
+      "source": "callosum.app:_peer_quality_marker_line",
+      "target": "callosum.app:_example_qop_score"
+    },
+    {
+      "source": "callosum.app:_peer_quality_tag_tokens",
+      "target": "callosum.tokenization:count_tokens"
+    },
+    {
+      "source": "callosum.app:_routable_backends",
+      "target": "callosum.selector:blocking_meters"
+    },
+    {
+      "source": "callosum.app:_run_startup_smoke_test",
+      "target": "callosum.app:_diagnose_backend"
+    },
+    {
+      "source": "callosum.app:_run_startup_smoke_test",
+      "target": "callosum.app:_log_smoke_result"
+    },
+    {
+      "source": "callosum.app:_safe_stream",
+      "target": "callosum.app:_utc_timestamp"
+    },
+    {
+      "source": "callosum.app:_scrub_full_text_event",
+      "target": "callosum.app:_extract_complexity_class"
+    },
+    {
+      "source": "callosum.app:_scrub_full_text_event",
+      "target": "callosum.app:_get_at_path"
+    },
+    {
+      "source": "callosum.app:_scrub_full_text_event",
+      "target": "callosum.app:_set_at_path"
+    },
+    {
+      "source": "callosum.app:_scrub_full_text_event",
+      "target": "callosum.app:_strip_trailing_complexity_marker_text"
+    },
+    {
+      "source": "callosum.app:_scrub_full_text_events",
+      "target": "callosum.app:_scrub_full_text_event"
+    },
+    {
+      "source": "callosum.app:_scrub_peer_quality_from_event",
+      "target": "callosum.app:_buffered_strip"
+    },
+    {
+      "source": "callosum.app:_scrub_peer_quality_from_event",
+      "target": "callosum.app:_get_at_path"
+    },
+    {
+      "source": "callosum.app:_scrub_peer_quality_from_event",
+      "target": "callosum.app:_set_at_path"
+    },
+    {
+      "source": "callosum.app:_strip_peer_quality_markers_from_stream",
+      "target": "callosum.app:_scrub_peer_quality_from_event"
+    },
+    {
+      "source": "callosum.app:_strip_peer_quality_markers_from_stream",
+      "target": "callosum.app:_subtract_audit_tokens_from_event"
+    },
+    {
+      "source": "callosum.app:_strip_trailing_complexity_marker",
+      "target": "callosum.app:_event_delta_text"
+    },
+    {
+      "source": "callosum.app:_strip_trailing_complexity_marker",
+      "target": "callosum.app:_strip_chars_from_event_end"
+    },
+    {
+      "source": "callosum.app:_tag_chat_message",
+      "target": "callosum.app:_wrap_peer_quality_subject"
+    },
+    {
+      "source": "callosum.app:_tag_peer_quality_subjects",
+      "target": "callosum.app:_tag_chat_message"
+    },
+    {
+      "source": "callosum.app:create_app",
+      "target": "callosum.app:_active_api_key_count"
+    },
+    {
+      "source": "callosum.app:create_app",
+      "target": "callosum.app:_bearer"
+    },
+    {
+      "source": "callosum.app:create_app",
+      "target": "callosum.app:_catalog_boot_resync"
+    },
+    {
+      "source": "callosum.app:create_app",
+      "target": "callosum.app:_diagnose_backend"
+    },
+    {
+      "source": "callosum.app:create_app",
+      "target": "callosum.app:_dispatch_route"
+    },
+    {
+      "source": "callosum.app:create_app",
+      "target": "callosum.app:_eta_estimate_payload"
+    },
+    {
+      "source": "callosum.app:create_app",
+      "target": "callosum.app:_install_auth_routes"
+    },
+    {
+      "source": "callosum.app:create_app",
+      "target": "callosum.app:_install_web_ui"
+    },
+    {
+      "source": "callosum.app:create_app",
+      "target": "callosum.app:_path_requires_api_key"
+    },
+    {
+      "source": "callosum.app:create_app",
+      "target": "callosum.app:_peer_quality_capture_rate"
+    },
+    {
+      "source": "callosum.app:create_app",
+      "target": "callosum.app:_quota_to_dict"
+    },
+    {
+      "source": "callosum.app:create_app",
+      "target": "callosum.app:_refresh_catalogs_pass"
+    },
+    {
+      "source": "callosum.app:create_app",
+      "target": "callosum.app:_run_startup_smoke_test"
+    },
+    {
+      "source": "callosum.app:create_app",
+      "target": "callosum.cell_grid:build_cells"
+    },
+    {
+      "source": "callosum.app:create_app",
+      "target": "callosum.cell_grid:cell_sample_counts"
+    },
+    {
+      "source": "callosum.app:create_app",
+      "target": "callosum.cell_grid:live_completion_models"
+    },
+    {
+      "source": "callosum.app:create_app",
+      "target": "callosum.cell_grid:reasoning_levels_for"
+    },
+    {
+      "source": "callosum.app:create_app",
+      "target": "callosum.label_ui:install_label_ui"
+    },
+    {
+      "source": "callosum.app:create_app",
+      "target": "callosum.routing.factory:build_router"
+    },
+    {
+      "source": "callosum.app:create_app",
+      "target": "callosum.routing.quota:effective_floor_pct"
+    },
+    {
+      "source": "callosum.app:create_app",
+      "target": "callosum.routing.usage_rates:usage_rate_report"
+    },
+    {
+      "source": "callosum.app:create_app",
+      "target": "callosum.selector:blocking_meters"
+    },
+    {
+      "source": "callosum.app:create_app",
+      "target": "callosum.selectors:is_selector"
+    },
+    {
+      "source": "callosum.app:create_app",
+      "target": "callosum.selectors:parse_selector"
+    },
+    {
+      "source": "callosum.cell_grid:live_completion_models",
+      "target": "callosum.cell_grid:is_completion_model"
+    },
+    {
+      "source": "callosum.config:build_backends",
+      "target": "callosum.config:build_backend"
+    },
+    {
+      "source": "callosum.label_ui:install_label_ui",
+      "target": "callosum.label_ui:_do_models"
+    },
+    {
+      "source": "callosum.label_ui:install_label_ui",
+      "target": "callosum.label_ui:_do_search"
+    },
+    {
+      "source": "callosum.label_ui:install_label_ui",
+      "target": "callosum.label_ui:_do_stats"
+    },
+    {
+      "source": "callosum.label_ui:install_label_ui",
+      "target": "callosum.label_ui:_do_update_quality"
+    },
+    {
+      "source": "callosum.label_ui:install_label_ui",
+      "target": "callosum.label_ui:_get_db"
+    },
+    {
+      "source": "callosum.routing.cost_labels:_negative_delta_quality",
+      "target": "callosum.routing.cost_labels:_reset_in_window"
+    },
+    {
+      "source": "callosum.routing.cost_labels:cost_label_quality_rows",
+      "target": "callosum.routing.cost_labels:_negative_delta_quality"
+    },
+    {
+      "source": "callosum.routing.cost_labels:cost_label_quality_rows",
+      "target": "callosum.routing.cost_labels:_overlap_row_ids"
+    },
+    {
+      "source": "callosum.routing.cost_labels:cost_label_quality_rows",
+      "target": "callosum.routing.cost_labels:_request_columns"
+    },
+    {
+      "source": "callosum.routing.cost_labels:cost_label_quality_rows",
+      "target": "callosum.routing.cost_labels:_reset_in_window"
+    },
+    {
+      "source": "callosum.routing.cost_labels:cost_label_quality_summary",
+      "target": "callosum.routing.cost_labels:cost_label_quality_rows"
+    },
+    {
+      "source": "callosum.routing.cost_labels:quantized_cost_windows",
+      "target": "callosum.routing.cost_labels:_request_columns"
+    },
+    {
+      "source": "callosum.routing.cost_labels:quantized_cost_windows",
+      "target": "callosum.routing.cost_labels:cost_label_quality_rows"
+    },
+    {
+      "source": "callosum.routing.features:_extract_text",
+      "target": "callosum.routing.features:_walk_text"
+    },
+    {
+      "source": "callosum.routing.features:extract_features",
+      "target": "callosum.routing.features:_approx_tokens"
+    },
+    {
+      "source": "callosum.routing.features:extract_features",
+      "target": "callosum.routing.features:_detect_modalities"
+    },
+    {
+      "source": "callosum.routing.features:extract_features",
+      "target": "callosum.routing.features:_detect_tools"
+    },
+    {
+      "source": "callosum.routing.features:extract_features",
+      "target": "callosum.routing.features:_extract_text"
+    },
+    {
+      "source": "callosum.routing.quota:select_quota_deficit_cell",
+      "target": "callosum.routing.exploration:exploration_order"
+    },
+    {
+      "source": "callosum.routing.router:Router.route",
+      "target": "callosum.routing.features:extract_features"
+    },
+    {
+      "source": "callosum.routing.router:Router.route",
+      "target": "callosum.routing.router:_has_differentiated_predictions"
+    },
+    {
+      "source": "callosum.routing.router:Router.route",
+      "target": "callosum.routing.router:_window_fit_factor"
+    },
+    {
+      "source": "callosum.routing.usage_rates:_fit_rate",
+      "target": "callosum.routing.usage_rates:_component"
+    },
+    {
+      "source": "callosum.routing.usage_rates:_fit_rate",
+      "target": "callosum.routing.usage_rates:_insufficient_rate"
+    },
+    {
+      "source": "callosum.routing.usage_rates:_fit_rate",
+      "target": "callosum.routing.usage_rates:_iso"
+    },
+    {
+      "source": "callosum.routing.usage_rates:_insufficient_rate",
+      "target": "callosum.routing.usage_rates:_component"
+    },
+    {
+      "source": "callosum.routing.usage_rates:_insufficient_rate",
+      "target": "callosum.routing.usage_rates:_iso"
+    },
+    {
+      "source": "callosum.routing.usage_rates:_local_rate",
+      "target": "callosum.routing.usage_rates:_iso"
+    },
+    {
+      "source": "callosum.routing.usage_rates:_meter_report",
+      "target": "callosum.cell_grid:is_completion_model"
+    },
+    {
+      "source": "callosum.routing.usage_rates:_meter_report",
+      "target": "callosum.routing.cost_labels:cost_label_quality_summary"
+    },
+    {
+      "source": "callosum.routing.usage_rates:_meter_report",
+      "target": "callosum.routing.cost_labels:quantized_cost_windows"
+    },
+    {
+      "source": "callosum.routing.usage_rates:_meter_report",
+      "target": "callosum.routing.usage_rates:_fit_rate"
+    },
+    {
+      "source": "callosum.routing.usage_rates:_meter_report",
+      "target": "callosum.routing.usage_rates:_load_rows"
+    },
+    {
+      "source": "callosum.routing.usage_rates:_meter_report",
+      "target": "callosum.routing.usage_rates:_local_rate"
+    },
+    {
+      "source": "callosum.routing.usage_rates:meter_relationship_report",
+      "target": "callosum.routing.cost_labels:quantized_cost_windows"
+    },
+    {
+      "source": "callosum.routing.usage_rates:meter_relationship_report",
+      "target": "callosum.routing.usage_rates:_window_sums_by_cell"
+    },
+    {
+      "source": "callosum.routing.usage_rates:usage_rate_report",
+      "target": "callosum.routing.cost_labels:cutoff_for_window"
+    },
+    {
+      "source": "callosum.routing.usage_rates:usage_rate_report",
+      "target": "callosum.routing.usage_rates:_meter_report"
+    },
+    {
+      "source": "callosum.routing.usage_rates:usage_rate_report",
+      "target": "callosum.routing.usage_rates:meter_relationship_report"
+    },
+    {
+      "source": "callosum.selector:_is_viable",
+      "target": "callosum.selector:blocking_meters"
+    },
+    {
+      "source": "callosum.selector:_rank_key",
+      "target": "callosum.selector:composite_pressure"
+    },
+    {
+      "source": "callosum.selector:blocking_meters",
+      "target": "callosum.selector:_window_open"
+    },
+    {
+      "source": "callosum.selector:composite_pressure",
+      "target": "callosum.selector:_meter_pressure"
+    },
+    {
+      "source": "callosum.selector:composite_pressure",
+      "target": "callosum.selector:_window_open"
+    },
+    {
+      "source": "callosum.selector:constraining_meter",
+      "target": "callosum.selector:blocking_meters"
+    },
+    {
+      "source": "callosum.selector:rank",
+      "target": "callosum.selector:_is_viable"
+    },
+    {
+      "source": "callosum.selector:rank",
+      "target": "callosum.selector:_rank_key"
+    },
+    {
+      "source": "callosum.selector:select",
+      "target": "callosum.selector:rank"
+    },
+    {
+      "source": "callosum.selectors:parse_selector",
+      "target": "callosum.selectors:is_selector"
+    },
+    {
+      "source": "callosum.tokenization:count_tokens",
+      "target": "callosum.tokenization:_encoder"
+    },
+    {
+      "source": "callosum.tokenization:count_tokens",
+      "target": "callosum.tokenization:_fallback_tokens"
+    }
+  ],
+  "generated_from": "scripts/generate_static_graphs.py",
+  "nodes": [
+    {
+      "end_line": 245,
+      "id": "callosum.__main__:_run_server",
+      "line": 88,
+      "path": "src/callosum/__main__.py"
+    },
+    {
+      "end_line": 4172,
+      "id": "callosum.app:_active_api_key_count",
+      "line": 4166,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 2477,
+      "id": "callosum.app:_active_pool",
+      "line": 2474,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 505,
+      "id": "callosum.app:_append_peer_quality_instruction",
+      "line": 492,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 639,
+      "id": "callosum.app:_approx_body_tokens",
+      "line": 638,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 4183,
+      "id": "callosum.app:_bearer",
+      "line": 4175,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 323,
+      "id": "callosum.app:_body_assistant_texts",
+      "line": 306,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 3184,
+      "id": "callosum.app:_buffered_strip",
+      "line": 3176,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 4507,
+      "id": "callosum.app:_catalog_boot_resync",
+      "line": 4477,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 3836,
+      "id": "callosum.app:_clean_sse_blob",
+      "line": 3768,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 4858,
+      "id": "callosum.app:_collect_backend_status",
+      "line": 4796,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 660,
+      "id": "callosum.app:_composite_cost_estimate_for_body",
+      "line": 642,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 340,
+      "id": "callosum.app:_context_window_for_cell",
+      "line": 326,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 4278,
+      "id": "callosum.app:_diagnose_backend",
+      "line": 4201,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 2464,
+      "id": "callosum.app:_dispatch_internal",
+      "line": 2001,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 2812,
+      "id": "callosum.app:_dispatch_nonstream",
+      "line": 2668,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 2594,
+      "id": "callosum.app:_dispatch_nonstream_with_cell_retry",
+      "line": 2514,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 1998,
+      "id": "callosum.app:_dispatch_route",
+      "line": 1947,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 2999,
+      "id": "callosum.app:_dispatch_stream",
+      "line": 2815,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 2665,
+      "id": "callosum.app:_dispatch_stream_with_cell_retry",
+      "line": 2597,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 3708,
+      "id": "callosum.app:_empty_iter",
+      "line": 3706,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 680,
+      "id": "callosum.app:_estimate_confidence",
+      "line": 675,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 635,
+      "id": "callosum.app:_eta_estimate_payload",
+      "line": 599,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 4650,
+      "id": "callosum.app:_evaluate_codex_diagnostic",
+      "line": 4627,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 4624,
+      "id": "callosum.app:_evaluate_diagnostic",
+      "line": 4612,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 4672,
+      "id": "callosum.app:_evaluate_generic_diagnostic",
+      "line": 4653,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 3254,
+      "id": "callosum.app:_event_delta_text",
+      "line": 3224,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 447,
+      "id": "callosum.app:_example_qop_score",
+      "line": 437,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 726,
+      "id": "callosum.app:_extract_and_strip_complexity",
+      "line": 683,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 586,
+      "id": "callosum.app:_extract_complexity_class",
+      "line": 548,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 3498,
+      "id": "callosum.app:_extract_complexity_from_stream",
+      "line": 3378,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 4127,
+      "id": "callosum.app:_extract_reasoning_effort",
+      "line": 4117,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 4095,
+      "id": "callosum.app:_extract_tokens",
+      "line": 4072,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 1944,
+      "id": "callosum.app:_filter_cells_to_routable",
+      "line": 1935,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 3090,
+      "id": "callosum.app:_get_at_path",
+      "line": 3065,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 3173,
+      "id": "callosum.app:_hold_trailing_partial",
+      "line": 3151,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 296,
+      "id": "callosum.app:_inject_peer_quality_prompt",
+      "line": 194,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 4766,
+      "id": "callosum.app:_install_auth_routes",
+      "line": 4675,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 4788,
+      "id": "callosum.app:_install_web_ui",
+      "line": 4772,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 4137,
+      "id": "callosum.app:_int",
+      "line": 4130,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 4051,
+      "id": "callosum.app:_log_attempt",
+      "line": 3839,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 3765,
+      "id": "callosum.app:_log_on_complete",
+      "line": 3711,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 4609,
+      "id": "callosum.app:_log_smoke_result",
+      "line": 4540,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 4930,
+      "id": "callosum.app:_no_viable",
+      "line": 4861,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 4188,
+      "id": "callosum.app:_path_requires_api_key",
+      "line": 4186,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 184,
+      "id": "callosum.app:_peer_quality_capture_enabled",
+      "line": 178,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 191,
+      "id": "callosum.app:_peer_quality_capture_rate",
+      "line": 187,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 489,
+      "id": "callosum.app:_peer_quality_instruction",
+      "line": 457,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 454,
+      "id": "callosum.app:_peer_quality_marker_line",
+      "line": 450,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 370,
+      "id": "callosum.app:_peer_quality_subjects",
+      "line": 343,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 303,
+      "id": "callosum.app:_peer_quality_tag_tokens",
+      "line": 299,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 3005,
+      "id": "callosum.app:_prepend",
+      "line": 3002,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 4163,
+      "id": "callosum.app:_quota_to_dict",
+      "line": 4140,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 4474,
+      "id": "callosum.app:_refresh_catalogs_pass",
+      "line": 4447,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 2500,
+      "id": "callosum.app:_remember_binding",
+      "line": 2497,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 2471,
+      "id": "callosum.app:_require_model",
+      "line": 2467,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 1932,
+      "id": "callosum.app:_routable_backends",
+      "line": 1904,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 4537,
+      "id": "callosum.app:_run_startup_smoke_test",
+      "line": 4510,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 3021,
+      "id": "callosum.app:_safe_stream",
+      "line": 3008,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 3148,
+      "id": "callosum.app:_scrub_full_text_event",
+      "line": 3128,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 3554,
+      "id": "callosum.app:_scrub_full_text_events",
+      "line": 3501,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 3221,
+      "id": "callosum.app:_scrub_peer_quality_from_event",
+      "line": 3187,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 2494,
+      "id": "callosum.app:_session_id_from_request",
+      "line": 2480,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 3125,
+      "id": "callosum.app:_set_at_path",
+      "line": 3093,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 4114,
+      "id": "callosum.app:_stamp_reasoning_effort",
+      "line": 4098,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 3308,
+      "id": "callosum.app:_strip_chars_from_event",
+      "line": 3257,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 3375,
+      "id": "callosum.app:_strip_chars_from_event_end",
+      "line": 3322,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 3609,
+      "id": "callosum.app:_strip_peer_quality_markers_from_stream",
+      "line": 3557,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 3703,
+      "id": "callosum.app:_strip_trailing_complexity_marker",
+      "line": 3640,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 596,
+      "id": "callosum.app:_strip_trailing_complexity_marker_text",
+      "line": 589,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 3637,
+      "id": "callosum.app:_subtract_audit_tokens_from_event",
+      "line": 3612,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 425,
+      "id": "callosum.app:_tag_chat_message",
+      "line": 402,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 399,
+      "id": "callosum.app:_tag_peer_quality_subjects",
+      "line": 373,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 4793,
+      "id": "callosum.app:_terminal_http",
+      "line": 4791,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 672,
+      "id": "callosum.app:_time_sample_count",
+      "line": 663,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 75,
+      "id": "callosum.app:_utc_timestamp",
+      "line": 73,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 431,
+      "id": "callosum.app:_wrap_peer_quality_subject",
+      "line": 428,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 1901,
+      "id": "callosum.app:create_app",
+      "line": 745,
+      "path": "src/callosum/app.py"
+    },
+    {
+      "end_line": 116,
+      "id": "callosum.cell_grid:build_cells",
+      "line": 99,
+      "path": "src/callosum/cell_grid.py"
+    },
+    {
+      "end_line": 317,
+      "id": "callosum.cell_grid:cell_sample_counts",
+      "line": 280,
+      "path": "src/callosum/cell_grid.py"
+    },
+    {
+      "end_line": 134,
+      "id": "callosum.cell_grid:is_completion_model",
+      "line": 129,
+      "path": "src/callosum/cell_grid.py"
+    },
+    {
+      "end_line": 166,
+      "id": "callosum.cell_grid:live_completion_models",
+      "line": 154,
+      "path": "src/callosum/cell_grid.py"
+    },
+    {
+      "end_line": 219,
+      "id": "callosum.cell_grid:reasoning_levels_for",
+      "line": 205,
+      "path": "src/callosum/cell_grid.py"
+    },
+    {
+      "end_line": 340,
+      "id": "callosum.config:build_backend",
+      "line": 304,
+      "path": "src/callosum/config.py"
+    },
+    {
+      "end_line": 349,
+      "id": "callosum.config:build_backends",
+      "line": 343,
+      "path": "src/callosum/config.py"
+    },
+    {
+      "end_line": 301,
+      "id": "callosum.config:load_config",
+      "line": 298,
+      "path": "src/callosum/config.py"
+    },
+    {
+      "end_line": 145,
+      "id": "callosum.fallback:should_attempt_fallback",
+      "line": 137,
+      "path": "src/callosum/fallback.py"
+    },
+    {
+      "end_line": 160,
+      "id": "callosum.label_ui:_do_models",
+      "line": 157,
+      "path": "src/callosum/label_ui.py"
+    },
+    {
+      "end_line": 136,
+      "id": "callosum.label_ui:_do_search",
+      "line": 54,
+      "path": "src/callosum/label_ui.py"
+    },
+    {
+      "end_line": 154,
+      "id": "callosum.label_ui:_do_stats",
+      "line": 139,
+      "path": "src/callosum/label_ui.py"
+    },
+    {
+      "end_line": 171,
+      "id": "callosum.label_ui:_do_update_quality",
+      "line": 163,
+      "path": "src/callosum/label_ui.py"
+    },
+    {
+      "end_line": 51,
+      "id": "callosum.label_ui:_get_db",
+      "line": 47,
+      "path": "src/callosum/label_ui.py"
+    },
+    {
+      "end_line": 279,
+      "id": "callosum.label_ui:install_label_ui",
+      "line": 174,
+      "path": "src/callosum/label_ui.py"
+    },
+    {
+      "end_line": 174,
+      "id": "callosum.local:LocalModelRegistrySource.is_available",
+      "line": 160,
+      "path": "src/callosum/local.py"
+    },
+    {
+      "end_line": 493,
+      "id": "callosum.routing.cost_labels:_negative_delta_quality",
+      "line": 432,
+      "path": "src/callosum/routing/cost_labels.py"
+    },
+    {
+      "end_line": 421,
+      "id": "callosum.routing.cost_labels:_overlap_row_ids",
+      "line": 386,
+      "path": "src/callosum/routing/cost_labels.py"
+    },
+    {
+      "end_line": 425,
+      "id": "callosum.routing.cost_labels:_request_columns",
+      "line": 424,
+      "path": "src/callosum/routing/cost_labels.py"
+    },
+    {
+      "end_line": 429,
+      "id": "callosum.routing.cost_labels:_reset_in_window",
+      "line": 428,
+      "path": "src/callosum/routing/cost_labels.py"
+    },
+    {
+      "end_line": 286,
+      "id": "callosum.routing.cost_labels:cost_label_quality_rows",
+      "line": 156,
+      "path": "src/callosum/routing/cost_labels.py"
+    },
+    {
+      "end_line": 153,
+      "id": "callosum.routing.cost_labels:cost_label_quality_summary",
+      "line": 122,
+      "path": "src/callosum/routing/cost_labels.py"
+    },
+    {
+      "end_line": 607,
+      "id": "callosum.routing.cost_labels:cutoff_for_window",
+      "line": 606,
+      "path": "src/callosum/routing/cost_labels.py"
+    },
+    {
+      "end_line": 383,
+      "id": "callosum.routing.cost_labels:quantized_cost_windows",
+      "line": 289,
+      "path": "src/callosum/routing/cost_labels.py"
+    },
+    {
+      "end_line": 43,
+      "id": "callosum.routing.exploration:exploration_order",
+      "line": 27,
+      "path": "src/callosum/routing/exploration.py"
+    },
+    {
+      "end_line": 97,
+      "id": "callosum.routing.factory:build_router",
+      "line": 71,
+      "path": "src/callosum/routing/factory.py"
+    },
+    {
+      "end_line": 64,
+      "id": "callosum.routing.features:_approx_tokens",
+      "line": 60,
+      "path": "src/callosum/routing/features.py"
+    },
+    {
+      "end_line": 96,
+      "id": "callosum.routing.features:_detect_modalities",
+      "line": 67,
+      "path": "src/callosum/routing/features.py"
+    },
+    {
+      "end_line": 107,
+      "id": "callosum.routing.features:_detect_tools",
+      "line": 99,
+      "path": "src/callosum/routing/features.py"
+    },
+    {
+      "end_line": 57,
+      "id": "callosum.routing.features:_extract_text",
+      "line": 51,
+      "path": "src/callosum/routing/features.py"
+    },
+    {
+      "end_line": 48,
+      "id": "callosum.routing.features:_walk_text",
+      "line": 23,
+      "path": "src/callosum/routing/features.py"
+    },
+    {
+      "end_line": 132,
+      "id": "callosum.routing.features:extract_features",
+      "line": 110,
+      "path": "src/callosum/routing/features.py"
+    },
+    {
+      "end_line": 39,
+      "id": "callosum.routing.quota:effective_floor_pct",
+      "line": 22,
+      "path": "src/callosum/routing/quota.py"
+    },
+    {
+      "end_line": 92,
+      "id": "callosum.routing.quota:filter_cells_by_effort_cap",
+      "line": 66,
+      "path": "src/callosum/routing/quota.py"
+    },
+    {
+      "end_line": 63,
+      "id": "callosum.routing.quota:select_quota_deficit_cell",
+      "line": 42,
+      "path": "src/callosum/routing/quota.py"
+    },
+    {
+      "end_line": 190,
+      "id": "callosum.routing.router:Router.route",
+      "line": 95,
+      "path": "src/callosum/routing/router.py"
+    },
+    {
+      "end_line": 71,
+      "id": "callosum.routing.router:_has_differentiated_predictions",
+      "line": 67,
+      "path": "src/callosum/routing/router.py"
+    },
+    {
+      "end_line": 64,
+      "id": "callosum.routing.router:_window_fit_factor",
+      "line": 45,
+      "path": "src/callosum/routing/router.py"
+    },
+    {
+      "end_line": 245,
+      "id": "callosum.routing.usage_rates:_component",
+      "line": 237,
+      "path": "src/callosum/routing/usage_rates.py"
+    },
+    {
+      "end_line": 344,
+      "id": "callosum.routing.usage_rates:_fit_rate",
+      "line": 276,
+      "path": "src/callosum/routing/usage_rates.py"
+    },
+    {
+      "end_line": 373,
+      "id": "callosum.routing.usage_rates:_insufficient_rate",
+      "line": 347,
+      "path": "src/callosum/routing/usage_rates.py"
+    },
+    {
+      "end_line": 432,
+      "id": "callosum.routing.usage_rates:_iso",
+      "line": 429,
+      "path": "src/callosum/routing/usage_rates.py"
+    },
+    {
+      "end_line": 234,
+      "id": "callosum.routing.usage_rates:_load_rows",
+      "line": 193,
+      "path": "src/callosum/routing/usage_rates.py"
+    },
+    {
+      "end_line": 273,
+      "id": "callosum.routing.usage_rates:_local_rate",
+      "line": 248,
+      "path": "src/callosum/routing/usage_rates.py"
+    },
+    {
+      "end_line": 190,
+      "id": "callosum.routing.usage_rates:_meter_report",
+      "line": 110,
+      "path": "src/callosum/routing/usage_rates.py"
+    },
+    {
+      "end_line": 426,
+      "id": "callosum.routing.usage_rates:_window_sums_by_cell",
+      "line": 418,
+      "path": "src/callosum/routing/usage_rates.py"
+    },
+    {
+      "end_line": 415,
+      "id": "callosum.routing.usage_rates:meter_relationship_report",
+      "line": 376,
+      "path": "src/callosum/routing/usage_rates.py"
+    },
+    {
+      "end_line": 107,
+      "id": "callosum.routing.usage_rates:usage_rate_report",
+      "line": 57,
+      "path": "src/callosum/routing/usage_rates.py"
+    },
+    {
+      "end_line": 66,
+      "id": "callosum.selector:_is_viable",
+      "line": 50,
+      "path": "src/callosum/selector.py"
+    },
+    {
+      "end_line": 119,
+      "id": "callosum.selector:_meter_pressure",
+      "line": 113,
+      "path": "src/callosum/selector.py"
+    },
+    {
+      "end_line": 181,
+      "id": "callosum.selector:_rank_key",
+      "line": 170,
+      "path": "src/callosum/selector.py"
+    },
+    {
+      "end_line": 83,
+      "id": "callosum.selector:_window_open",
+      "line": 69,
+      "path": "src/callosum/selector.py"
+    },
+    {
+      "end_line": 110,
+      "id": "callosum.selector:blocking_meters",
+      "line": 86,
+      "path": "src/callosum/selector.py"
+    },
+    {
+      "end_line": 150,
+      "id": "callosum.selector:composite_pressure",
+      "line": 122,
+      "path": "src/callosum/selector.py"
+    },
+    {
+      "end_line": 167,
+      "id": "callosum.selector:constraining_meter",
+      "line": 153,
+      "path": "src/callosum/selector.py"
+    },
+    {
+      "end_line": 47,
+      "id": "callosum.selector:rank",
+      "line": 23,
+      "path": "src/callosum/selector.py"
+    },
+    {
+      "end_line": 211,
+      "id": "callosum.selector:select",
+      "line": 184,
+      "path": "src/callosum/selector.py"
+    },
+    {
+      "end_line": 78,
+      "id": "callosum.selectors:is_selector",
+      "line": 76,
+      "path": "src/callosum/selectors.py"
+    },
+    {
+      "end_line": 134,
+      "id": "callosum.selectors:parse_selector",
+      "line": 81,
+      "path": "src/callosum/selectors.py"
+    },
+    {
+      "end_line": 50,
+      "id": "callosum.tokenization:_encoder",
+      "line": 32,
+      "path": "src/callosum/tokenization.py"
+    },
+    {
+      "end_line": 55,
+      "id": "callosum.tokenization:_fallback_tokens",
+      "line": 53,
+      "path": "src/callosum/tokenization.py"
+    },
+    {
+      "end_line": 71,
+      "id": "callosum.tokenization:count_tokens",
+      "line": 58,
+      "path": "src/callosum/tokenization.py"
+    }
+  ],
+  "roots": [
+    "callosum.__main__:_run_server",
+    "callosum.app:create_app",
+    "callosum.app:_dispatch_route",
+    "callosum.app:_dispatch_internal",
+    "callosum.app:_dispatch_nonstream_with_cell_retry",
+    "callosum.app:_dispatch_stream_with_cell_retry",
+    "callosum.app:_dispatch_nonstream",
+    "callosum.app:_dispatch_stream",
+    "callosum.app:_log_attempt",
+    "callosum.routing.factory:build_router",
+    "callosum.routing.router:Router.route"
+  ],
+  "scope": "runtime entrypoints plus five static call levels"
+}

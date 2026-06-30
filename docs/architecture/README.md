@@ -20,6 +20,10 @@ Regenerate when the source changes.
   backend lanes, persistent state, capability harness, and scheduled
   auto-dev path. This is the quickest visual for understanding where
   model-research inputs feed the dev loop.
+- `generated/` — code-generated static analysis artifacts for review:
+  focused call graph and dispatch/router control-flow references in
+  `.dot`, `.svg`, and `.json` form, emitted by
+  `scripts/generate_static_graphs.py`.
 
 ## Rendering
 
