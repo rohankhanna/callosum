@@ -3157,10 +3157,16 @@ def _hold_trailing_partial(text: str) -> tuple[str, str]:
     An unclosed <<qop is held whole even though it contains spaces, so the
     opinion is recorded; otherwise only space-less tag-shaped prefixes are held,
     so ordinary text (incl. "x < y") is emitted immediately."""
-    # An opened-but-not-closed qop marker: hold from it until `>>` arrives.
-    qop = text.rfind("<<qop")
-    if qop != -1 and ">>" not in text[qop:]:
-        return text[:qop], text[qop:]
+    # Opened-but-not-closed qop markers are held whole even though they contain
+    # spaces, so split streaming deltas are reassembled before stripping.
+    bracket_qop = text.rfind("<<qop")
+    if bracket_qop != -1 and ">>" not in text[bracket_qop:]:
+        return text[:bracket_qop], text[bracket_qop:]
+    xml_qop = text.rfind("<qop")
+    if xml_qop != -1:
+        suffix = text[xml_qop:]
+        if "/>" not in suffix and ">" not in suffix:
+            return text[:xml_qop], suffix
     m = _PARTIAL_TAG_PREFIX_RE.search(text)
     if m is None:
         return text, ""
