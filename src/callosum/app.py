@@ -4189,6 +4189,8 @@ def _path_requires_api_key(path: str) -> bool:
 _DIAGNOSE_PROMPT = "say only: ok"
 _DIAGNOSE_INSTRUCTIONS = "You are a smoke-test probe. Reply minimally."
 
+_CODEX_BACKEND_KINDS = frozenset({"codex_auth_vault", "credential_proxy"})
+
 
 async def _diagnose_backend(backend: Backend, *, force: bool = False) -> dict[str, Any]:
     """Send one minimal streaming request and check upstream contract holds.
@@ -4217,10 +4219,13 @@ async def _diagnose_backend(backend: Backend, *, force: bool = False) -> dict[st
             "reason": "backend in cooldown; not probed",
             "cooldown_until_ts": usage.cooldown_until_ts,
         }
-    # Pick a real model for the probe — skip virtual selectors like
-    # `auto-fallback`/`auto-learning`, which would route through the picker
-    # rather than exercise the upstream contract directly.
-    real_models = sorted(m for m in backend.advertised_models if m not in VIRTUAL_MODELS)
+    # Pick a real completion model for the probe. Catalogs can include hidden
+    # non-completion slugs such as `codex-auto-review`; probing those returns a
+    # real upstream 4xx and never reaches the quota-header capture path.
+    candidate_models = frozenset(
+        m for m in backend.advertised_models if m not in VIRTUAL_MODELS
+    )
+    real_models = list(live_completion_models(candidate_models))
     if not real_models:
         return {
             "id": backend.id,
@@ -4608,7 +4613,7 @@ def _evaluate_diagnostic(
     (e.g. `litellm_gateway`) only need to confirm a 2xx came back; they
     don't carry Codex-specific headers and the contract definition differs.
     """
-    if kind == "codex_auth_vault":
+    if kind in _CODEX_BACKEND_KINDS:
         return _evaluate_codex_diagnostic(backend_id, handle, model)
     return _evaluate_generic_diagnostic(backend_id, handle, model)
 
