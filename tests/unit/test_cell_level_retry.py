@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+import time
 from pathlib import Path
 from typing import Any
 
@@ -25,10 +26,17 @@ from fastapi import HTTPException
 from callosum import app as app_module
 from callosum.app import (
     MAX_CELL_ATTEMPTS,
+    _dispatch_nonstream,
     _dispatch_nonstream_with_cell_retry,
+    _DispatchRetryBudget,
     _request_id_context,
+    _retry_budget_http,
 )
+from callosum.backend import CallHandle
 from callosum.cell_grid import Cell
+from callosum.errors import BackendError
+from callosum.fakes import InMemoryFakeBackend
+from callosum.session import SessionRegistry
 from callosum.usage_log import UsageLog, UsageLogEntry
 
 CELLS = [
@@ -341,3 +349,153 @@ def test_caps_at_max_cell_attempts(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     assert rows[0][2] == "retried_next_cell"
     assert rows[1][2] == "retried_next_cell"
     assert rows[2][2] == "failed"
+
+
+def test_retry_budget_http_does_not_reroute_to_next_cell(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A budget-exhausted 503 is terminal for the whole request, not another
+    retryable cell failure to walk past."""
+    log = UsageLog(tmp_path / "u.sqlite")
+    seen = _install_inner_stub(
+        monkeypatch,
+        log=log,
+        behavior={
+            "model-a": _retry_budget_http("wall-clock budget exhausted"),
+            "model-b": {"served": "b"},
+        },
+    )
+    body = {"model": "auto"}
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            _dispatch_nonstream_with_cell_retry(
+                body,
+                candidates=(CELLS[0], CELLS[1]),
+                usage_log=log,
+                model="auto",
+                route_name="/v1/responses",
+                backends_list=[],
+                preferred_id=None,
+                session_id=None,
+                session_registry=object(),
+                call=None,
+                dispatch_budget=_DispatchRetryBudget.from_config(seconds=360.0, max_backend_attempts=4),
+            )
+        )
+    assert exc_info.value.status_code == 503
+    assert "dispatch retry budget exhausted" in str(exc_info.value.detail)
+    assert [s["model"] for s in seen] == ["model-a"]
+
+
+def test_expired_retry_budget_short_circuits_before_any_cell_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An already-expired request budget should fail closed before burning
+    another upstream attempt."""
+    seen = _install_inner_stub(monkeypatch, log=None, behavior={"model-a": {"served": "a"}})
+    budget = _DispatchRetryBudget(deadline_ts=time.monotonic() - 1.0, max_backend_attempts=4)
+    body = {"model": "auto"}
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            _dispatch_nonstream_with_cell_retry(
+                body,
+                candidates=(CELLS[0],),
+                usage_log=None,
+                model="auto",
+                route_name="/v1/responses",
+                backends_list=[],
+                preferred_id=None,
+                session_id=None,
+                session_registry=object(),
+                call=None,
+                dispatch_budget=budget,
+            )
+        )
+    assert exc_info.value.status_code == 503
+    assert seen == []
+
+
+def test_inner_dispatch_wall_clock_budget_cancels_hanging_backend(tmp_path: Path) -> None:
+    """The inner backend loop must be bounded by the shared wall-clock budget;
+    otherwise one slow local backend can consume its whole transport timeout
+    before the caller sees a response."""
+    log = UsageLog(tmp_path / "u.sqlite")
+    backend = InMemoryFakeBackend(id="local", advertised_models=frozenset({"model-a"}))
+    started = False
+
+    async def slow_call(
+        b: InMemoryFakeBackend, body: dict[str, Any], handle: CallHandle
+    ) -> dict[str, Any]:
+        nonlocal started
+        del b, body, handle
+        started = True
+        await asyncio.sleep(1.0)
+        return {"unreachable": True}
+
+    body = {"model": "model-a"}
+    before = time.monotonic()
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            _dispatch_nonstream(
+                body,
+                model="model-a",
+                route_name="/v1/responses",
+                backends_list=[backend],
+                preferred_id=None,
+                session_id=None,
+                session_registry=SessionRegistry(),
+                usage_log=log,
+                call=slow_call,
+                dispatch_budget=_DispatchRetryBudget.from_config(
+                    seconds=0.1, max_backend_attempts=4
+                ),
+            )
+        )
+    elapsed = time.monotonic() - before
+    assert started is True
+    assert elapsed < 0.5
+    assert exc_info.value.status_code == 503
+    assert "dispatch retry budget exhausted" in str(exc_info.value.detail)
+    conn = sqlite3.connect(tmp_path / "u.sqlite")
+    row = conn.execute("SELECT backend_id, status, classification FROM requests").fetchone()
+    assert row == ("local", 503, "transient")
+
+
+def test_inner_dispatch_backend_attempt_cap_stops_before_second_backend(
+    tmp_path: Path,
+) -> None:
+    """The max-backend-attempt cap is shared across the backend failover loop,
+    so retryable errors cannot walk an unbounded backend list."""
+    log = UsageLog(tmp_path / "u.sqlite")
+    first = InMemoryFakeBackend(id="first", advertised_models=frozenset({"model-a"}))
+    second = InMemoryFakeBackend(id="second", advertised_models=frozenset({"model-a"}))
+    calls: list[str] = []
+
+    async def failing_call(
+        backend: InMemoryFakeBackend, body: dict[str, Any], handle: CallHandle
+    ) -> dict[str, Any]:
+        del body, handle
+        calls.append(backend.id)
+        raise BackendError(classification="transient", message=f"{backend.id} failed")
+
+    body = {"model": "model-a"}
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            _dispatch_nonstream(
+                body,
+                model="model-a",
+                route_name="/v1/responses",
+                backends_list=[first, second],
+                preferred_id=None,
+                session_id=None,
+                session_registry=SessionRegistry(),
+                usage_log=log,
+                call=failing_call,
+                dispatch_budget=_DispatchRetryBudget.from_config(
+                    seconds=360.0, max_backend_attempts=1
+                ),
+            )
+        )
+    assert calls == ["first"]
+    assert exc_info.value.status_code == 503
+    assert "backend attempt cap reached" in str(exc_info.value.detail)

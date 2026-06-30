@@ -61,7 +61,6 @@ class ServerConfig(BaseModel):
     # bounded.
     smoke_test_interval_seconds: int = 3600
 
-
 class StateConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -132,6 +131,11 @@ class AutoRouterConfig(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid")
+
+    # Request-scoped hard cap for dispatch retry/failover.
+    dispatch_retry_budget_seconds: float = 360.0
+    # Shared cap on backend attempts across all cells for one user request.
+    dispatch_retry_max_backend_attempts: int = 4
 
     # Context-safe routing: min headroom (tokens) to leave above current session size
     # when picking a model. Prevents routing to models with insufficient context.

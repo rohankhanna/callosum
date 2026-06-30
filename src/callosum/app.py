@@ -99,6 +99,7 @@ _EXHAUSTED_STATUS: dict[ErrorClass, int] = {
     "transient": 502,
     "client_error": 400,
 }
+_DISPATCH_BUDGET_EXHAUSTED_HEADER = "X-Callosum-Retry-Budget-Exhausted"
 
 # Context variable to track the current request's database rowid, set during dispatch
 # and read by response handlers to include in X-Proxy-Request-ID header.
@@ -173,6 +174,51 @@ class _PeerQualityCapture:
         self.echo_count += extracted.echo_count
         self.malformed_count += extracted.malformed_count
         return extracted.cleaned_text
+
+
+@dataclass(slots=True)
+class _DispatchRetryBudget:
+    deadline_ts: float | None
+    max_backend_attempts: int | None
+    backend_attempts: int = 0
+
+    @classmethod
+    def from_config(cls, *, seconds: float, max_backend_attempts: int) -> _DispatchRetryBudget:
+        deadline = time.monotonic() + seconds if seconds > 0 else None
+        max_attempts = max_backend_attempts if max_backend_attempts > 0 else None
+        return cls(deadline_ts=deadline, max_backend_attempts=max_attempts)
+
+    def remaining_seconds(self) -> float | None:
+        if self.deadline_ts is None:
+            return None
+        return max(0.0, self.deadline_ts - time.monotonic())
+
+    def exhausted_reason(self) -> str | None:
+        if self.max_backend_attempts is not None and self.backend_attempts >= self.max_backend_attempts:
+            return f"backend attempt cap reached ({self.max_backend_attempts})"
+        remaining = self.remaining_seconds()
+        if remaining is not None and remaining <= 0:
+            return "wall-clock budget exhausted"
+        return None
+
+    def start_backend_attempt(self) -> str | None:
+        reason = self.exhausted_reason()
+        if reason is not None:
+            return reason
+        self.backend_attempts += 1
+        return None
+
+
+def _retry_budget_http(reason: str) -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail=f"dispatch retry budget exhausted: {reason}",
+        headers={_DISPATCH_BUDGET_EXHAUSTED_HEADER: "1", "Retry-After": "1"},
+    )
+
+
+def _is_retry_budget_http(exc: HTTPException) -> bool:
+    return (exc.headers or {}).get(_DISPATCH_BUDGET_EXHAUSTED_HEADER) == "1"
 
 
 def _peer_quality_capture_enabled() -> bool:
@@ -2024,6 +2070,10 @@ async def _dispatch_internal(
         auto_cfg = AutoRouterConfig()
     if live_cells_fn is None:
         live_cells_fn = build_cells
+    dispatch_budget = _DispatchRetryBudget.from_config(
+        seconds=auto_cfg.dispatch_retry_budget_seconds,
+        max_backend_attempts=auto_cfg.dispatch_retry_max_backend_attempts,
+    )
     """Dispatch core, no Request dependency. Used by the HTTP entry-points.
 
     `forced_backend_id` constrains the selector to a single backend. HTTP
@@ -2417,6 +2467,7 @@ async def _dispatch_internal(
             body,
             candidates=cell_candidates,
             model=model,
+            dispatch_budget=dispatch_budget,
             route_name=route_name,
             backends_list=active,
             preferred_id=preferred_id,
@@ -2439,6 +2490,7 @@ async def _dispatch_internal(
         body,
         candidates=cell_candidates,
         model=model,
+        dispatch_budget=dispatch_budget,
         route_name=route_name,
         backends_list=active,
         preferred_id=preferred_id,
@@ -2517,6 +2569,7 @@ async def _dispatch_nonstream_with_cell_retry(
     candidates: tuple[Cell, ...],
     usage_log: UsageLog | None,
     model: str,
+    dispatch_budget: _DispatchRetryBudget | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Walk up to MAX_CELL_ATTEMPTS candidate cells, rerouting on 5xx.
@@ -2529,20 +2582,41 @@ async def _dispatch_nonstream_with_cell_retry(
     """
     cells_to_try = list(candidates[:MAX_CELL_ATTEMPTS])
     if not cells_to_try:
-        return await _dispatch_nonstream(body, model=model, usage_log=usage_log, **kwargs)
+        return await _dispatch_nonstream(
+            body,
+            model=model,
+            usage_log=usage_log,
+            dispatch_budget=dispatch_budget,
+            **kwargs,
+        )
 
     attempts: list[RoutingAttempt] = []
     final_request_id: int | None = None
 
     for cell_idx, cell in enumerate(cells_to_try):
+        if dispatch_budget is not None:
+            budget_reason = dispatch_budget.exhausted_reason()
+            if budget_reason is not None:
+                raise _retry_budget_http(budget_reason)
         body["model"] = cell.model
         _stamp_reasoning_effort(body, cell.reasoning_effort)
         attempt_start = time.time()
         try:
-            result = await _dispatch_nonstream(body, model=cell.model, usage_log=usage_log, **kwargs)
+            result = await _dispatch_nonstream(
+                body,
+                model=cell.model,
+                usage_log=usage_log,
+                dispatch_budget=dispatch_budget,
+                **kwargs,
+            )
         except HTTPException as exc:
             attempt_ms = int((time.time() - attempt_start) * 1000)
             final_request_id = _request_id_context.get()
+            classification = (
+                "failed"
+                if _is_retry_budget_http(exc)
+                else ("retried_next_cell" if exc.status_code >= 500 and cell_idx + 1 < len(cells_to_try) else "failed")
+            )
             attempts.append(
                 RoutingAttempt(
                     attempt_idx=cell_idx,
@@ -2553,13 +2627,15 @@ async def _dispatch_nonstream_with_cell_retry(
                     model=cell.model,
                     reasoning_effort=cell.reasoning_effort,
                     status=exc.status_code,
-                    classification=(
-                        "retried_next_cell" if exc.status_code >= 500 and cell_idx + 1 < len(cells_to_try) else "failed"
-                    ),
+                    classification=classification,
                     latency_ms=attempt_ms,
                     error_message=(str(exc.detail)[:500] if exc.detail else None),
                 )
             )
+            if _is_retry_budget_http(exc):
+                if usage_log is not None and final_request_id is not None:
+                    usage_log.record_routing_attempts(final_request_id, attempts)
+                raise
             # 4xx → non-retryable (auth_invalid, malformed request, etc).
             # 5xx + cells remaining → reroute. 5xx + no cells left → propagate.
             if exc.status_code < 500 or cell_idx + 1 >= len(cells_to_try):
@@ -2600,6 +2676,7 @@ async def _dispatch_stream_with_cell_retry(
     candidates: tuple[Cell, ...],
     usage_log: UsageLog | None,
     model: str,
+    dispatch_budget: _DispatchRetryBudget | None = None,
     **kwargs: Any,
 ) -> StreamingResponse:
     """Stream-path mirror of _dispatch_nonstream_with_cell_retry.
@@ -2612,20 +2689,41 @@ async def _dispatch_stream_with_cell_retry(
     """
     cells_to_try = list(candidates[:MAX_CELL_ATTEMPTS])
     if not cells_to_try:
-        return await _dispatch_stream(body, model=model, usage_log=usage_log, **kwargs)
+        return await _dispatch_stream(
+            body,
+            model=model,
+            usage_log=usage_log,
+            dispatch_budget=dispatch_budget,
+            **kwargs,
+        )
 
     attempts: list[RoutingAttempt] = []
     final_request_id: int | None = None
 
     for cell_idx, cell in enumerate(cells_to_try):
+        if dispatch_budget is not None:
+            budget_reason = dispatch_budget.exhausted_reason()
+            if budget_reason is not None:
+                raise _retry_budget_http(budget_reason)
         body["model"] = cell.model
         _stamp_reasoning_effort(body, cell.reasoning_effort)
         attempt_start = time.time()
         try:
-            result = await _dispatch_stream(body, model=cell.model, usage_log=usage_log, **kwargs)
+            result = await _dispatch_stream(
+                body,
+                model=cell.model,
+                usage_log=usage_log,
+                dispatch_budget=dispatch_budget,
+                **kwargs,
+            )
         except HTTPException as exc:
             attempt_ms = int((time.time() - attempt_start) * 1000)
             final_request_id = _request_id_context.get()
+            classification = (
+                "failed"
+                if _is_retry_budget_http(exc)
+                else ("retried_next_cell" if exc.status_code >= 500 and cell_idx + 1 < len(cells_to_try) else "failed")
+            )
             attempts.append(
                 RoutingAttempt(
                     attempt_idx=cell_idx,
@@ -2633,13 +2731,15 @@ async def _dispatch_stream_with_cell_retry(
                     model=cell.model,
                     reasoning_effort=cell.reasoning_effort,
                     status=exc.status_code,
-                    classification=(
-                        "retried_next_cell" if exc.status_code >= 500 and cell_idx + 1 < len(cells_to_try) else "failed"
-                    ),
+                    classification=classification,
                     latency_ms=attempt_ms,
                     error_message=(str(exc.detail)[:500] if exc.detail else None),
                 )
             )
+            if _is_retry_budget_http(exc):
+                if usage_log is not None and final_request_id is not None:
+                    usage_log.record_routing_attempts(final_request_id, attempts)
+                raise
             if exc.status_code < 500 or cell_idx + 1 >= len(cells_to_try):
                 if usage_log is not None and final_request_id is not None:
                     usage_log.record_routing_attempts(final_request_id, attempts)
@@ -2685,12 +2785,17 @@ async def _dispatch_nonstream(
     recommender_raw_output: str | None = None,
     recommender_source: str | None = None,
     prompt_embedding: bytes | None = None,
+    dispatch_budget: _DispatchRetryBudget | None = None,
 ) -> dict[str, Any]:
     excluded: set[str] = set()
     excluded_errors: dict[str, BackendError] = {}
     last_error: BackendError | None = None
     cost_estimate = _composite_cost_estimate_for_body(body, model=model)
     while True:
+        if dispatch_budget is not None:
+            budget_reason = dispatch_budget.exhausted_reason()
+            if budget_reason is not None:
+                raise _retry_budget_http(budget_reason)
         backend = await select(
             backends_list,
             model=model,
@@ -2700,10 +2805,53 @@ async def _dispatch_nonstream(
         )
         if backend is None:
             break
+        if dispatch_budget is not None:
+            budget_reason = dispatch_budget.start_backend_attempt()
+            if budget_reason is not None:
+                raise _retry_budget_http(budget_reason)
         handle = CallHandle()
         ts_start = time.time()
         try:
-            result = await call(backend, body, handle)
+            remaining = dispatch_budget.remaining_seconds() if dispatch_budget is not None else None
+            if remaining is not None and remaining <= 0:
+                raise _retry_budget_http("wall-clock budget exhausted")
+            result = (
+                await asyncio.wait_for(call(backend, body, handle), timeout=remaining)
+                if remaining is not None
+                else await call(backend, body, handle)
+            )
+        except TimeoutError as exc:
+            ts_end = time.time()
+            budget_error = BackendError(
+                classification="transient",
+                status_code=503,
+                message="dispatch retry budget exhausted: wall-clock budget exhausted",
+            )
+            _log_attempt(
+                usage_log,
+                body=body,
+                model=model,
+                route_name=route_name,
+                stream=False,
+                session_id=session_id,
+                backend=backend,
+                handle=handle,
+                ts_start=ts_start,
+                ts_end=ts_end,
+                error=budget_error,
+                resp_body=None,
+                user_id=user_id,
+                api_key_id=api_key_id,
+                requested_model=requested_model,
+                requested_reasoning_effort=requested_reasoning_effort,
+                routing_mode=routing_mode,
+                prompt_complexity_class=None,
+                recommender_classifier_cell=recommender_classifier_cell,
+                recommender_raw_output=recommender_raw_output,
+                recommender_source=recommender_source,
+                prompt_embedding=prompt_embedding,
+            )
+            raise _retry_budget_http("wall-clock budget exhausted") from exc
         except BackendError as exc:
             ts_end = time.time()
             _log_attempt(
@@ -2833,12 +2981,17 @@ async def _dispatch_stream(
     recommender_source: str | None = None,
     prompt_embedding: bytes | None = None,
     peer_quality_capture: _PeerQualityCapture | None = None,
+    dispatch_budget: _DispatchRetryBudget | None = None,
 ) -> StreamingResponse:
     excluded: set[str] = set()
     excluded_errors: dict[str, BackendError] = {}
     last_error: BackendError | None = None
     cost_estimate = _composite_cost_estimate_for_body(body, model=model)
     while True:
+        if dispatch_budget is not None:
+            budget_reason = dispatch_budget.exhausted_reason()
+            if budget_reason is not None:
+                raise _retry_budget_http(budget_reason)
         backend = await select(
             backends_list,
             model=model,
@@ -2848,11 +3001,22 @@ async def _dispatch_stream(
         )
         if backend is None:
             break
+        if dispatch_budget is not None:
+            budget_reason = dispatch_budget.start_backend_attempt()
+            if budget_reason is not None:
+                raise _retry_budget_http(budget_reason)
         handle = CallHandle()
         ts_start = time.time()
         iterator = call(backend, body, handle)
         try:
-            first_chunk = await iterator.__anext__()
+            remaining = dispatch_budget.remaining_seconds() if dispatch_budget is not None else None
+            if remaining is not None and remaining <= 0:
+                raise _retry_budget_http("wall-clock budget exhausted")
+            first_chunk = (
+                await asyncio.wait_for(iterator.__anext__(), timeout=remaining)
+                if remaining is not None
+                else await iterator.__anext__()
+            )
         except StopAsyncIteration:
             ts_end = time.time()
             _log_attempt(
@@ -2881,6 +3045,38 @@ async def _dispatch_stream(
             )
             _remember_binding(session_registry, session_id, backend.id)
             return StreamingResponse(_empty_iter(), media_type="text/event-stream")
+        except TimeoutError as exc:
+            ts_end = time.time()
+            budget_error = BackendError(
+                classification="transient",
+                status_code=503,
+                message="dispatch retry budget exhausted: wall-clock budget exhausted",
+            )
+            _log_attempt(
+                usage_log,
+                body=body,
+                model=model,
+                route_name=route_name,
+                stream=True,
+                session_id=session_id,
+                backend=backend,
+                handle=handle,
+                ts_start=ts_start,
+                ts_end=ts_end,
+                error=budget_error,
+                resp_body=None,
+                user_id=user_id,
+                api_key_id=api_key_id,
+                requested_model=requested_model,
+                requested_reasoning_effort=requested_reasoning_effort,
+                routing_mode=routing_mode,
+                prompt_complexity_class=None,
+                recommender_classifier_cell=recommender_classifier_cell,
+                recommender_raw_output=recommender_raw_output,
+                recommender_source=recommender_source,
+                prompt_embedding=prompt_embedding,
+            )
+            raise _retry_budget_http("wall-clock budget exhausted") from exc
         except BackendError as exc:
             ts_end = time.time()
             _log_attempt(
