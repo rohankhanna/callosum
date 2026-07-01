@@ -301,12 +301,14 @@ class LiteLLMGatewayBackend:
             nothing.
           * User sees progress live instead of a 30s+ stall.
           * For thinking models with `think: true`, the user sees
-            thinking content stream too.
+            reasoning content stream too, whether the upstream spells
+            it `thinking`, `reasoning_content`, or `reasoning`.
 
         Translation state we track per choice index:
           * message text accumulation (chat `delta.content` → Responses
             `response.output_text.delta`)
-          * thinking accumulation (chat `delta.thinking` → Responses
+          * reasoning accumulation (chat `delta.{thinking,
+            reasoning_content,reasoning}` → Responses
             `response.reasoning_summary_text.delta`)
           * per-tool-call argument accumulation (chat `delta.tool_calls
             [j].function.arguments` chunks → Responses
@@ -555,9 +557,10 @@ class LiteLLMGatewayBackend:
                     if not isinstance(delta, dict):
                         delta = {}
 
-                    # Thinking deltas (model-a0d5/model-a0g2/r1 thinking mode) arriving
-                    # in a native field.
-                    thinking_delta = delta.get("thinking")
+                    # Reasoning deltas (model-a0d5/model-a0g2/r1 and other
+                    # OpenAI-compatible local servers) arriving in a
+                    # native field.
+                    thinking_delta = _extract_reasoning_text(delta)
                     if isinstance(thinking_delta, str) and thinking_delta:
                         for ev in _reasoning_events(thinking_delta):
                             yield ev
@@ -1028,6 +1031,15 @@ _RESPONSES_ONLY_KEYS: frozenset[str] = frozenset(
 )
 
 
+def _extract_reasoning_text(payload: dict[str, Any]) -> str:
+    """Return the first non-empty reasoning alias from a chat payload."""
+    for key in ("thinking", "reasoning_content", "reasoning"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
 def _extract_text_from_content(content: Any) -> str:
     """Pull all text from a Responses-API `content` field.
 
@@ -1200,14 +1212,10 @@ def _chat_to_responses_response(chat: dict[str, Any]) -> dict[str, Any]:
             raw_content = message.get("content")
             if isinstance(raw_content, str):
                 text = raw_content
-            # Some local models (model-a0e5, model-a0g3-3, model-a0c6) emit a
-            # separate `thinking` field with internal chain-of-thought.
-            # Preserve it as a reasoning output item — Codex CLI / clients
-            # that don't display it just ignore the item, but we never
-            # silently drop content the model spent compute generating.
-            raw_thinking = message.get("thinking")
-            if isinstance(raw_thinking, str) and raw_thinking:
-                thinking = raw_thinking
+            # Some local models emit chain-of-thought in a separate chat
+            # field. Preserve the common OpenAI-compatible aliases as one
+            # reasoning output item so the translator never drops it.
+            thinking = _extract_reasoning_text(message)
             raw_tool_calls = message.get("tool_calls")
             if isinstance(raw_tool_calls, list):
                 for tc in raw_tool_calls:

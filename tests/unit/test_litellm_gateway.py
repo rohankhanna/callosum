@@ -527,6 +527,33 @@ def test_chat_to_responses_response_preserves_thinking_as_reasoning_item() -> No
     assert msg_items[0]["content"][0]["text"] == "OK"
 
 
+def test_chat_to_responses_response_preserves_reasoning_aliases_as_reasoning_item() -> None:
+    """OpenAI-compatible servers vary the reasoning field name; all
+    supported aliases should survive chat->responses translation."""
+    aliases = ("thinking", "reasoning_content", "reasoning")
+    for alias in aliases:
+        chat = {
+            "id": f"chatcmpl-{alias}",
+            "model": "local-reasoner",
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "OK",
+                        alias: f"reasoning from {alias}",
+                    }
+                }
+            ],
+        }
+        resp = _chat_to_responses_response(chat)
+        reasoning_items = [o for o in resp["output"] if o["type"] == "reasoning"]
+        assert len(reasoning_items) == 1
+        assert reasoning_items[0]["summary"][0]["text"] == f"reasoning from {alias}"
+        msg_items = [o for o in resp["output"] if o["type"] == "message"]
+        assert len(msg_items) == 1
+        assert msg_items[0]["content"][0]["text"] == "OK"
+
+
 def test_chat_to_responses_response_no_reasoning_item_when_thinking_absent() -> None:
     """No `thinking` field → no reasoning item. Output is just the
     message — same as before the thinking-preservation change."""
@@ -729,6 +756,41 @@ async def test_responses_stream_translates_chat_deltas_as_they_arrive() -> None:
     assert full["output"][0]["content"][0]["text"] == "Hello"
     assert full["usage"]["input_tokens"] == 3
     assert full["usage"]["output_tokens"] == 2
+    await backend.aclose()
+
+
+async def test_responses_stream_preserves_reasoning_alias_delta() -> None:
+    """A streamed chat delta using a non-`thinking` reasoning alias still
+    becomes Responses reasoning_summary_text events."""
+    chunks = [
+        b'data: {"id":"x","model":"model-a0d5","choices":[{"delta":{"reasoning_content":"plan step 1"}}]}\n\n',
+        b'data: {"id":"x","choices":[{"delta":{"content":"done"}}]}\n\n',
+        b'data: {"id":"x","choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":4,"total_tokens":7}}\n\n',
+        b"data: [DONE]\n\n",
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json=_models_payload("model-a0d5"))
+        if request.url.path == "/v1/chat/completions":
+            return httpx.Response(
+                200,
+                content=b"".join(chunks),
+                headers={"content-type": "text/event-stream"},
+            )
+        return httpx.Response(404)
+
+    backend = LiteLLMGatewayBackend(id="local", transport=httpx.MockTransport(handler))
+    raw_chunks = [raw async for raw in backend.responses_stream({"model": "model-a0d5", "input": "x", "stream": True})]
+    events = _collect_stream_events(raw_chunks)
+    reasoning_deltas = [e for e in events if e["type"] == "response.reasoning_summary_text.delta"]
+    assert "".join(e["delta"] for e in reasoning_deltas) == "plan step 1"
+    text_deltas = [e for e in events if e["type"] == "response.output_text.delta"]
+    assert "".join(e["delta"] for e in text_deltas) == "done"
+    completed = [e for e in events if e["type"] == "response.completed"][0]["response"]
+    reasoning_items = [o for o in completed["output"] if o["type"] == "reasoning"]
+    assert len(reasoning_items) == 1
+    assert reasoning_items[0]["summary"][0]["text"] == "plan step 1"
     await backend.aclose()
 
 

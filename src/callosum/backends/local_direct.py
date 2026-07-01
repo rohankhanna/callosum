@@ -44,7 +44,7 @@ from callosum.operator_state import (
     merge_inference_params,
 )
 from callosum.routing.protocols import CellCapabilities
-from callosum.sse_tee import ResponsesStreamCollector
+from callosum.sse_tee import ResponsesStreamCollector, ResponsesStreamSummary
 
 logger = logging.getLogger(__name__)
 
@@ -327,16 +327,24 @@ class LocalModelRegistryBackend:
                     if response.status_code >= 400:
                         await response.aread()
                         raise error_from_response(response)
+                    chunks: list[bytes] = []
                     async for chunk in _responses_sse_to_chat_sse(
                         response.aiter_lines(),
                         model=str(body.get("model", entry.runtime_model)),
                     ):
+                        chunks.append(chunk)
                         yield chunk
+                    _record_chat_stream_summary(handle, chunks)
                 return
             except httpx.HTTPError as exc:
                 self._healthy = False
                 self._last_health_reason = "network"
                 raise BackendError(classification="transient", message=str(exc)) from exc
+        stream_options = out_body.get("stream_options")
+        if not isinstance(stream_options, dict):
+            stream_options = {}
+        stream_options["include_usage"] = True
+        out_body["stream_options"] = stream_options
         try:
             async with self._client.stream(
                 "POST",
@@ -349,13 +357,16 @@ class LocalModelRegistryBackend:
                 if response.status_code >= 400:
                     await response.aread()
                     raise error_from_response(response)
+                chunks: list[bytes] = []
                 async for chunk in stall_guarded(
                     response.aiter_bytes(),
                     first_item_timeout_s=LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S,
                     idle_timeout_s=LOCAL_STREAM_IDLE_TIMEOUT_S,
                     what=f"local {entry.id}",
                 ):
+                    chunks.append(chunk)
                     yield chunk
+                _record_chat_stream_summary(handle, chunks)
         except httpx.HTTPError as exc:
             self._healthy = False
             self._last_health_reason = "network"
@@ -642,3 +653,36 @@ def _responses_usage_to_chat_usage(usage: dict[str, Any]) -> dict[str, Any]:
         "completion_tokens": output_tokens if isinstance(output_tokens, int) else 0,
         "total_tokens": total_tokens,
     }
+
+
+def _record_chat_stream_summary(handle: CallHandle | None, chunks: list[bytes]) -> None:
+    if handle is None:
+        return
+    blob = b"".join(chunks)
+    usage = _chat_usage_from_sse_blob(blob)
+    handle.stream_summary = ResponsesStreamSummary(
+        completed_response={"usage": usage} if usage is not None else None,
+        total_bytes=len(blob),
+        raw_blob=blob,
+    )
+
+
+def _chat_usage_from_sse_blob(blob: bytes) -> dict[str, Any] | None:
+    usage: dict[str, Any] | None = None
+    for raw_event in blob.split(b"\n\n"):
+        for line in raw_event.split(b"\n"):
+            if not line.startswith(b"data:"):
+                continue
+            data = line[len(b"data:") :].strip()
+            if not data or data == b"[DONE]":
+                continue
+            try:
+                payload = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            raw_usage = payload.get("usage")
+            if isinstance(raw_usage, dict):
+                usage = raw_usage
+    return usage

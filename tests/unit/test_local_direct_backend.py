@@ -18,9 +18,12 @@ from typing import Any
 import httpx
 import pytest
 
+from callosum.backend import CallHandle
 from callosum.backends.local_direct import LocalModelRegistryBackend
 from callosum.errors import BackendError
 from callosum.local import ModelEntry
+
+pytestmark = pytest.mark.anyio
 
 
 class _FakeSource:
@@ -180,6 +183,7 @@ async def test_chat_completions_stream_translates_responses_native_text_sse() ->
         source=src,
         transport=httpx.MockTransport(handler),
     )
+    handle = CallHandle()
     chunks = [
         c
         async for c in backend.chat_completions_stream(
@@ -187,7 +191,8 @@ async def test_chat_completions_stream_translates_responses_native_text_sse() ->
                 "model": "responses-capable",
                 "messages": [{"role": "user", "content": "hi"}],
                 "stream": True,
-            }
+            },
+            handle,
         )
     ]
     events = _chat_events(chunks)
@@ -202,6 +207,14 @@ async def test_chat_completions_stream_translates_responses_native_text_sse() ->
     ]
     assert events[-1]["choices"][0]["finish_reason"] == "stop"
     assert events[-1]["usage"] == {
+        "prompt_tokens": 3,
+        "completion_tokens": 2,
+        "total_tokens": 5,
+    }
+    assert handle.stream_summary is not None
+    completed = handle.stream_summary.completed_response
+    assert completed is not None
+    assert completed["usage"] == {
         "prompt_tokens": 3,
         "completion_tokens": 2,
         "total_tokens": 5,
@@ -270,6 +283,61 @@ async def test_chat_completions_stream_translates_responses_tool_arguments() -> 
     assert tool_deltas[1]["function"]["arguments"] == '{"cm'
     assert tool_deltas[2]["function"]["arguments"] == 'd":"ls"}'
     assert events[-1]["choices"][0]["finish_reason"] == "stop"
+    await backend.aclose()
+
+
+async def test_chat_completions_stream_requests_usage_from_chat_surface() -> None:
+    src = _FakeSource([_entry("chat-only", ("chat",))])
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            content=(
+                b'data: {"id":"cmpl_1","choices":[{"delta":{"content":"hi"}}]}\n\n'
+                b'data: {"id":"cmpl_1","choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}\n\n'
+                b"data: [DONE]\n\n"
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    backend = LocalModelRegistryBackend(
+        id="test",
+        source=src,
+        transport=httpx.MockTransport(handler),
+    )
+    handle = CallHandle()
+    events = _chat_events(
+        [
+            c
+            async for c in backend.chat_completions_stream(
+                {
+                    "model": "chat-only",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "stream": True,
+                },
+                handle,
+            )
+        ]
+    )
+    assert captured["path"] == "/v1/chat/completions"
+    assert captured["body"]["stream"] is True
+    assert captured["body"]["stream_options"] == {"include_usage": True}
+    assert events[-1]["usage"] == {
+        "prompt_tokens": 3,
+        "completion_tokens": 2,
+        "total_tokens": 5,
+    }
+    assert handle.stream_summary is not None
+    completed = handle.stream_summary.completed_response
+    assert completed is not None
+    assert completed["usage"] == {
+        "prompt_tokens": 3,
+        "completion_tokens": 2,
+        "total_tokens": 5,
+    }
     await backend.aclose()
 
 
