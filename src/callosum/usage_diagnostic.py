@@ -40,6 +40,19 @@ class ModeBucketSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class TrafficKindBucketSummary:
+    # Policy-purpose bucket. `traffic_kind` is the Callosum decision-purpose
+    # axis (operator / canary_redirect / quota_explore / peer_quality_capture).
+    # Pre-F4 rows have NULL traffic_kind and coalesce to "legacy" so they are
+    # visible without being mislabeled as real operator traffic.
+    traffic_kind: str
+    turn_count: int
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+
+@dataclass(frozen=True, slots=True)
 class TimeBucketSummary:
     bucket_start: str
     turn_count: int
@@ -47,6 +60,8 @@ class TimeBucketSummary:
     completion_tokens: int
     total_tokens: int
     mode_summaries: tuple[ModeBucketSummary, ...]
+    # None means the traffic_kind axis was not requested (group_by="mode").
+    traffic_kind_summaries: tuple[TrafficKindBucketSummary, ...] | None = None
 
 
 def recent_turn_summaries(
@@ -104,50 +119,59 @@ def token_time_series(
     *,
     bucket: str = "day",
     limit: int = 30,
+    group_by: str = "mode",
 ) -> list[TimeBucketSummary]:
     if limit <= 0:
         return []
+    if group_by not in ("mode", "traffic_kind", "both"):
+        raise ValueError(f"unsupported group_by: {group_by}")
     if not db_path.exists():
         raise FileNotFoundError(f"usage log not found: {db_path}")
     bucket_expr = _bucket_expression(bucket)
+    want_mode = group_by in ("mode", "both")
+    want_kind = group_by in ("traffic_kind", "both")
     conn = sqlite3.connect(str(db_path))
     try:
-        rows = conn.execute(
-            f"""
-            SELECT
-                {bucket_expr} AS bucket_start,
-                COALESCE(r.effective_routing_mode, 'auto') AS effective_routing_mode,
-                COUNT(*) AS turn_count,
-                COALESCE(SUM(r.prompt_tokens), 0) AS prompt_tokens,
-                COALESCE(SUM(r.completion_tokens), 0) AS completion_tokens,
-                COALESCE(SUM(r.total_tokens), 0) AS total_tokens
-            FROM requests AS r
-            GROUP BY bucket_start, effective_routing_mode
-            ORDER BY bucket_start DESC, effective_routing_mode ASC
-            """,
-        ).fetchall()
+        mode_rows = _fetch_grouped(conn, bucket_expr, "mode") if want_mode else []
+        kind_rows = _fetch_grouped(conn, bucket_expr, "traffic_kind") if want_kind else []
     finally:
         conn.close()
-    buckets: dict[str, list[ModeBucketSummary]] = {}
-    order: list[str] = []
-    for row in rows:
+    mode_by_bucket = _assemble(mode_rows, ModeBucketSummary, "effective_routing_mode")
+    kind_by_bucket = _assemble(kind_rows, TrafficKindBucketSummary, "traffic_kind")
+    # Bucket totals are identical across axes (same rows grouped differently),
+    # so derive them from whichever axis was queried. Prefer mode when present.
+    totals_source = mode_rows if mode_rows else kind_rows
+    bucket_order: list[str] = []
+    seen: set[str] = set()
+    for row in totals_source:
         bucket_start = str(row[0])
-        if bucket_start not in buckets:
-            buckets[bucket_start] = []
-            order.append(bucket_start)
-        buckets[bucket_start].append(
-            ModeBucketSummary(
-                effective_routing_mode=str(row[1]),
-                turn_count=int(row[2]),
-                prompt_tokens=int(row[3]),
-                completion_tokens=int(row[4]),
-                total_tokens=int(row[5]),
+        if bucket_start not in seen:
+            seen.add(bucket_start)
+            bucket_order.append(bucket_start)
+    # rows are newest-first (ORDER BY bucket_start DESC); take the newest `limit`
+    # then reverse to oldest-first, matching the historical ordering.
+    selected = bucket_order[:limit]
+    selected.reverse()
+    result: list[TimeBucketSummary] = []
+    for bucket_start in selected:
+        modes = tuple(mode_by_bucket.get(bucket_start, ()))
+        kinds = kind_by_bucket.get(bucket_start)
+        kind_tuple = tuple(kinds) if kinds is not None else None
+        total_items: tuple[ModeBucketSummary | TrafficKindBucketSummary, ...] = (
+            modes if modes else (kind_tuple or ())
+        )
+        result.append(
+            TimeBucketSummary(
+                bucket_start=bucket_start,
+                turn_count=sum(item.turn_count for item in total_items),
+                prompt_tokens=sum(item.prompt_tokens for item in total_items),
+                completion_tokens=sum(item.completion_tokens for item in total_items),
+                total_tokens=sum(item.total_tokens for item in total_items),
+                mode_summaries=modes,
+                traffic_kind_summaries=kind_tuple,
             )
         )
-    return [
-        _rollup_bucket(bucket_start, buckets[bucket_start])
-        for bucket_start in reversed(order[:limit])
-    ]
+    return result
 
 
 def render_recent_turns_json(
@@ -189,32 +213,46 @@ def render_token_time_series_json(
     *,
     bucket: str = "day",
     limit: int = 30,
+    group_by: str = "mode",
 ) -> dict[str, Any]:
-    series = token_time_series(db_path, bucket=bucket, limit=limit)
+    series = token_time_series(db_path, bucket=bucket, limit=limit, group_by=group_by)
+    rendered: list[dict[str, Any]] = []
+    for item in series:
+        bucket_doc: dict[str, Any] = {
+            "bucket_start": item.bucket_start,
+            "turn_count": item.turn_count,
+            "prompt_tokens": item.prompt_tokens,
+            "completion_tokens": item.completion_tokens,
+            "total_tokens": item.total_tokens,
+            "mode_summaries": [
+                {
+                    "effective_routing_mode": mode.effective_routing_mode,
+                    "turn_count": mode.turn_count,
+                    "prompt_tokens": mode.prompt_tokens,
+                    "completion_tokens": mode.completion_tokens,
+                    "total_tokens": mode.total_tokens,
+                }
+                for mode in item.mode_summaries
+            ],
+        }
+        if item.traffic_kind_summaries is not None:
+            bucket_doc["traffic_kind_summaries"] = [
+                {
+                    "traffic_kind": kind.traffic_kind,
+                    "turn_count": kind.turn_count,
+                    "prompt_tokens": kind.prompt_tokens,
+                    "completion_tokens": kind.completion_tokens,
+                    "total_tokens": kind.total_tokens,
+                }
+                for kind in item.traffic_kind_summaries
+            ]
+        rendered.append(bucket_doc)
     return {
         "db_path": str(db_path),
         "bucket": bucket,
+        "group_by": group_by,
         "bucket_count": len(series),
-        "series": [
-            {
-                "bucket_start": item.bucket_start,
-                "turn_count": item.turn_count,
-                "prompt_tokens": item.prompt_tokens,
-                "completion_tokens": item.completion_tokens,
-                "total_tokens": item.total_tokens,
-                "mode_summaries": [
-                    {
-                        "effective_routing_mode": mode.effective_routing_mode,
-                        "turn_count": mode.turn_count,
-                        "prompt_tokens": mode.prompt_tokens,
-                        "completion_tokens": mode.completion_tokens,
-                        "total_tokens": mode.total_tokens,
-                    }
-                    for mode in item.mode_summaries
-                ],
-            }
-            for item in series
-        ],
+        "series": rendered,
     }
 
 
@@ -296,15 +334,63 @@ def _bucket_expression(bucket: str) -> str:
     raise ValueError(f"unsupported bucket: {bucket}")
 
 
-def _rollup_bucket(
-    bucket_start: str,
-    modes: list[ModeBucketSummary],
-) -> TimeBucketSummary:
-    return TimeBucketSummary(
-        bucket_start=bucket_start,
-        turn_count=sum(item.turn_count for item in modes),
-        prompt_tokens=sum(item.prompt_tokens for item in modes),
-        completion_tokens=sum(item.completion_tokens for item in modes),
-        total_tokens=sum(item.total_tokens for item in modes),
-        mode_summaries=tuple(sorted(modes, key=lambda item: item.effective_routing_mode)),
-    )
+# (column, NULL-fallback) for each provenance axis. The fallback keeps legacy
+# rows visible instead of dropping them: effective_routing_mode NULL -> 'auto'
+# (pre-router / pass-through), traffic_kind NULL -> 'legacy' (pre-F4 rows).
+_AXIS_CONFIG: dict[str, tuple[str, str]] = {
+    "mode": ("effective_routing_mode", "auto"),
+    "traffic_kind": ("traffic_kind", "legacy"),
+}
+
+
+def _fetch_grouped(
+    conn: sqlite3.Connection,
+    bucket_expr: str,
+    axis: str,
+) -> list[tuple[Any, ...]]:
+    """Group token volume by time bucket and one provenance axis.
+
+    axis="mode" groups by effective_routing_mode (NULL -> 'auto'); axis=
+    "traffic_kind" groups by traffic_kind (NULL -> 'legacy' so pre-F4 rows are
+    visible without being mislabeled as real operator traffic).
+    """
+    column, fallback = _AXIS_CONFIG[axis]
+    return conn.execute(
+        f"""
+        SELECT
+            {bucket_expr} AS bucket_start,
+            COALESCE(r.{column}, ?) AS label,
+            COUNT(*) AS turn_count,
+            COALESCE(SUM(r.prompt_tokens), 0) AS prompt_tokens,
+            COALESCE(SUM(r.completion_tokens), 0) AS completion_tokens,
+            COALESCE(SUM(r.total_tokens), 0) AS total_tokens
+        FROM requests AS r
+        GROUP BY bucket_start, r.{column}
+        ORDER BY bucket_start DESC, label ASC
+        """,
+        (fallback,),
+    ).fetchall()
+
+
+def _assemble(
+    rows: list[tuple[Any, ...]],
+    cls: type,
+    label_field: str,
+) -> dict[str, list[Any]]:
+    by_bucket: dict[str, list[Any]] = {}
+    for row in rows:
+        bucket_start = str(row[0])
+        by_bucket.setdefault(bucket_start, []).append(
+            cls(
+                **{
+                    label_field: str(row[1]),
+                    "turn_count": int(row[2]),
+                    "prompt_tokens": int(row[3]),
+                    "completion_tokens": int(row[4]),
+                    "total_tokens": int(row[5]),
+                }
+            )
+        )
+    for items in by_bucket.values():
+        items.sort(key=lambda item: getattr(item, label_field))
+    return by_bucket

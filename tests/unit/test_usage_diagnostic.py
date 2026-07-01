@@ -7,6 +7,7 @@ import pytest
 
 from callosum.usage_diagnostic import (
     SegmentSummary,
+    TrafficKindBucketSummary,
     recent_turn_summaries,
     render_token_time_series_json,
     render_recent_turns_json,
@@ -23,6 +24,7 @@ def _entry(
     effective_routing_mode: str | None = "selector_remote-only",
     requested_model: str | None = "callosum:remote-only",
     served_model: str | None = "model-a0e7",
+    traffic_kind: str | None = None,
 ) -> UsageLogEntry:
     return UsageLogEntry(
         ts_start=ts_start,
@@ -43,6 +45,7 @@ def _entry(
         req_payload=json.dumps(req_payload).encode() if req_payload is not None else None,
         requested_model=requested_model,
         effective_routing_mode=effective_routing_mode,
+        traffic_kind=traffic_kind,
     )
 
 
@@ -201,6 +204,101 @@ def test_render_token_time_series_json_shape(tmp_path: Path) -> None:
         "mode_summaries",
     }
     assert bucket["mode_summaries"][0]["effective_routing_mode"] == "selector_remote-only"
+
+
+def test_token_time_series_groups_by_traffic_kind(tmp_path: Path) -> None:
+    db = tmp_path / "u.sqlite"
+    log = UsageLog(db, capture_bodies=True)
+    log.record(_entry(ts_start=1_000.0, prompt_tokens=40, req_payload={"input": "a"}, traffic_kind="operator"))
+    log.record(_entry(ts_start=1_100.0, prompt_tokens=60, req_payload={"input": "b"}, traffic_kind="quota_explore"))
+    log.record(_entry(ts_start=1_200.0, prompt_tokens=20, req_payload={"input": "c"}, traffic_kind="peer_quality_capture"))
+    log.close()
+
+    series = token_time_series(db, limit=2, group_by="traffic_kind")
+    assert len(series) == 1
+    bucket = series[0]
+    assert bucket.traffic_kind_summaries is not None
+    # operator + quota_explore + peer_quality_capture, sorted by label
+    assert [k.traffic_kind for k in bucket.traffic_kind_summaries] == [
+        "operator",
+        "peer_quality_capture",
+        "quota_explore",
+    ]
+    # mode axis was not requested -> empty, totals derived from traffic_kind rows
+    assert bucket.mode_summaries == ()
+    assert bucket.turn_count == 3
+    assert bucket.prompt_tokens == 120
+
+
+def test_token_time_series_legacy_null_traffic_kind_coalesces(tmp_path: Path) -> None:
+    db = tmp_path / "u.sqlite"
+    log = UsageLog(db, capture_bodies=True)
+    # Pre-F4 rows: traffic_kind left NULL -> must show as 'legacy', not 'operator'.
+    log.record(_entry(ts_start=1_000.0, prompt_tokens=40, req_payload={"input": "a"}))
+    log.close()
+
+    series = token_time_series(db, limit=2, group_by="traffic_kind")
+    assert series[0].traffic_kind_summaries is not None
+    assert [k.traffic_kind for k in series[0].traffic_kind_summaries] == ["legacy"]
+
+
+def test_token_time_series_both_axes(tmp_path: Path) -> None:
+    db = tmp_path / "u.sqlite"
+    log = UsageLog(db, capture_bodies=True)
+    log.record(_entry(ts_start=1_000.0, prompt_tokens=40, req_payload={"input": "a"}, traffic_kind="operator"))
+    log.record(_entry(ts_start=1_100.0, prompt_tokens=50, req_payload={"input": "b"}, traffic_kind="canary_redirect", effective_routing_mode="canary_redirect"))
+    log.close()
+
+    series = token_time_series(db, limit=2, group_by="both")
+    bucket = series[0]
+    assert bucket.mode_summaries  # populated
+    assert bucket.traffic_kind_summaries is not None  # populated
+    # Totals are identical regardless of axis.
+    mode_total = sum(m.total_tokens for m in bucket.mode_summaries)
+    kind_total = sum(k.total_tokens for k in bucket.traffic_kind_summaries)
+    assert mode_total == kind_total == bucket.total_tokens
+    assert {k.traffic_kind for k in bucket.traffic_kind_summaries} == {"operator", "canary_redirect"}
+
+
+def test_token_time_series_default_group_by_leaves_traffic_kind_none(tmp_path: Path) -> None:
+    db = tmp_path / "u.sqlite"
+    log = UsageLog(db, capture_bodies=True)
+    log.record(_entry(ts_start=1_000.0, prompt_tokens=40, req_payload={"input": "a"}, traffic_kind="operator"))
+    log.close()
+
+    series = token_time_series(db, limit=2)  # default group_by="mode"
+    assert series[0].traffic_kind_summaries is None
+    assert series[0].mode_summaries  # back-compat: mode axis populated as before
+
+
+def test_token_time_series_rejects_bad_group_by(tmp_path: Path) -> None:
+    db = tmp_path / "u.sqlite"
+    log = UsageLog(db, capture_bodies=True)
+    log.record(_entry(ts_start=1_000.0, prompt_tokens=40, req_payload={"input": "a"}))
+    log.close()
+    with pytest.raises(ValueError):
+        token_time_series(db, group_by="nonsense")
+
+
+def test_render_token_time_series_json_includes_traffic_kind(tmp_path: Path) -> None:
+    db = tmp_path / "u.sqlite"
+    log = UsageLog(db, capture_bodies=True)
+    log.record(_entry(ts_start=1_000.0, prompt_tokens=40, req_payload={"input": "a"}, traffic_kind="operator"))
+    log.close()
+
+    doc = render_token_time_series_json(db, group_by="traffic_kind")
+    assert doc["group_by"] == "traffic_kind"
+    bucket = doc["series"][0]
+    assert "traffic_kind_summaries" in bucket
+    assert bucket["traffic_kind_summaries"][0]["traffic_kind"] == "operator"
+    # mode_summaries still present (empty) for shape stability.
+    assert bucket["mode_summaries"] == []
+
+
+def test_traffic_kind_bucket_summary_is_frozen() -> None:
+    k = TrafficKindBucketSummary(traffic_kind="operator", turn_count=1, prompt_tokens=10, completion_tokens=2, total_tokens=12)
+    with pytest.raises(Exception):
+        k.turn_count = 2  # type: ignore[misc]
 
 
 def test_segment_summary_is_frozen() -> None:

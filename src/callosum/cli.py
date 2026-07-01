@@ -258,6 +258,7 @@ def cmd_usage_series(args: argparse.Namespace) -> int:
         usage_path,
         bucket=args.bucket,
         limit=args.limit,
+        group_by=args.group_by,
     )
     _print(payload, pretty=not args.compact)
     return 0
@@ -616,13 +617,26 @@ def build_parser() -> argparse.ArgumentParser:
     recent.set_defaults(func=cmd_usage_recent)
     series = pu.add_parser(
         "series",
-        help="Show token volume over time, grouped by routing-policy bucket.",
+        help="Show token volume over time, grouped by a provenance axis.",
     )
     series.add_argument(
         "--bucket",
         choices=["hour", "day"],
         default="day",
         help="Time bucket size (default: day).",
+    )
+    series.add_argument(
+        "--group-by",
+        choices=["mode", "traffic_kind", "both"],
+        default="mode",
+        help=(
+            "Provenance axis to break tokens down by (default: mode). "
+            "'mode' groups by effective_routing_mode (the routing lens); "
+            "'traffic_kind' groups by decision purpose — operator, "
+            "canary_redirect, quota_explore, peer_quality_capture, legacy — "
+            "which separates exploration/capture noise from real operator "
+            "traffic (REQ-003); 'both' emits both breakdowns."
+        ),
     )
     series.add_argument(
         "--limit",
