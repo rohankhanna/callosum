@@ -121,6 +121,7 @@ _request_id_context: ContextVar[int | None] = ContextVar("request_id", default=N
 # Values: 'auto', 'canary_redirect', 'forced_remote', 'forced_local',
 # 'forced_offline', or None (no router; pass-through path).
 _effective_routing_mode_context: ContextVar[str | None] = ContextVar("effective_routing_mode", default=None)
+_traffic_kind_context: ContextVar[str | None] = ContextVar("traffic_kind", default=None)
 
 _PEER_QUALITY_CAPTURE_RATE_ENV = "CALLOSUM_PEER_QUALITY_CAPTURE_RATE"
 # Recent session assistant turns to scan for un-judged subjects. No hard cap on
@@ -247,7 +248,7 @@ def _inject_peer_quality_prompt(
     context_window_tokens: int | None = None,
     safety_margin_tokens: int = 8192,
 ) -> dict[str, Any]:
-    """Add hidden provenance tags and qop instruction to the outbound body.
+    """Add Hidden Model Payload to the outbound upstream body.
 
     The injection is deliberately narrow: stream-only caller, explicit sample
     gate, same-session rows only, exact text match against prior assistant
@@ -263,7 +264,10 @@ def _inject_peer_quality_prompt(
     qop marker rides the text channel, so a turn that only emits tool calls
     simply produces no marker (recorded as 0 opinions, no harm); a turn that
     emits prose carries the opinion. The subject still must be a prior
-    different-cell prose turn, which is the real constraint.
+    different-cell prose turn, which is the real constraint. The injected
+    tags/instruction are upstream-visible Hidden Model Payload, not Private
+    Control State: Callosum deliberately promotes them into the
+    model-visible envelope, then veils them from Codex/UI on the way back.
 
     Judging is DEDUPED, UNCAPPED, and DEFERRED (): only
     present subjects this judge cell hasn't already rated; judge as many as fit
@@ -850,7 +854,7 @@ def create_app(
             state_store = b._state_store
             break
 
-    def _live_cells() -> list[Cell]:
+    def _live_cells(*, include_hidden: bool = False) -> list[Cell]:
         """Build the auto-learning cell grid from the union of every Codex
         backend's CURRENT advertised_models.
 
@@ -863,6 +867,10 @@ def create_app(
         hourly catalog refresh discovers a new model, the cell grid follows
         without a proxy restart. When a model is retired upstream, it drops
         out of the grid the next time the router consults it.
+
+        Hidden upstream models remain excluded from automatic/free routing.
+        `include_hidden=True` is used only for explicit concrete selector pins
+        after the client has named a source/model/effort lane.
         """
         from callosum.cell_grid import build_cells_from_metadata
 
@@ -908,7 +916,10 @@ def create_app(
                         merged_metadata[slug] = m
 
         if merged_metadata:
-            cells = build_cells_from_metadata(merged_metadata)
+            cells = build_cells_from_metadata(
+                merged_metadata,
+                include_hidden=include_hidden,
+            )
             if cells:
                 return cells
 
@@ -1091,7 +1102,12 @@ def create_app(
             )
             _TIME_ESTIMATOR = TimeUsageEstimator(time_model_provider)
 
-        router = build_router(auto_cfg.routing, capabilities_of=_capabilities_of)
+        router = build_router(
+            auto_cfg.routing,
+            capabilities_of=_capabilities_of,
+            time_estimator=_TIME_ESTIMATOR,
+            output_forecaster=_OUTPUT_FORECASTER,
+        )
 
     smoke_tester = _PeriodicSmokeTester(
         backends=backends_list,
@@ -1585,7 +1601,7 @@ def create_app(
         all_ok = all(r["ok"] for r in results if not r.get("skipped"))
         return {"ok": all_ok, "backends": results}
 
-    def _catalog_model_ids() -> list[str]:
+    def _catalog_model_ids(*, include_hidden: bool = False) -> list[str]:
         """The canonical Callosum catalog ids, recomputed on each call.
 
         Built from the same backend `advertised_models` + `model_metadata` the
@@ -1600,6 +1616,10 @@ def create_app(
           reasoning level the model advertises (from model_metadata). Models
           that advertise only ("default",) get the bare pin alone.
         - raw passthrough ids, still listed + resolvable for back-compat
+
+        Hidden upstream models remain excluded by default. `include_hidden`
+        is reserved for exact single-model selector lookups so explicit pins
+        can resolve without making hidden lanes public/default choices.
         """
         raw: set[str] = set()
         remote_models: set[str] = set()
@@ -1608,14 +1628,28 @@ def create_app(
         local_meta: dict[str, ModelMetadata] = {}
         for backend in backends_list:
             is_local = getattr(backend, "kind", "") == "litellm_gateway"
+            meta = getattr(backend, "model_metadata", None) or {}
             for m in backend.advertised_models:
                 if m in VIRTUAL_MODELS or is_selector(m):
                     continue
+                md = meta.get(m)
+                if (
+                    not include_hidden
+                    and md is not None
+                    and md.visibility is not None
+                    and md.visibility != "list"
+                ):
+                    continue
                 raw.add(m)
                 (local_models if is_local else remote_models).add(m)
-            meta = getattr(backend, "model_metadata", None) or {}
             target = local_meta if is_local else remote_meta
             for slug, md in meta.items():
+                if (
+                    not include_hidden
+                    and md.visibility is not None
+                    and md.visibility != "list"
+                ):
+                    continue
                 existing = target.get(slug)
                 # Prefer the record that actually carries reasoning levels.
                 if existing is None or (
@@ -1733,7 +1767,8 @@ def create_app(
             # Strategy selectors are always valid; concrete pins must resolve
             # to a catalog entry (pinned model+effort actually advertised).
             if sel is not None and (
-                sel.strategy is not None or model_id in _catalog_model_ids()
+                sel.strategy is not None
+                or model_id in _catalog_model_ids(include_hidden=True)
             ):
                 return {
                     "id": model_id,
@@ -2006,7 +2041,7 @@ async def _dispatch_route(
     auto_cfg: AutoRouterConfig | None = None,
     router: Router | None = None,
     operator_state: Any = None,
-    live_cells_fn: Callable[[], list[Cell]] | None = None,
+    live_cells_fn: Callable[..., list[Cell]] | None = None,
     client_endpoint: str | None = None,
 ) -> Any:
     """HTTP entry-point. Pulls session_id + api_key off the Request, then
@@ -2063,13 +2098,17 @@ async def _dispatch_internal(
     auto_cfg: AutoRouterConfig | None = None,
     router: Router | None = None,
     operator_state: Any = None,
-    live_cells_fn: Callable[[], list[Cell]] | None = None,
+    live_cells_fn: Callable[..., list[Cell]] | None = None,
     client_endpoint: str | None = None,
 ) -> Any:
     if auto_cfg is None:
         auto_cfg = AutoRouterConfig()
     if live_cells_fn is None:
-        live_cells_fn = build_cells
+        def _default_live_cells(*, include_hidden: bool = False) -> list[Cell]:
+            del include_hidden
+            return build_cells()
+
+        live_cells_fn = _default_live_cells
     dispatch_budget = _DispatchRetryBudget.from_config(
         seconds=auto_cfg.dispatch_retry_budget_seconds,
         max_backend_attempts=auto_cfg.dispatch_retry_max_backend_attempts,
@@ -2091,6 +2130,8 @@ async def _dispatch_internal(
     except SelectorError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     routing_mode = "pass-through"
+    _effective_routing_mode_context.set(None)
+    _traffic_kind_context.set(None)
     # Router provenance for the request log. Populated when the Router
     # makes a decision; stays None for the no-router path (cold-start
     # state when no backends are loaded).
@@ -2115,7 +2156,10 @@ async def _dispatch_internal(
     # authoritative, and the original requested model only appears in
     # the request log's `routing_mode` column for provenance.
     if router is not None:
-        cells_now = live_cells_fn()
+        _selector_is_concrete_pin = (
+            _selector is not None and _selector.pinned_model is not None
+        )
+        cells_now = live_cells_fn(include_hidden=_selector_is_concrete_pin)
         # Operator denylist + mode filters BEFORE routability — operator
         # decisions are absolute. denylist drops named cells; mode
         # constrains which backend kinds are eligible.
@@ -2146,6 +2190,7 @@ async def _dispatch_internal(
             _effective_mode = _routing if _routing == "auto" else f"forced_{_routing.replace('-only', '')}"
             if _selector is not None:
                 _effective_mode = f"selector_{_selector.strategy or _selector.source}"
+            _traffic_kind = "operator"
             # Quota for the canary scheduler. Walk codex_auth_vault
             # backends, take the highest weekly_used_percent (the
             # most-constrained). None means "unknown" — scheduler
@@ -2178,7 +2223,11 @@ async def _dispatch_internal(
                 # redirect so the row lands in the canary bucket.
                 _routing = "remote-only"
                 _effective_mode = "canary_redirect"
+                _traffic_kind = "canary_redirect"
+            elif _effective_mode == "quota_explore":
+                _traffic_kind = "quota_explore"
             _effective_routing_mode_context.set(_effective_mode)
+            _traffic_kind_context.set(_traffic_kind)
             if _routing in ("offline", "local-only"):
                 cells_now = [
                     c
@@ -2364,6 +2413,7 @@ async def _dispatch_internal(
                 # log: excludable from natural-routing baselines while its
                 # quality label stays usable.
                 _effective_routing_mode_context.set("quota_explore")
+                _traffic_kind_context.set("quota_explore")
         body["model"] = chosen.model
         _stamp_reasoning_effort(body, chosen.reasoning_effort)
         # Per-cell transforms. Empty registry → no-op. Each registered
@@ -2411,11 +2461,22 @@ async def _dispatch_internal(
         # cold-start (uniform) from learned (knn / gbm / ...) decisions
         # so downstream analysis can weight them differently. The
         # predictions map is the predictor's per-cell P(satisfy) over
-        # the post-filter candidate set, serialized as compact JSON.
+        # the post-filter candidate set. When time estimates are present,
+        # include them beside the predictions so the latency tie-break is
+        # observable without changing the schema.
         recommender_classifier_cell = decision.predictor_id or None
-        recommender_raw_output = (
-            json.dumps(decision.predictions, separators=(",", ":"))[:500] if decision.predictions else None
-        )
+        if decision.time_estimates_ms:
+            recommender_raw_output = json.dumps(
+                {
+                    "predictions": decision.predictions,
+                    "time_estimates_ms": decision.time_estimates_ms,
+                },
+                separators=(",", ":"),
+            )[:500]
+        else:
+            recommender_raw_output = (
+                json.dumps(decision.predictions, separators=(",", ":"))[:500] if decision.predictions else None
+            )
         recommender_source = "router"
         # Persist the prompt embedding for the kNN predictor's training
         # corpus. None when the noop embedding provider is selected.
@@ -4084,6 +4145,9 @@ def _log_attempt(
     # pass-through), which we record as such rather than fabricating
     # an effective mode.
     effective_routing_mode = _effective_routing_mode_context.get()
+    traffic_kind = _traffic_kind_context.get()
+    if peer_quality_capture is not None and peer_quality_capture.injected_fired:
+        traffic_kind = "peer_quality_capture"
     entry = UsageLogEntry(
         ts_start=ts_start,
         ts_end=ts_end,
@@ -4119,6 +4183,7 @@ def _log_attempt(
         recommender_source=recommender_source,
         prompt_embedding=prompt_embedding,
         effective_routing_mode=effective_routing_mode,
+        traffic_kind=traffic_kind,
     )
     request_id = usage_log.record(entry)
     if peer_quality_capture is not None and peer_quality_capture.nonce:

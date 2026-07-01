@@ -187,6 +187,28 @@ def test_router_fields_persist(tmp_path: Path) -> None:
     log.close()
 
 
+def test_traffic_kind_persists(tmp_path: Path) -> None:
+    log = UsageLog(tmp_path / "u.sqlite")
+    rowid = log.record(_entry(traffic_kind="quota_explore"))
+    conn = sqlite3.connect(tmp_path / "u.sqlite")
+    (traffic_kind,) = conn.execute(
+        "SELECT traffic_kind FROM requests WHERE id = ?",
+        (rowid,),
+    ).fetchone()
+    assert traffic_kind == "quota_explore"
+    log.close()
+
+
+def test_traffic_kind_index_exists(tmp_path: Path) -> None:
+    log = UsageLog(tmp_path / "u.sqlite")
+    log.record(_entry())
+    conn = sqlite3.connect(tmp_path / "u.sqlite")
+    indices = conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='requests'").fetchall()
+    names = {n for (n,) in indices}
+    assert "idx_requests_traffic_kind" in names
+    log.close()
+
+
 def test_pass_through_request_records_requested_equals_served(tmp_path: Path) -> None:
     log = UsageLog(tmp_path / "u.sqlite")
     rowid = log.record(

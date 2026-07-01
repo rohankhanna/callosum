@@ -26,6 +26,12 @@ from pathlib import Path
 from typing import Any
 from urllib import error, request
 
+from callosum.config import load_config
+from callosum.usage_diagnostic import (
+    render_recent_turns_json,
+    render_token_time_series_json,
+)
+
 DEFAULT_BASE_URL = "http://127.0.0.1:8765"
 DEFAULT_SYSTEMD_UNIT = "system-dependency-callosum.service"
 
@@ -220,6 +226,40 @@ def cmd_review(args: argparse.Namespace) -> int:
         print(f"    accept:  git checkout main && git merge --no-ff {name}")
         print(f"    reject:  git branch -D {name}")
         print()
+    return 0
+
+
+def _default_config_path() -> Path:
+    return Path("~/.config/callosum/config.toml").expanduser()
+
+
+def cmd_usage_recent(args: argparse.Namespace) -> int:
+    config_path = args.config if args.config is not None else _default_config_path()
+    if not config_path.exists():
+        sys.exit(f"callosum CLI: config not found: {config_path}")
+    cfg = load_config(config_path)
+    usage_path = cfg.usage_log.path
+    if usage_path is None:
+        sys.exit("callosum CLI: usage_log.path is not configured.")
+    payload = render_recent_turns_json(usage_path, limit=args.limit)
+    _print(payload, pretty=not args.compact)
+    return 0
+
+
+def cmd_usage_series(args: argparse.Namespace) -> int:
+    config_path = args.config if args.config is not None else _default_config_path()
+    if not config_path.exists():
+        sys.exit(f"callosum CLI: config not found: {config_path}")
+    cfg = load_config(config_path)
+    usage_path = cfg.usage_log.path
+    if usage_path is None:
+        sys.exit("callosum CLI: usage_log.path is not configured.")
+    payload = render_token_time_series_json(
+        usage_path,
+        bucket=args.bucket,
+        limit=args.limit,
+    )
+    _print(payload, pretty=not args.compact)
     return 0
 
 
@@ -541,6 +581,67 @@ def build_parser() -> argparse.ArgumentParser:
             "inspect / accept / reject."
         ),
     ).set_defaults(func=cmd_review)
+
+    p_usage = sub.add_parser(
+        "usage",
+        help="Read-only usage-log diagnostics over recent turns.",
+        description=(
+            "Read the configured usage-log SQLite database directly and "
+            "print recent-turn token diagnostics. This surface is "
+            "read-only and works even when the daemon is down."
+        ),
+    )
+    pu = p_usage.add_subparsers(dest="subcommand", required=True)
+    recent = pu.add_parser(
+        "recent",
+        help="Show recent turns with approximate per-segment prompt-token attribution.",
+    )
+    recent.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        help="Number of recent turns to show (default: 10).",
+    )
+    recent.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Path to config.toml (default: ~/.config/callosum/config.toml).",
+    )
+    recent.add_argument(
+        "--compact",
+        action="store_true",
+        help="Emit one-line JSON instead of pretty-printed JSON.",
+    )
+    recent.set_defaults(func=cmd_usage_recent)
+    series = pu.add_parser(
+        "series",
+        help="Show token volume over time, grouped by routing-policy bucket.",
+    )
+    series.add_argument(
+        "--bucket",
+        choices=["hour", "day"],
+        default="day",
+        help="Time bucket size (default: day).",
+    )
+    series.add_argument(
+        "--limit",
+        type=int,
+        default=30,
+        help="Number of most recent buckets to show (default: 30).",
+    )
+    series.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Path to config.toml (default: ~/.config/callosum/config.toml).",
+    )
+    series.add_argument(
+        "--compact",
+        action="store_true",
+        help="Emit one-line JSON instead of pretty-printed JSON.",
+    )
+    series.set_defaults(func=cmd_usage_series)
 
     p_params = sub.add_parser("params", help="Per-cell inference parameter overrides.")
     pp = p_params.add_subparsers(dest="subcommand", required=True)

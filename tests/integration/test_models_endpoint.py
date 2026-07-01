@@ -88,6 +88,45 @@ def test_v1_models_selector_lookup() -> None:
         assert client.get("/v1/models/callosum:remote/model-a0g0:high").status_code == 404
 
 
+def test_v1_models_hides_hidden_raw_ids_but_resolves_explicit_pin() -> None:
+    class _HiddenReviewBackend(InMemoryFakeBackend):
+        @property
+        def model_metadata(self):  # type: ignore[override]
+            from callosum.cell_grid import ModelMetadata
+
+            return {
+                "model-a0e7": ModelMetadata(
+                    slug="model-a0e7",
+                    supported_in_api=True,
+                    visibility="list",
+                    priority=10,
+                    supported_reasoning_levels=("low",),
+                ),
+                "codex-auto-review": ModelMetadata(
+                    slug="codex-auto-review",
+                    supported_in_api=True,
+                    visibility="hide",
+                    priority=20,
+                    supported_reasoning_levels=("medium",),
+                ),
+            }
+
+    backend = _HiddenReviewBackend(
+        id="alpha",
+        advertised_models=frozenset({"model-a0e7", "codex-auto-review"}),
+    )
+    with TestClient(create_app(backends=[backend])) as client:
+        ids = {m["id"] for m in client.get("/v1/models").json()["data"]}
+        assert "codex-auto-review" not in ids
+        assert "callosum:remote/codex-auto-review:medium" not in ids
+        assert (
+            client.get(
+                "/v1/models/callosum:remote/codex-auto-review:medium"
+            ).status_code
+            == 200
+        )
+
+
 def test_v1_models_lookup_returns_advertised_one() -> None:
     backend = InMemoryFakeBackend(id="alpha", advertised_models=frozenset({"model-a0e7"}))
     with TestClient(create_app(backends=[backend])) as client:

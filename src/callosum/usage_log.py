@@ -239,6 +239,12 @@ END""",
     "ALTER TABLE peer_quality_capture_metrics ADD COLUMN injected_fired INTEGER",
     "ALTER TABLE peer_quality_capture_metrics ADD COLUMN subject_count INTEGER",
     "ALTER TABLE peer_quality_capture_metrics ADD COLUMN skip_reason TEXT",
+    # Forward-looking policy attribution axis. This records why a request
+    # existed or was modified from Callosum's perspective: normal operator
+    # traffic, canary baseline, quota exploration, or peer-quality capture.
+    # Pre-existing rows stay NULL and should be treated as legacy/unknown.
+    "ALTER TABLE requests ADD COLUMN traffic_kind TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_requests_traffic_kind ON requests(traffic_kind)",
 ]
 
 
@@ -284,6 +290,8 @@ class UsageLogEntry:
     # before this field landed; treat NULL as "auto" for analytical
     # purposes (most pre-existing traffic is auto-mode).
     effective_routing_mode: str | None = None
+    # Policy-purpose bucket used by usage diagnostics. NULL means legacy row.
+    traffic_kind: str | None = None
     # Complexity classification from embedded instruction in auto-learning requests.
     # 1, 2, or 3; NULL = not classified (non-auto-learning or marker not found).
     prompt_complexity_class: int | None = None
@@ -447,6 +455,7 @@ class UsageLog:
             entry.recommender_source,
             entry.prompt_embedding,
             entry.effective_routing_mode,
+            entry.traffic_kind,
         )
         with self._lock:
             cursor = self._conn.execute(
@@ -470,13 +479,13 @@ class UsageLog:
                     prompt_complexity_class, prompt_text, response_text,
                     recommender_classifier_cell, recommender_raw_output,
                     recommender_source, prompt_embedding,
-                    effective_routing_mode
+                    effective_routing_mode, traffic_kind
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?
+                    ?, ?
                 )
                 """,
                 row,

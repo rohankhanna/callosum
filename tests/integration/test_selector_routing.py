@@ -234,6 +234,98 @@ def test_not_live_lane_returns_actionable_503(tmp_path: Path) -> None:
         state.close()
 
 
+def test_hidden_model_excluded_from_auto_but_reachable_by_explicit_pin(tmp_path: Path) -> None:
+    class _HiddenReviewBackend(InMemoryFakeBackend):
+        @property
+        def model_metadata(self):  # type: ignore[override]
+            from callosum.cell_grid import ModelMetadata
+
+            return {
+                "model-a0e7": ModelMetadata(
+                    slug="model-a0e7",
+                    supported_in_api=True,
+                    visibility="list",
+                    priority=10,
+                    supported_reasoning_levels=("low",),
+                ),
+                "codex-auto-review": ModelMetadata(
+                    slug="codex-auto-review",
+                    supported_in_api=True,
+                    visibility="hide",
+                    priority=20,
+                    supported_reasoning_levels=("medium",),
+                ),
+            }
+
+    backend = _HiddenReviewBackend(
+        id="remote",
+        advertised_models=frozenset({"model-a0e7", "codex-auto-review"}),
+    )
+    state = OperatorState(tmp_path / "op.sqlite")
+    state.set_routing("auto")
+    try:
+        app = create_app(backends=[backend], operator_state=state)
+        with TestClient(app) as client:
+            auto_response = client.post(
+                "/v1/responses",
+                json={"model": "auto-learning", "input": []},
+            )
+            explicit_response = client.post(
+                "/v1/responses",
+                json={
+                    "model": "callosum:remote/codex-auto-review:medium",
+                    "input": [],
+                },
+            )
+        assert auto_response.status_code == 200, auto_response.text
+        assert auto_response.json()["model"] == "model-a0e7"
+        assert explicit_response.status_code == 200, explicit_response.text
+        assert explicit_response.json()["model"] == "codex-auto-review"
+    finally:
+        state.close()
+
+
+def test_hidden_model_explicit_pin_with_unsupported_effort_returns_503(tmp_path: Path) -> None:
+    class _HiddenReviewBackend(InMemoryFakeBackend):
+        @property
+        def model_metadata(self):  # type: ignore[override]
+            from callosum.cell_grid import ModelMetadata
+
+            return {
+                "codex-auto-review": ModelMetadata(
+                    slug="codex-auto-review",
+                    supported_in_api=True,
+                    visibility="hide",
+                    priority=20,
+                    supported_reasoning_levels=("medium",),
+                ),
+            }
+
+    backend = _HiddenReviewBackend(
+        id="remote",
+        advertised_models=frozenset({"codex-auto-review"}),
+    )
+    state = OperatorState(tmp_path / "op.sqlite")
+    state.set_routing("auto")
+    try:
+        app = create_app(backends=[backend], operator_state=state)
+        with TestClient(app) as client:
+            response = client.post(
+                "/v1/responses",
+                json={
+                    "model": "callosum:remote/codex-auto-review:high",
+                    "input": [],
+                },
+            )
+        assert response.status_code == 503, response.text
+        detail = response.json()["detail"]
+        assert "not available yet" in detail
+        assert "codex-auto-review" in detail
+        assert "high" in detail
+    finally:
+        state.close()
+
+
 def test_invalid_selectors_return_400(tmp_path: Path) -> None:
     remote = _make_backend(id="remote", kind="codex_auth_vault")
     local = _make_backend(id="local", kind="litellm_gateway")
