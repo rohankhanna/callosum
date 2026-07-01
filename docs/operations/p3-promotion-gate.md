@@ -93,13 +93,23 @@ labeler is shadow-mode only and never switches live routing.
 ### 4.3 Programmatic / from work tracker `--check`
 
 ```bash
-# work tracker release condition () --check command:
-scripts/check_p3_gate.py \
+# work tracker release condition ( / ) --check command:
+~/Desktop/callosum/.venv/bin/python \
+  ~/Desktop/callosum/scripts/check_p3_gate.py \
   --db-path ~/.local/state/callosum/requests.sqlite \
   --apply-labels \
   --checkpoint-path ~/.local/state/callosum/peer_quality_labels.ckpt
 # exit 0 -> condition met (flip eligible); exit 1 -> not met
 ```
+
+> **Note — work tracker `--check` runs in a bare shell.** work tracker executes the
+> `--check` command directly (system interpreter via the script shebang, from
+> an unspecified working directory). It does **not** inherit this project's
+> venv, so `scripts/check_p3_gate.py …` alone fails with `ModuleNotFoundError:
+> No module named callosum`. Always prefix the command with the absolute
+> `.venv/bin/python` and use absolute paths — exactly as above. The same
+> caveat applies to `scripts/reset_peer_quality_regime.py` if it is ever wired
+> as a probe.
 
 ### 4.4 Output schema (JSON)
 
