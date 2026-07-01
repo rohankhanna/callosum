@@ -102,6 +102,10 @@ class RoutingDecision:
     # of the compatible set ordered the same way the selector ordered
     # them. The dispatch layer walks this on 5xx / backend errors.
     candidates: tuple[Cell, ...] = ()
+    # Optional per-cell p50 latency estimates in milliseconds for the same
+    # post-filter candidate set. Populated only when the time estimator is
+    # wired and used as a conservative selector tie-break.
+    time_estimates_ms: dict[str, float] = field(default_factory=dict)
     # Provenance: which predictor produced the decision. Lets the request
     # log distinguish "uniform-prior cold-start" from "k-NN with N labels"
     # etc., so downstream consumers know how to weight a given decision.
@@ -178,6 +182,8 @@ class CellSelector(Protocol):
         self,
         predictions: dict[Cell, float],
         capabilities: dict[Cell, CellCapabilities],
+        *,
+        time_estimates_ms: dict[Cell, float] | None = None,
     ) -> Cell: ...
 
 

@@ -165,3 +165,57 @@ def test_selector_cost_still_dominates_parameter_count() -> None:
         ),
     }
     assert CostWeightedSelector().select(predictions, caps) == cheap_small
+
+
+def test_selector_uses_time_estimate_to_break_same_cost_same_quality_tie() -> None:
+    slow = Cell(model="slow", reasoning_effort="medium")
+    fast = Cell(model="fast", reasoning_effort="medium")
+    predictions = {slow: 0.8, fast: 0.8}
+    caps = {
+        slow: CellCapabilities(
+            context_window=128_000,
+            modalities=frozenset({"text"}),
+            supports_tools=True,
+            cost_rank=0,
+            parameter_count=10_000_000_000,
+        ),
+        fast: CellCapabilities(
+            context_window=128_000,
+            modalities=frozenset({"text"}),
+            supports_tools=True,
+            cost_rank=0,
+            parameter_count=5_000_000_000,
+        ),
+    }
+    chosen = CostWeightedSelector().select(
+        predictions,
+        caps,
+        time_estimates_ms={slow: 900.0, fast: 200.0},
+    )
+    assert chosen == fast
+
+
+def test_selector_does_not_trade_quality_for_speed_within_cost_tier() -> None:
+    better = Cell(model="better", reasoning_effort="medium")
+    faster = Cell(model="faster", reasoning_effort="medium")
+    predictions = {better: 0.9, faster: 0.7}
+    caps = {
+        better: CellCapabilities(
+            context_window=128_000,
+            modalities=frozenset({"text"}),
+            supports_tools=True,
+            cost_rank=0,
+        ),
+        faster: CellCapabilities(
+            context_window=128_000,
+            modalities=frozenset({"text"}),
+            supports_tools=True,
+            cost_rank=0,
+        ),
+    }
+    chosen = CostWeightedSelector().select(
+        predictions,
+        caps,
+        time_estimates_ms={better: 900.0, faster: 200.0},
+    )
+    assert chosen == better

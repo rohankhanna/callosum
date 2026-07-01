@@ -28,6 +28,8 @@ from callosum.routing.protocols import (
 )
 from callosum.routing.router import Router
 from callosum.routing.selector.cost_weighted import CostWeightedSelector
+from callosum.routing.time_estimator import TimeUsageEstimator
+from callosum.routing.usage_estimate import OutputTokenForecaster
 
 
 def _bge_provider_factory() -> EmbeddingProvider:
@@ -71,6 +73,9 @@ _SELECTOR_IMPLS: dict[str, Callable[[], CellSelector]] = {
 def build_router(
     config: RoutingConfig,
     capabilities_of: Callable[[Cell], CellCapabilities],
+    *,
+    time_estimator: TimeUsageEstimator | None = None,
+    output_forecaster: OutputTokenForecaster | None = None,
 ) -> Router:
     """Resolve string ids → concrete impls → wired Router."""
     try:
@@ -94,4 +99,6 @@ def build_router(
         predictor=predictor_cls(),
         selector=selector_cls(),
         capability_filter=CapabilityFilter(capabilities_of=capabilities_of),
+        time_estimator=time_estimator,
+        output_forecaster=output_forecaster,
     )

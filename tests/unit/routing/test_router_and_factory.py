@@ -7,9 +7,13 @@ import asyncio
 import pytest
 
 from callosum.cell_grid import Cell
+from callosum.routing.capability import CapabilityFilter
+from callosum.routing.embedding.noop import NoopEmbeddingProvider
 from callosum.routing.factory import RoutingConfig, build_router
-from callosum.routing.protocols import CellCapabilities
-from callosum.routing.router import NoCompatibleCellError
+from callosum.routing.protocols import CellCapabilities, LabeledRow, PromptFeatures
+from callosum.routing.router import NoCompatibleCellError, Router
+from callosum.routing.selector.cost_weighted import CostWeightedSelector
+from callosum.routing.usage_estimate import Estimate, EstimateInput, OutputTokenForecast
 
 # Hand-built capabilities map for testing.
 LOCAL = Cell(model="local-llm", reasoning_effort="default")
@@ -40,6 +44,45 @@ CAPS = {
 
 def _build():
     return build_router(RoutingConfig(), capabilities_of=CAPS.__getitem__)
+
+
+class _FixedPredictor:
+    id = "fixed"
+
+    def __init__(self, scores: dict[Cell, float]) -> None:
+        self._scores = scores
+
+    def predict(self, features: PromptFeatures, candidates: list[Cell]) -> dict[Cell, float]:
+        del features
+        return {cell: self._scores[cell] for cell in candidates}
+
+    def reload(self, labeled: list[LabeledRow]) -> None:
+        del labeled
+
+
+class _FixedOutputForecaster:
+    def forecast(self, cell: Cell, input_tokens: int) -> OutputTokenForecast:
+        del cell, input_tokens
+        return OutputTokenForecast(p50=100.0, p95=100.0, source="fixed", n_obs=1)
+
+
+class _FixedTimeEstimator:
+    id = "fixed-time"
+    unit = "ms"
+
+    def __init__(self, estimates: dict[Cell, float]) -> None:
+        self._estimates = estimates
+
+    def estimate(self, inp: EstimateInput) -> Estimate:
+        point = self._estimates[inp.cell]
+        return Estimate(
+            point=point,
+            low=point,
+            high=point,
+            unit="ms",
+            source="fixed",
+            verifiable=True,
+        )
 
 
 def test_factory_defaults_yield_a_working_cold_start_router() -> None:
@@ -179,4 +222,43 @@ def test_decision_carries_predictions_keyed_by_cell_string() -> None:
     assert decision.predictions == {
         "local-llm default": 0.5,
         "remote-mid medium": 0.5,
+    }
+
+
+def test_router_wires_time_estimates_into_bounded_selector_preference() -> None:
+    slow = Cell(model="same-cost-slow", reasoning_effort="medium")
+    fast = Cell(model="same-cost-fast", reasoning_effort="medium")
+    caps = {
+        slow: CellCapabilities(
+            context_window=128_000,
+            modalities=frozenset({"text"}),
+            supports_tools=False,
+            cost_rank=0,
+        ),
+        fast: CellCapabilities(
+            context_window=128_000,
+            modalities=frozenset({"text"}),
+            supports_tools=False,
+            cost_rank=0,
+        ),
+    }
+    router = Router(
+        embedding=NoopEmbeddingProvider(),
+        predictor=_FixedPredictor({slow: 0.82, fast: 0.80}),
+        selector=CostWeightedSelector(),
+        capability_filter=CapabilityFilter(capabilities_of=caps.__getitem__),
+        time_estimator=_FixedTimeEstimator({slow: 900.0, fast: 200.0}),  # type: ignore[arg-type]
+        output_forecaster=_FixedOutputForecaster(),  # type: ignore[arg-type]
+    )
+    decision = asyncio.run(
+        router.route({"messages": [{"role": "user", "content": "hello"}]}, [slow, fast])
+    )
+    assert decision.cell == fast
+    assert decision.predictions == {
+        "same-cost-slow medium": 0.82,
+        "same-cost-fast medium": 0.8,
+    }
+    assert decision.time_estimates_ms == {
+        "same-cost-slow medium": 900.0,
+        "same-cost-fast medium": 200.0,
     }

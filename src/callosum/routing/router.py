@@ -22,6 +22,8 @@ from callosum.routing.protocols import (
     QualityPredictor,
     RoutingDecision,
 )
+from callosum.routing.time_estimator import TimeUsageEstimator
+from callosum.routing.usage_estimate import EstimateInput, OutputTokenForecaster
 
 
 class NoCompatibleCellError(RuntimeError):
@@ -86,11 +88,15 @@ class Router:
         predictor: QualityPredictor,
         selector: CellSelector,
         capability_filter: CapabilityFilter,
+        time_estimator: TimeUsageEstimator | None = None,
+        output_forecaster: OutputTokenForecaster | None = None,
     ) -> None:
         self._embedding = embedding
         self._predictor = predictor
         self._selector = selector
         self._filter = capability_filter
+        self._time_estimator = time_estimator
+        self._output_forecaster = output_forecaster
 
     async def route(self, body: dict[str, Any], cells: list[Cell]) -> RoutingDecision:
         """Run the pipeline once for an incoming request body.
@@ -152,6 +158,7 @@ class Router:
             c: predictions[c] * _window_fit_factor(capabilities_map[c].context_window, features.tokens)
             for c in compatible
         }
+        time_estimates = self._estimate_time_ms(compatible, features.tokens)
         # When window-fit pushes EVERY cell below the 0.5 bar, the selector's
         # "cheapest best-effort" fallback would ignore fit — the wrong call when
         # fit is the reason nothing qualifies. Override with the best-fitting
@@ -166,7 +173,11 @@ class Router:
                 ),
             )
         else:
-            chosen = self._selector.select(scaled_predictions, capabilities_map)
+            chosen = self._selector.select(
+                scaled_predictions,
+                capabilities_map,
+                time_estimates_ms=time_estimates,
+            )
 
         # Candidate ordering for cell-retry: primary first, then the rest
         # ranked by scaled prediction (so retries also prefer fitting
@@ -186,5 +197,24 @@ class Router:
             # readable downstream.
             predictions={f"{c.model} {c.reasoning_effort}": p for c, p in predictions.items()},
             candidates=(chosen, *rest),
+            time_estimates_ms={
+                f"{c.model} {c.reasoning_effort}": eta for c, eta in time_estimates.items()
+            },
             predictor_id=self._predictor.id,
         )
+
+    def _estimate_time_ms(self, cells: list[Cell], input_tokens: int) -> dict[Cell, float]:
+        if self._time_estimator is None or self._output_forecaster is None:
+            return {}
+        estimates: dict[Cell, float] = {}
+        for cell in cells:
+            forecast = self._output_forecaster.forecast(cell, input_tokens)
+            estimate = self._time_estimator.estimate(
+                EstimateInput(
+                    cell=cell,
+                    input_tokens=input_tokens,
+                    output=forecast,
+                )
+            )
+            estimates[cell] = estimate.point
+        return estimates

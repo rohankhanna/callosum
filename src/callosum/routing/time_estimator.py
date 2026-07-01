@@ -44,9 +44,10 @@ RELATION TO THE STALL GUARD: CALLOSUM_LOCAL_FIRST_BYTE_TIMEOUT_S /
 ..._IDLE_TIMEOUT_S are static GUARD thresholds, not estimates. This
 module is a forward ESTIMATE; those guards could later become data-driven
 per-cell (consume this estimator's POST-HOC per-cell p95), but that is a
-consumer, not this module's scope. The pre-flight ETA range and any
-scheduling tie-break are likewise documented follow-ups, not wired here —
-the same way the cost session deferred /status and bandit-reward wiring.
+future consumer, not this module's scope. The router now consumes the
+pre-flight p50 estimate as a bounded scheduling tie-break inside the same cost
+and quality bucket; the pre-flight ETA range is exposed separately by
+/v1/eta.
 """
 
 from __future__ import annotations
