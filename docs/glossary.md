@@ -70,6 +70,15 @@ A single turn's output may contain any combination of the three.
 | **Quality signal** | `quality_score` (-1/0/+1) per request, populated by a labeler. When empty, the predictor is uniform and the cost selector collapses all traffic to one cell. |
 | **Peer-quality opinion** | An in-band judgment one cell emits about a *prior different-cell text turn* in the same session, wrapped in a `<<qop ...>>` marker (message-text channel), stripped before the user sees it. Feeds the cross-model quality matrix. |
 
+## Hidden payload vocabulary
+
+| Term | Meaning |
+|---|---|
+| **Hidden Model Payload** | Model-visible content that Callosum intentionally injects upstream but keeps hidden from Codex/UI on the way back down. Examples: provenance tags, hidden critique instructions, nonce-bearing opinion markers. |
+| **Veiling** | The mechanism that makes a Hidden Model Payload invisible to the client-facing side while still present in the upstream model-visible envelope. |
+| **Private Control State** | Callosum-only sidecar state that never leaves the proxy. Examples: routing decision, token ledger, judgment debt, request ids, transform provenance, experiment cohort. |
+| **Truth Log** | The durable log record that stores the exact upstream model-visible payload, the sanitized client-visible transcript, and the transform metadata needed to reconstruct what was sent. |
+
 ## Overloaded names — disambiguate explicitly
 
 | Term | Two meanings |

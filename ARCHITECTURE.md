@@ -191,7 +191,10 @@ All paths are under `src/callosum/`.
   reward substrate: `peer_quality_opinions` stores nonce-validated,
   per-session judge-to-subject model opinions separately from request
   rows so routing behavior can remain unchanged while the matrix
-  accumulates.
+  accumulates. This is also the repo's Truth Log surface: it must
+  preserve the exact upstream model-visible payload, the sanitized
+  client-visible transcript, and enough transform metadata to
+  reconstruct what Callosum actually sent.
 - `peer_quality.py` — parser and fail-closed stripper for hidden
   in-band `<<qop ...>>` quality-opinion markers. It records only
   markers carrying the current request nonce; wrong-nonce markers are
@@ -202,6 +205,8 @@ All paths are under `src/callosum/`.
   same-session assistant outputs from the usage log, wraps only those
   prior non-self messages with model/effort provenance tags in the
   outbound upstream body, and adds a nonce-bearing audit instruction.
+  Those injected tags/instructions are Hidden Model Payload: visible to
+  the upstream model, hidden from Codex/UI by Callosum's veiling path.
   Injection is skipped when the projected outbound body would exceed
   the selected cell's known backend context window after the router
   safety margin; the added audit/provenance overhead is also capped

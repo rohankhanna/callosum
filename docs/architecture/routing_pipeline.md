@@ -17,10 +17,16 @@ strategies, not multiple competing routers.
 3. Read intent — requested `(model, effort)` from the body.
 4. `parse_selector` — a `callosum:` id → `SelectorDecision` (strategy or pin);
    non-`callosum:` → legacy pass-through; malformed → 400.
-5. Snapshot live cells — `live_cells_fn()`.
+5. Snapshot live cells — `live_cells_fn(include_hidden=False)` for automatic
+   and strategy routing; concrete selector pins call it with
+   `include_hidden=True` so hidden-but-supported upstream lanes are reachable
+   only when explicitly named.
 6. **Gate stack** narrows the candidate pool *before* the router:
    operator/selector mode (backend-kind filter) → canary redirect → concrete
-   pin → denylist. Empty pool → 503 (specific reason).
+   pin → denylist. Hidden cells never enter free routing; an explicit pin may
+   target them and then either dispatch normally or return a specific 503 if no
+   backend serves the requested model/effort. Empty pool → 503 (specific
+   reason).
 7. **`router.route(body, cells_now)`** — the one decision (`routing/router.py`):
    `extract_features` (+ embedding) → `CapabilityFilter` (empty → 400) →
    `QualityPredictor.predict` (uniform=0.5 / knn=learned) →
