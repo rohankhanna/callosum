@@ -95,7 +95,7 @@ CREATE TABLE IF NOT EXISTS peer_quality_opinions (
     subject_request_id INTEGER REFERENCES requests(id) ON DELETE CASCADE,
     subject_model TEXT NOT NULL,
     subject_reasoning_effort TEXT,
-    score INTEGER NOT NULL CHECK (score IN (-1, 0, 1)),
+    score INTEGER NOT NULL CHECK (score IN (-3, -2, -1, 0, 1, 2, 3)),
     nonce TEXT NOT NULL,
     reason TEXT,
     raw_marker TEXT NOT NULL,
@@ -383,6 +383,87 @@ class UsageLog:
                 # where the old name is gone (renamed) or the new name exists.
                 if "duplicate column" in msg or "no such column" in msg or "there is already another column" in msg:
                     continue
+                raise
+        # SQLite cannot ALTER a CHECK constraint, so widening the peer-quality
+        # opinion scale from {-1,0,1} to {-3..+3} is a dedicated table rebuild
+        # (idempotent via sqlite_master inspection). .
+        self._widen_peer_quality_score_scale()
+
+    def _widen_peer_quality_score_scale(self) -> None:
+        """Rebuild peer_quality_opinions with a widened score CHECK, once.
+
+        SQLite cannot ALTER a CHECK constraint. The old schema constrains
+        score IN (-1, 0, 1); the spectrum scale () widens it
+        to score IN (-3, -2, -1, 0, 1, 2, 3). This rebuilds the table in a
+        single transaction (CREATE _new with the widened CHECK, copy rows, DROP
+        old, RENAME, recreate indexes). Idempotent: inspects sqlite_master
+        and no-ops if the old 3-point CHECK is not present (fresh DBs get the new
+        CHECK from _SCHEMA; already-widened DBs skip). Any pre-existing rows
+        are preserved (old -1/0/1 values remain valid under the new CHECK); a
+        separate regime-reset job clears stale-regime opinions before re-soak.
+        """
+        row = self._conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='peer_quality_opinions'"
+        ).fetchone()
+        if not row:
+            return
+        ddl = " ".join((row[0] or "").split())
+        # Old constraint text (normalized). New/widened or no-check DBs skip.
+        if "score IN (-1, 0, 1)" not in ddl:
+            return
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                self._conn.execute(
+                    """
+                    CREATE TABLE peer_quality_opinions__new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        request_id INTEGER NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+                        session_id TEXT,
+                        judge_backend_id TEXT NOT NULL,
+                        judge_model TEXT NOT NULL,
+                        judge_reasoning_effort TEXT,
+                        subject_request_id INTEGER REFERENCES requests(id) ON DELETE CASCADE,
+                        subject_model TEXT NOT NULL,
+                        subject_reasoning_effort TEXT,
+                        score INTEGER NOT NULL CHECK (score IN (-3, -2, -1, 0, 1, 2, 3)),
+                        nonce TEXT NOT NULL,
+                        reason TEXT,
+                        raw_marker TEXT NOT NULL,
+                        created_at REAL NOT NULL
+                    )
+                    """
+                )
+                self._conn.execute(
+                    "INSERT INTO peer_quality_opinions__new "
+                    "(id, request_id, session_id, judge_backend_id, judge_model, "
+                    "judge_reasoning_effort, subject_request_id, subject_model, "
+                    "subject_reasoning_effort, score, nonce, reason, raw_marker, created_at) "
+                    "SELECT id, request_id, session_id, judge_backend_id, judge_model, "
+                    "judge_reasoning_effort, subject_request_id, subject_model, "
+                    "subject_reasoning_effort, score, nonce, reason, raw_marker, created_at "
+                    "FROM peer_quality_opinions"
+                )
+                self._conn.execute("DROP TABLE peer_quality_opinions")
+                self._conn.execute(
+                    "ALTER TABLE peer_quality_opinions__new RENAME TO peer_quality_opinions"
+                )
+                self._conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_peer_quality_opinions_request_id "
+                    "ON peer_quality_opinions(request_id)"
+                )
+                self._conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_peer_quality_matrix "
+                    "ON peer_quality_opinions(judge_model, judge_reasoning_effort, "
+                    "subject_model, subject_reasoning_effort)"
+                )
+                self._conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_peer_quality_opinions_subject_request_id "
+                    "ON peer_quality_opinions(subject_request_id)"
+                )
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
                 raise
 
     @property

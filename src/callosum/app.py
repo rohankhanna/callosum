@@ -481,16 +481,19 @@ def _wrap_peer_quality_subject(text: str, subject: _PeerQualitySubject) -> str:
     return f"<{label}>{text}</{label}>"
 
 
-_QOP_EXAMPLE_SCORES = ("-1", "0", "+1")
+_QOP_EXAMPLE_SCORES = ("-3", "-2", "-1", "0", "+1", "+2", "+3")
 
 
 def _example_qop_score(nonce: str, request_id: int) -> str:
-    """Rotate the example marker's score across -1/0/+1 instead of a fixed +1.
+    """Rotate the example marker's score across the spectrum scale (-3..+3).
 
     A hardcoded score=+1 example was a systematic anchor that biased judges
     toward +1 (: embedded labels were ~90% +1, unlearnable —
-    the KNN lost to the majority-class baseline). Rotation is deterministic per
-    (nonce, subject) so the budgeting estimate and the actually-injected
+    the KNN lost to the majority-class baseline). The honor-code fix
+    overcorrected to a 0-dominated neutral class (). Rotation
+    over the graduated -3..+3 scale avoids any systematic anchor AND the wider
+    scale lets judges express graduated confidence. Rotation is deterministic
+    per (nonce, subject) so the budgeting estimate and the actually-injected
     instruction agree token-for-token (exact usage-subtract stays exact).
     """
     idx = (sum(ord(c) for c in nonce) + request_id) % len(_QOP_EXAMPLE_SCORES)
@@ -512,15 +515,21 @@ def _peer_quality_instruction(nonce: str, subjects: dict[str, _PeerQualitySubjec
     # message (_append_peer_quality_instruction), and (c) pre-fills each
     # subject CONCRETELY so the model only fills score+reason — template
     # placeholders are ignored on tool turns, concrete markers are emitted.
-    # The score DEFINITION is a peer-comparison honor code: rate the prior
-    # message RELATIVE TO WHAT THE JUDGE ITSELF COULD PRODUCE (+1 better / 0
-    # too-close / -1 worse). An absolute "is it good?" rating was lenient —
-    # ~90% +1, near single-class, so the KNN lost to the majority baseline
-    # (). The self-relative frame forces discrimination AND
-    # directly encodes the routing signal (is the subject cell better than the
-    # judge cell here). The example score is rotated (_example_qop_score) so it
-    # is not a systematic +1 anchor. FUTURE: continuous/spectrum score + judge-
-    # strength-aware aggregation (see work tracker).
+    # The score DEFINITION is a peer-comparison honor code on a graduated
+    # spectrum: rate the prior message RELATIVE TO WHAT THE JUDGE ITSELF COULD
+    # PRODUCE on a -3..+3 scale (+3 much better .. +1 slightly better / 0 exactly
+    # even / -1 slightly worse .. -3 much worse). An absolute "is it good?"
+    # 3-point rating was lenient — ~90% +1, near single-class, so the KNN lost
+    # to the majority baseline (); a 3-point honor-code fix then
+    # overcorrected to a 0-dominated neutral class (). The
+    # graduated scale + a high-bar 0 (most real comparisons have a net difference
+    # — commit to a direction) gives judges room to express graduated confidence
+    # so the cross-judge average is a stable, confidence-weighted net verdict.
+    # The self-relative frame forces discrimination AND directly encodes the
+    # routing signal (is the subject cell better than the judge cell here). The
+    # example score is rotated (_example_qop_score) so it is not a systematic
+    # anchor. The downstream label stays {-1,0,1} via the labeler's
+    # sign-bucketing; only the emitted opinion widens.
     markers = "\n".join(_peer_quality_marker_line(nonce, s) for s in subjects.values()) or (
         f"<<qop nonce={nonce} subject=model|effort subject_request_id=request_id score=0 reason=short>>"
     )
@@ -529,9 +538,12 @@ def _peer_quality_instruction(nonce: str, subjects: dict[str, _PeerQualitySubjec
         "normal action this turn — INCLUDING if you make a tool call — also emit, as a visible text message "
         "(NOT inside the tool call), the marker(s) below with the exact nonce/subject/request_id shown but "
         "with score and reason REPLACED by your honest peer judgement of that prior message. "
-        "Honor code: judge it RELATIVE TO WHAT YOU YOURSELF COULD PRODUCE for the same request — "
-        "score=+1 means it is BETTER than you could have done, score=0 means neutral or too close to call, "
-        "score=-1 means WORSE than you could have done. Be discriminating and honest; do NOT default to +1. "
+        "Honor code: judge it RELATIVE TO WHAT YOU YOURSELF COULD PRODUCE for the same request, on a "
+        "graduated scale — score=+3 much better, +2 better, +1 slightly better than you could have done; "
+        "score=0 means EXACTLY even with no net difference either way; score=-1 slightly worse, -2 worse, "
+        "-3 much worse than you could have done. Most real comparisons have SOME net difference, so commit "
+        "to a direction rather than defaulting to 0: use +1/-1 for a slight net difference, +2/-2 for a "
+        "clear one, +3/-3 for a marked one. Be discriminating and honest; do NOT default to +1 or to 0. "
         "The reason is a few specific words naming the concrete strength or flaw. "
         "Do NOT copy the example score/reason verbatim:\n"
         f"{markers}\n"
