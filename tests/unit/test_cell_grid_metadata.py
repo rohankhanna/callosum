@@ -61,6 +61,15 @@ def test_live_completion_models_excludes_hidden() -> None:
     assert out == ("model-a0e7",)
 
 
+def test_live_completion_models_can_include_hidden_for_explicit_pin() -> None:
+    metadata = {
+        "model-a0e7": _md("model-a0e7", priority=16, supported_in_api=True, visibility="list"),
+        "codex-auto-review": _md("codex-auto-review", priority=43, supported_in_api=True, visibility="hide"),
+    }
+    out = live_completion_models_from_metadata(metadata, include_hidden=True)
+    assert out == ("model-a0e7", "codex-auto-review")
+
+
 def test_live_completion_models_excludes_not_supported_in_api() -> None:
     """`supported_in_api=False` excludes the model even if visibility says 'list'."""
     metadata = {
@@ -141,6 +150,33 @@ def test_build_cells_from_metadata_orders_by_priority() -> None:
     }
     cells = build_cells_from_metadata(metadata)
     assert [c.model for c in cells] == ["gpt-strongest", "gpt-mid", "gpt-weakest"]
+
+
+def test_build_cells_from_metadata_can_include_hidden_for_explicit_pin() -> None:
+    metadata = {
+        "gpt-visible": _md(
+            "gpt-visible",
+            priority=1,
+            supported_in_api=True,
+            visibility="list",
+            levels=("low",),
+        ),
+        "codex-auto-review": _md(
+            "codex-auto-review",
+            priority=2,
+            supported_in_api=True,
+            visibility="hide",
+            levels=("medium",),
+        ),
+    }
+    default_cells = build_cells_from_metadata(metadata)
+    assert {c.model for c in default_cells} == {"gpt-visible"}
+
+    explicit_cells = build_cells_from_metadata(metadata, include_hidden=True)
+    assert {c.as_tuple() for c in explicit_cells} == {
+        ("gpt-visible", "low"),
+        ("codex-auto-review", "medium"),
+    }
 
 
 def test_build_cells_from_metadata_handles_empty() -> None:

@@ -165,14 +165,17 @@ def live_completion_models(model_pool: frozenset[str] | set[str]) -> tuple[str, 
 
 def live_completion_models_from_metadata(
     metadata: dict[str, ModelMetadata],
+    *,
+    include_hidden: bool = False,
 ) -> tuple[str, ...]:
     """Filter and rank models using upstream-provided metadata when present.
 
     Filter rules (each applied only when the field is populated):
       * `supported_in_api == True`     — model must be callable via this surface.
-      * `visibility == 'list'`         — model is meant to be user-routable;
-                                          excludes 'hide' models like
-                                          codex-auto-review.
+      * `visibility == 'list'`         — model is meant to be user-routable.
+                                          Hidden models are excluded unless
+                                          `include_hidden=True`, which is
+                                          reserved for explicit selector pins.
 
     Rank: ascending `priority` (lower == stronger per upstream's convention).
     Models missing `priority` sort to the end via a high sentinel.
@@ -185,7 +188,11 @@ def live_completion_models_from_metadata(
     for slug, m in metadata.items():
         if m.supported_in_api is False:
             continue
-        if m.visibility is not None and m.visibility != "list":
+        if (
+            not include_hidden
+            and m.visibility is not None
+            and m.visibility != "list"
+        ):
             continue
         # If neither supported_in_api nor visibility was given, fall back
         # to the name-shape filter so we don't accidentally route to
@@ -218,15 +225,21 @@ def reasoning_levels_for(
 
 def build_cells_from_metadata(
     metadata: dict[str, ModelMetadata],
+    *,
+    include_hidden: bool = False,
 ) -> list[Cell]:
     """Build the cell grid using per-model `supported_reasoning_levels` from
     upstream when available; falls back to the global REASONING_LEVELS for
     any model whose metadata is missing or empty.
 
     Filtering matches `live_completion_models_from_metadata` so the cell
-    grid and the model list stay consistent.
+    grid and the model list stay consistent. Hidden models are included only
+    for explicit selector pins, never for automatic/free routing.
     """
-    completion_slugs = live_completion_models_from_metadata(metadata)
+    completion_slugs = live_completion_models_from_metadata(
+        metadata,
+        include_hidden=include_hidden,
+    )
     cells: list[Cell] = []
     for slug in completion_slugs:
         m = metadata.get(slug)
