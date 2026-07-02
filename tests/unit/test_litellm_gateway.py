@@ -893,7 +893,9 @@ async def test_responses_stream_inband_tag_straddling_deltas_routes_to_reasoning
 
     # A reasoning item was opened and the CoT streamed into it.
     assert "response.output_item.added" in types
-    reasoning_added = [e for e in events if e["type"] == "response.output_item.added" and e["item"]["type"] == "reasoning"]
+    reasoning_added = [
+        e for e in events if e["type"] == "response.output_item.added" and e["item"]["type"] == "reasoning"
+    ]
     assert len(reasoning_added) == 1
     reasoning_deltas = [e for e in events if e["type"] == "response.reasoning_summary_text.delta"]
     assert "".join(e["delta"] for e in reasoning_deltas) == "the ball is $0.05"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
@@ -9,8 +10,8 @@ from callosum.usage_diagnostic import (
     SegmentSummary,
     TrafficKindBucketSummary,
     recent_turn_summaries,
-    render_token_time_series_json,
     render_recent_turns_json,
+    render_token_time_series_json,
     token_time_series,
 )
 from callosum.usage_log import UsageLog, UsageLogEntry
@@ -80,10 +81,10 @@ def test_recent_turns_apportion_prompt_tokens_by_char_share(tmp_path: Path) -> N
 def test_recent_turns_ordered_newest_first_and_coalesces_null_mode(tmp_path: Path) -> None:
     db = tmp_path / "u.sqlite"
     log = UsageLog(db, capture_bodies=True)
-    log.record(_entry(ts_start=1.0, prompt_tokens=50, req_payload={"input": "first"},
-                      effective_routing_mode=None))
-    log.record(_entry(ts_start=2.0, prompt_tokens=50, req_payload={"input": "second"},
-                      effective_routing_mode="forced_local"))
+    log.record(_entry(ts_start=1.0, prompt_tokens=50, req_payload={"input": "first"}, effective_routing_mode=None))
+    log.record(
+        _entry(ts_start=2.0, prompt_tokens=50, req_payload={"input": "second"}, effective_routing_mode="forced_local")
+    )
     log.close()
 
     turns = recent_turn_summaries(db, limit=10)
@@ -97,10 +98,12 @@ def test_recent_turns_handle_missing_payload_and_chat_messages(tmp_path: Path) -
     db = tmp_path / "u.sqlite"
     log = UsageLog(db, capture_bodies=True)
     # Chat-Completions shape: segments come from messages[*].content.
-    chat = {"messages": [
-        {"role": "system", "content": "sys"},
-        {"role": "user", "content": "hello world"},
-    ]}
+    chat = {
+        "messages": [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "hello world"},
+        ]
+    }
     log.record(_entry(ts_start=1.0, prompt_tokens=60, req_payload=chat))
     # No payload blob at all (capture off for this row in a mixed log).
     log.record(_entry(ts_start=2.0, prompt_tokens=30, req_payload=None))
@@ -140,9 +143,16 @@ def test_render_recent_turns_json_shape(tmp_path: Path) -> None:
     assert doc["turn_count"] == 1
     turn = doc["turns"][0]
     assert set(turn.keys()) >= {
-        "request_id", "ts_start", "route", "requested_model", "served_model",
-        "effective_routing_mode", "prompt_tokens", "completion_tokens",
-        "total_tokens", "segment_summaries",
+        "request_id",
+        "ts_start",
+        "route",
+        "requested_model",
+        "served_model",
+        "effective_routing_mode",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "segment_summaries",
     }
     assert turn["segment_summaries"][0]["kind"] == "input"
     assert isinstance(turn["segment_summaries"][0]["est_prompt_tokens"], int)
@@ -211,7 +221,9 @@ def test_token_time_series_groups_by_traffic_kind(tmp_path: Path) -> None:
     log = UsageLog(db, capture_bodies=True)
     log.record(_entry(ts_start=1_000.0, prompt_tokens=40, req_payload={"input": "a"}, traffic_kind="operator"))
     log.record(_entry(ts_start=1_100.0, prompt_tokens=60, req_payload={"input": "b"}, traffic_kind="quota_explore"))
-    log.record(_entry(ts_start=1_200.0, prompt_tokens=20, req_payload={"input": "c"}, traffic_kind="peer_quality_capture"))
+    log.record(
+        _entry(ts_start=1_200.0, prompt_tokens=20, req_payload={"input": "c"}, traffic_kind="peer_quality_capture")
+    )
     log.close()
 
     series = token_time_series(db, limit=2, group_by="traffic_kind")
@@ -246,7 +258,15 @@ def test_token_time_series_both_axes(tmp_path: Path) -> None:
     db = tmp_path / "u.sqlite"
     log = UsageLog(db, capture_bodies=True)
     log.record(_entry(ts_start=1_000.0, prompt_tokens=40, req_payload={"input": "a"}, traffic_kind="operator"))
-    log.record(_entry(ts_start=1_100.0, prompt_tokens=50, req_payload={"input": "b"}, traffic_kind="canary_redirect", effective_routing_mode="canary_redirect"))
+    log.record(
+        _entry(
+            ts_start=1_100.0,
+            prompt_tokens=50,
+            req_payload={"input": "b"},
+            traffic_kind="canary_redirect",
+            effective_routing_mode="canary_redirect",
+        )
+    )
     log.close()
 
     series = token_time_series(db, limit=2, group_by="both")
@@ -296,12 +316,18 @@ def test_render_token_time_series_json_includes_traffic_kind(tmp_path: Path) -> 
 
 
 def test_traffic_kind_bucket_summary_is_frozen() -> None:
-    k = TrafficKindBucketSummary(traffic_kind="operator", turn_count=1, prompt_tokens=10, completion_tokens=2, total_tokens=12)
-    with pytest.raises(Exception):
+    k = TrafficKindBucketSummary(
+        traffic_kind="operator",
+        turn_count=1,
+        prompt_tokens=10,
+        completion_tokens=2,
+        total_tokens=12,
+    )
+    with pytest.raises(FrozenInstanceError):
         k.turn_count = 2  # type: ignore[misc]
 
 
 def test_segment_summary_is_frozen() -> None:
     seg = SegmentSummary(kind="input", chars=4, est_prompt_tokens=2)
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         seg.kind = "instructions"  # type: ignore[misc]

@@ -97,11 +97,7 @@ class ModelEntry:
             api_surfaces = ()
         ctx = m.get("context_window")
         levels_raw = m.get("supported_reasoning_levels")
-        levels = (
-            tuple(s for s in levels_raw if isinstance(s, str) and s)
-            if isinstance(levels_raw, list)
-            else ()
-        )
+        levels = tuple(s for s in levels_raw if isinstance(s, str) and s) if isinstance(levels_raw, list) else ()
         # Contract guarantees "default" leads the list; default to it when the
         # field is absent (older hub builds) or parsed empty.
         if not levels:

@@ -44,6 +44,7 @@ class NoCompatibleCellError(RuntimeError):
 # 256K-window cell.
 _OUTPUT_HEADROOM_TOKENS = 4096
 
+
 def _window_fit_factor(window: int, prompt_tokens: int) -> float:
     """Multiplicative score factor in (0, 1] reflecting how comfortably
     a cell's advertised context window fits the estimated prompt size.
@@ -128,9 +129,7 @@ class Router:
             # peer-quality data exists, the KNN predictor returns differentiated
             # scores and the exploit branch below takes over per-prompt.
             fitting = [
-                c
-                for c in compatible
-                if _window_fit_factor(capabilities_map[c].context_window, features.tokens) >= 1.0
+                c for c in compatible if _window_fit_factor(capabilities_map[c].context_window, features.tokens) >= 1.0
             ]
             chosen = random.choice(fitting or compatible)
             # Retry order still prefers fitting, cheap cells (Dispatch retries
@@ -197,9 +196,7 @@ class Router:
             # readable downstream.
             predictions={f"{c.model} {c.reasoning_effort}": p for c, p in predictions.items()},
             candidates=(chosen, *rest),
-            time_estimates_ms={
-                f"{c.model} {c.reasoning_effort}": eta for c, eta in time_estimates.items()
-            },
+            time_estimates_ms={f"{c.model} {c.reasoning_effort}": eta for c, eta in time_estimates.items()},
             predictor_id=self._predictor.id,
         )
 

@@ -103,10 +103,7 @@ def test_cold_start_explores_randomly_across_capable_cells() -> None:
     runs every capable cell should get chosen at least once."""
     router = _build()
     body = {"messages": [{"role": "user", "content": "hello"}]}
-    seen = {
-        asyncio.run(router.route(body, [LOCAL, REMOTE_MID, REMOTE_HIGH])).cell
-        for _ in range(200)
-    }
+    seen = {asyncio.run(router.route(body, [LOCAL, REMOTE_MID, REMOTE_HIGH])).cell for _ in range(200)}
     assert seen == {LOCAL, REMOTE_MID, REMOTE_HIGH}
 
 
@@ -250,9 +247,7 @@ def test_router_wires_time_estimates_into_bounded_selector_preference() -> None:
         time_estimator=_FixedTimeEstimator({slow: 900.0, fast: 200.0}),  # type: ignore[arg-type]
         output_forecaster=_FixedOutputForecaster(),  # type: ignore[arg-type]
     )
-    decision = asyncio.run(
-        router.route({"messages": [{"role": "user", "content": "hello"}]}, [slow, fast])
-    )
+    decision = asyncio.run(router.route({"messages": [{"role": "user", "content": "hello"}]}, [slow, fast]))
     assert decision.cell == fast
     assert decision.predictions == {
         "same-cost-slow medium": 0.82,

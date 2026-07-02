@@ -39,9 +39,7 @@ def _make_db(path: Path, rows: list[tuple]) -> None:
     conn.close()
 
 
-def _ratio_rows(
-    model: str, effort: str, n: int, *, now: float, prompt: int, completion: int
-) -> list[tuple]:
+def _ratio_rows(model: str, effort: str, n: int, *, now: float, prompt: int, completion: int) -> list[tuple]:
     return [(now - 100, model, effort, 200, prompt, completion) for _ in range(n)]
 
 

@@ -1,24 +1,28 @@
 .PHONY: verify lint format format-check type test serve sync
 
+UV_CACHE_DIR ?= /tmp/uv-cache
+UV_RUN = UV_CACHE_DIR=$(UV_CACHE_DIR) uv run
+UV_RUN_NOSYNC = UV_CACHE_DIR=$(UV_CACHE_DIR) UV_NO_SYNC=1 uv run
+
 sync:
 	uv sync
 
 verify: lint format-check type test
 
 lint:
-	uv run ruff check .
+	$(UV_RUN_NOSYNC) ruff check .
 
 format:
-	uv run ruff format .
+	$(UV_RUN_NOSYNC) ruff format .
 
 format-check:
-	uv run ruff format --check .
+	$(UV_RUN_NOSYNC) ruff format --check .
 
 type:
-	uv run mypy src/callosum
+	$(UV_RUN_NOSYNC) python -m mypy src/callosum
 
 test:
-	uv run pytest
+	PYTHONPATH=src $(UV_RUN_NOSYNC) python -m pytest
 
 serve:
-	uv run callosum serve
+	$(UV_RUN) callosum serve

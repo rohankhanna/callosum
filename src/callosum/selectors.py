@@ -97,8 +97,7 @@ def parse_selector(model: str | None) -> SelectorDecision | None:
             return SelectorDecision(strategy=rest)
         if rest == "offline":
             raise SelectorError(
-                "callosum:offline is not supported until no-network semantics "
-                "can be enforced end to end"
+                "callosum:offline is not supported until no-network semantics can be enforced end to end"
             )
         raise SelectorError(f"unknown callosum strategy selector {model!r}")
 
@@ -106,8 +105,7 @@ def parse_selector(model: str | None) -> SelectorDecision | None:
     source, _, tail = rest.partition("/")
     if source not in _PIN_SOURCES:
         raise SelectorError(
-            f"unknown callosum pin source {source!r} in {model!r} "
-            f"(expected one of {sorted(_PIN_SOURCES)})"
+            f"unknown callosum pin source {source!r} in {model!r} (expected one of {sorted(_PIN_SOURCES)})"
         )
     if not tail:
         raise SelectorError(f"missing model in callosum pin {model!r}")
@@ -125,10 +123,7 @@ def parse_selector(model: str | None) -> SelectorDecision | None:
     if sep:
         if effort not in REASONING_LEVELS:
             raise SelectorError(
-                f"unknown reasoning effort {effort!r} in {model!r} "
-                f"(expected one of {list(REASONING_LEVELS)})"
+                f"unknown reasoning effort {effort!r} in {model!r} (expected one of {list(REASONING_LEVELS)})"
             )
         pinned_effort = effort
-    return SelectorDecision(
-        source=source, pinned_model=pinned_model, pinned_effort=pinned_effort
-    )
+    return SelectorDecision(source=source, pinned_model=pinned_model, pinned_effort=pinned_effort)

@@ -57,9 +57,7 @@ from typing import Any
 # Standard callosum config locations. The wizard walks these in order
 # and uses the first one that exists. Operators with non-standard
 # configs can pass `--config` to override.
-_DEFAULT_CONFIG_PATHS: tuple[Path, ...] = (
-    Path.home() / ".config" / "callosum" / "config.toml",
-)
+_DEFAULT_CONFIG_PATHS: tuple[Path, ...] = (Path.home() / ".config" / "callosum" / "config.toml",)
 
 
 # systemd unit name to restart when --restart is given. Matches the
@@ -378,8 +376,7 @@ def add_subparser(sub: Any) -> None:
     )
     p.add_argument(
         "--config",
-        help="Path to callosum config.toml (default: auto-detect under "
-        "~/.config/callosum/).",
+        help="Path to callosum config.toml (default: auto-detect under ~/.config/callosum/).",
     )
     p.add_argument(
         "--backend",

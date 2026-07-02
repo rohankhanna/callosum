@@ -289,9 +289,7 @@ def _inject_peer_quality_prompt(
         judge_model=current_cell.model,
         judge_reasoning_effort=current_cell.reasoning_effort or None,
     )
-    subjects = _peer_quality_subjects(
-        turns, current_cell=current_cell, exclude_request_ids=already_judged
-    )
+    subjects = _peer_quality_subjects(turns, current_cell=current_cell, exclude_request_ids=already_judged)
     # Only subjects whose text is actually present in this request can be tagged.
     present_texts = _body_assistant_texts(body)
     subjects = {text: subj for text, subj in subjects.items() if text in present_texts}
@@ -566,6 +564,7 @@ def _append_peer_quality_instruction(body: dict[str, Any], instruction: str) -> 
         return {**body, "instructions": f"{existing}\n\n{instruction}"}
     return {**body, "instructions": instruction}
 
+
 # Failure-observation registry holder. Set by create_app; consulted by
 # _log_attempt. Module-level rather than parameter-plumbed because
 # `_log_attempt` is called from many call sites and threading
@@ -606,6 +605,7 @@ _OUTPUT_FORECASTER: Any = None
 # realized latency_ms post-request (always verifiable — latency has no
 # integer-resolution problem; ). Reuses _OUTPUT_FORECASTER.
 _TIME_ESTIMATOR: Any = None
+
 
 def _extract_complexity_class(text: str) -> tuple[int | None, str]:
     """Extract complexity classification token from response start.
@@ -1138,9 +1138,7 @@ def create_app(
     # `_catalog_model_ids` closure defined below (resolved at call time, i.e.
     # after the app is fully constructed). None when disabled.
     codex_catalog_reconciler: Any = None
-    if codex_catalog_config is not None and getattr(
-        codex_catalog_config, "enabled", False
-    ):
+    if codex_catalog_config is not None and getattr(codex_catalog_config, "enabled", False):
         from callosum.codex_catalog import CodexCatalogReconciler
 
         codex_catalog_reconciler = CodexCatalogReconciler(
@@ -1409,9 +1407,7 @@ def create_app(
                         "cooldown_until_ts": u.cooldown_until_ts,
                         "weekly_exhausted": u.weekly_exhausted,
                         "blocking_meters": list(
-                            blocking_meters(
-                                BackendSnapshot(backend=backend, health=h, usage=u, quota=q)
-                            )
+                            blocking_meters(BackendSnapshot(backend=backend, health=h, usage=u, quota=q))
                         ),
                         "probed_at_ts": u.probed_at_ts,
                     },
@@ -1460,9 +1456,7 @@ def create_app(
                 # DEFAULT_MODELS — so de-listed models (e.g. model-a0e6) drop out
                 # and current ones (model-a0e8) appear, matching what gets routed.
                 _grid = _live_cells()
-                _cov = cell_sample_counts(
-                    usage_log.path, _grid, window_seconds=auto_cfg.quota_window_seconds
-                )
+                _cov = cell_sample_counts(usage_log.path, _grid, window_seconds=auto_cfg.quota_window_seconds)
                 quota_block["exploration_budget_pct"] = auto_cfg.exploration_budget_pct
                 quota_block.update(
                     exploration_quota_report(
@@ -1645,29 +1639,17 @@ def create_app(
                 if m in VIRTUAL_MODELS or is_selector(m):
                     continue
                 md = meta.get(m)
-                if (
-                    not include_hidden
-                    and md is not None
-                    and md.visibility is not None
-                    and md.visibility != "list"
-                ):
+                if not include_hidden and md is not None and md.visibility is not None and md.visibility != "list":
                     continue
                 raw.add(m)
                 (local_models if is_local else remote_models).add(m)
             target = local_meta if is_local else remote_meta
             for slug, md in meta.items():
-                if (
-                    not include_hidden
-                    and md.visibility is not None
-                    and md.visibility != "list"
-                ):
+                if not include_hidden and md.visibility is not None and md.visibility != "list":
                     continue
                 existing = target.get(slug)
                 # Prefer the record that actually carries reasoning levels.
-                if existing is None or (
-                    md.supported_reasoning_levels
-                    and not existing.supported_reasoning_levels
-                ):
+                if existing is None or (md.supported_reasoning_levels and not existing.supported_reasoning_levels):
                     target[slug] = md
 
         ids: list[str] = [
@@ -1778,10 +1760,7 @@ def create_app(
                 sel = None
             # Strategy selectors are always valid; concrete pins must resolve
             # to a catalog entry (pinned model+effort actually advertised).
-            if sel is not None and (
-                sel.strategy is not None
-                or model_id in _catalog_model_ids(include_hidden=True)
-            ):
+            if sel is not None and (sel.strategy is not None or model_id in _catalog_model_ids(include_hidden=True)):
                 return {
                     "id": model_id,
                     "object": "model",
@@ -1850,9 +1829,7 @@ def create_app(
                 "reason": "usage_log_unavailable",
                 "unit": "weekly_used_percent",
                 "basis": "empirical_request_log",
-                "limitations": [
-                    "usage logging is disabled, so no empirical request-log rates can be computed"
-                ],
+                "limitations": ["usage logging is disabled, so no empirical request-log rates can be computed"],
                 "rates": [],
                 "meters": {},
                 "relationships": [],
@@ -2116,6 +2093,7 @@ async def _dispatch_internal(
     if auto_cfg is None:
         auto_cfg = AutoRouterConfig()
     if live_cells_fn is None:
+
         def _default_live_cells(*, include_hidden: bool = False) -> list[Cell]:
             del include_hidden
             return build_cells()
@@ -2168,9 +2146,7 @@ async def _dispatch_internal(
     # authoritative, and the original requested model only appears in
     # the request log's `routing_mode` column for provenance.
     if router is not None:
-        _selector_is_concrete_pin = (
-            _selector is not None and _selector.pinned_model is not None
-        )
+        _selector_is_concrete_pin = _selector is not None and _selector.pinned_model is not None
         cells_now = live_cells_fn(include_hidden=_selector_is_concrete_pin)
         # Operator denylist + mode filters BEFORE routability — operator
         # decisions are absolute. denylist drops named cells; mode
@@ -2270,9 +2246,7 @@ async def _dispatch_internal(
                     cells_now = [c for c in cells_now if c.reasoning_effort == _selector.pinned_effort]
         _process_pin = pin_state.get()
         _process_pin_concrete_model = (
-            _process_pin is not None
-            and _selector is None
-            and requested_model not in VIRTUAL_MODELS
+            _process_pin is not None and _selector is None and requested_model not in VIRTUAL_MODELS
         )
         # The process-wide operator pin is stronger than the learning
         # router's model rewrite. For concrete model requests, preserve the
@@ -2341,10 +2315,7 @@ async def _dispatch_internal(
                 if _pinned_backend is not None and requested_model not in _pinned_backend.advertised_models:
                     raise HTTPException(
                         status_code=503,
-                        detail=(
-                            f"pinned backend {_process_pin!r} cannot serve "
-                            f"requested model {requested_model!r}"
-                        ),
+                        detail=(f"pinned backend {_process_pin!r} cannot serve requested model {requested_model!r}"),
                         headers={"Retry-After": "60"},
                     )
             # A concrete client pin that no backend currently serves: the pin
@@ -2354,11 +2325,7 @@ async def _dispatch_internal(
             # Without this branch the cause would be misreported as a routing-mode
             # exclusion below.
             if _selector is not None and _selector.pinned_model is not None:
-                _effort_note = (
-                    f" at {_selector.pinned_effort} reasoning"
-                    if _selector.pinned_effort is not None
-                    else ""
-                )
+                _effort_note = f" at {_selector.pinned_effort} reasoning" if _selector.pinned_effort is not None else ""
                 raise HTTPException(
                     status_code=503,
                     detail=(
@@ -2399,11 +2366,7 @@ async def _dispatch_internal(
         # is already the post-gate, lane-filtered pool. See
         # docs/architecture/exploration_quota.md.
         _ordered_candidates: tuple[Cell, ...] = decision.candidates
-        if (
-            auto_cfg.exploration_quota_enabled
-            and usage_log is not None
-            and len(decision.candidates) > 1
-        ):
+        if auto_cfg.exploration_quota_enabled and usage_log is not None and len(decision.candidates) > 1:
             _quota_coverage = cell_sample_counts(
                 usage_log.path,
                 list(decision.candidates),
@@ -4501,9 +4464,7 @@ async def _diagnose_backend(backend: Backend, *, force: bool = False) -> dict[st
     # Pick a real completion model for the probe. Catalogs can include hidden
     # non-completion slugs such as `codex-auto-review`; probing those returns a
     # real upstream 4xx and never reaches the quota-header capture path.
-    candidate_models = frozenset(
-        m for m in backend.advertised_models if m not in VIRTUAL_MODELS
-    )
+    candidate_models = frozenset(m for m in backend.advertised_models if m not in VIRTUAL_MODELS)
     real_models = list(live_completion_models(candidate_models))
     if not real_models:
         return {
@@ -4707,8 +4668,7 @@ class _PeriodicCooldownProber:
                     try:
                         clear()
                         logger.warning(
-                            "cooldown prober: %r probe succeeded; cooldown cleared "
-                            "(was until %s, weekly_exhausted=%s)",
+                            "cooldown prober: %r probe succeeded; cooldown cleared (was until %s, weekly_exhausted=%s)",
                             backend.id,
                             usage.cooldown_until_ts,
                             usage.weekly_exhausted,

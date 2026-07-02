@@ -157,9 +157,7 @@ def token_time_series(
         modes = tuple(mode_by_bucket.get(bucket_start, ()))
         kinds = kind_by_bucket.get(bucket_start)
         kind_tuple = tuple(kinds) if kinds is not None else None
-        total_items: tuple[ModeBucketSummary | TrafficKindBucketSummary, ...] = (
-            modes if modes else (kind_tuple or ())
-        )
+        total_items: tuple[ModeBucketSummary | TrafficKindBucketSummary, ...] = modes if modes else (kind_tuple or ())
         result.append(
             TimeBucketSummary(
                 bucket_start=bucket_start,
@@ -275,9 +273,7 @@ def _segment_summaries(
             total_chars=total_chars,
             total_tokens=prompt_tokens,
         )
-        summaries.append(
-            SegmentSummary(kind=kind, chars=chars, est_prompt_tokens=est_tokens)
-        )
+        summaries.append(SegmentSummary(kind=kind, chars=chars, est_prompt_tokens=est_tokens))
     return tuple(summaries)
 
 

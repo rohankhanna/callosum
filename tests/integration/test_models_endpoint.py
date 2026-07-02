@@ -119,12 +119,7 @@ def test_v1_models_hides_hidden_raw_ids_but_resolves_explicit_pin() -> None:
         ids = {m["id"] for m in client.get("/v1/models").json()["data"]}
         assert "codex-auto-review" not in ids
         assert "callosum:remote/codex-auto-review:medium" not in ids
-        assert (
-            client.get(
-                "/v1/models/callosum:remote/codex-auto-review:medium"
-            ).status_code
-            == 200
-        )
+        assert client.get("/v1/models/callosum:remote/codex-auto-review:medium").status_code == 200
 
 
 def test_v1_models_lookup_returns_advertised_one() -> None:

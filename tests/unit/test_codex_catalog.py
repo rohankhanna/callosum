@@ -179,9 +179,7 @@ def test_digest_is_stable_and_order_independent():
 
 
 def test_write_catalog_atomic_roundtrips(tmp_path):
-    cat = cc.build_codex_catalog(
-        model_ids=["callosum:auto"], declared_lanes=[], template=_template()
-    )
+    cat = cc.build_codex_catalog(model_ids=["callosum:auto"], declared_lanes=[], template=_template())
     out = tmp_path / "nested" / "callosum-catalog.json"
     cc.write_catalog_atomic(out, cat)
     assert out.exists()

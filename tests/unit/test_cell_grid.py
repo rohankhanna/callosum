@@ -69,8 +69,7 @@ def test_cell_sample_counts_windows_and_ignores_routing_mode(tmp_path: Path) -> 
     )
     now = 1_000_000.0
     conn.executemany(
-        "INSERT INTO requests (model, reasoning_effort, routing_mode, status, ts_start)"
-        " VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO requests (model, reasoning_effort, routing_mode, status, ts_start) VALUES (?, ?, ?, ?, ?)",
         [
             # Counted regardless of routing_mode (unlike coverage_from_db):
             ("model-a0c3", "low", "auto", 200, now - 10),

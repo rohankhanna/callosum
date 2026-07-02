@@ -103,14 +103,9 @@ def lane_metadata(model_id: str) -> tuple[str, str, int] | None:
     # — the lane then offers only that effort (see `_reasoning_levels_for_lane`).
     effort = sel.pinned_effort
     suffix = f" · {effort}" if effort else ""
-    source_word, priority = (
-        ("remote", 10) if sel.source == "remote" else ("local", 20)
-    )
+    source_word, priority = ("remote", 10) if sel.source == "remote" else ("local", 20)
     name = f"Callosum {source_word} · {sel.pinned_model}{suffix}"
-    desc = (
-        f"Pin the {source_word} model {sel.pinned_model}"
-        + (f" at {effort} reasoning." if effort else ".")
-    )
+    desc = f"Pin the {source_word} model {sel.pinned_model}" + (f" at {effort} reasoning." if effort else ".")
     return name, desc, priority
 
 
@@ -123,9 +118,7 @@ def _pinned_effort(model_id: str) -> str | None:
     return None
 
 
-def _reasoning_levels_for_lane(
-    model_id: str, template_levels: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
+def _reasoning_levels_for_lane(model_id: str, template_levels: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Reasoning-effort presets to advertise for a lane.
 
     A concrete remote pin bakes its effort into the id, so the picker should
@@ -146,9 +139,7 @@ def _reasoning_levels_for_lane(
     return template_levels
 
 
-def _ordered_lane_ids(
-    model_ids: Sequence[str], declared_lanes: Sequence[str]
-) -> list[str]:
+def _ordered_lane_ids(model_ids: Sequence[str], declared_lanes: Sequence[str]) -> list[str]:
     """Stable, de-duplicated menu order: strategy selectors first (fixed
     order), then live concrete pins (sorted), then operator-declared lanes not
     already present (sorted). Non-selector / non-pin ids are dropped.
@@ -207,9 +198,7 @@ def build_codex_catalog(
         entry["supported_reasoning_levels"] = levels
         # Keep the default within the offered set so the picker has a valid
         # default selection.
-        if levels and entry.get("default_reasoning_level") not in {
-            lvl.get("effort") for lvl in levels
-        }:
+        if levels and entry.get("default_reasoning_level") not in {lvl.get("effort") for lvl in levels}:
             entry["default_reasoning_level"] = levels[0].get("effort")
         models.append(entry)
     return {"models": models}
@@ -330,9 +319,7 @@ class CodexCatalogReconciler:
         try:
             write_catalog_atomic(self._output_path, catalog)
         except OSError:
-            logger.exception(
-                "codex catalog: failed to write %s", self._output_path
-            )
+            logger.exception("codex catalog: failed to write %s", self._output_path)
             return False
         self._last_digest = digest
         logger.info(
@@ -361,9 +348,7 @@ class CodexCatalogReconciler:
             await asyncio.to_thread(self.reconcile_once)
         while not self._stop.is_set():
             try:
-                await asyncio.wait_for(
-                    self._stop.wait(), timeout=self._refresh_interval_s
-                )
+                await asyncio.wait_for(self._stop.wait(), timeout=self._refresh_interval_s)
             except TimeoutError:
                 pass
             else:

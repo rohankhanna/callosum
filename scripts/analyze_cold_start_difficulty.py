@@ -48,11 +48,7 @@ def _connect(db: Path) -> sqlite3.Connection:
 
 def _tier_expr(col: str = "prompt_tokens") -> str:
     lo, mid, hi = TIER_EDGES
-    return (
-        f"CASE WHEN {col}>={hi} THEN 4 "
-        f"WHEN {col}>={mid} THEN 3 "
-        f"WHEN {col}>={lo} THEN 2 ELSE 1 END"
-    )
+    return f"CASE WHEN {col}>={hi} THEN 4 WHEN {col}>={mid} THEN 3 WHEN {col}>={lo} THEN 2 ELSE 1 END"
 
 
 def _where(include_synthetic: bool) -> str:
@@ -70,8 +66,7 @@ def _percentiles(conn: sqlite3.Connection, where: str) -> None:
     for p in PERCENTILES:
         offset = int(p * total)
         row = conn.execute(
-            f"SELECT prompt_tokens FROM requests WHERE {where} "
-            f"ORDER BY prompt_tokens LIMIT 1 OFFSET {offset}"
+            f"SELECT prompt_tokens FROM requests WHERE {where} ORDER BY prompt_tokens LIMIT 1 OFFSET {offset}"
         ).fetchone()
         print(f"  p{int(p * 100):02d} = {row[0]:>8}")
 

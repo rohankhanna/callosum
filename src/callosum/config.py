@@ -61,6 +61,7 @@ class ServerConfig(BaseModel):
     # bounded.
     smoke_test_interval_seconds: int = 3600
 
+
 class StateConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

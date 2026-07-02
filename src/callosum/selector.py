@@ -96,11 +96,7 @@ def blocking_meters(snapshot: BackendSnapshot, *, now_ts: float | None = None) -
         ):
             blocked.append("five_hourly")
         weekly_window_open = _window_open(quota.weekly_reset_at, now)
-        if (
-            quota.weekly_used_percent is not None
-            and quota.weekly_used_percent >= 100
-            and weekly_window_open
-        ):
+        if quota.weekly_used_percent is not None and quota.weekly_used_percent >= 100 and weekly_window_open:
             blocked.append("weekly")
     # The sticky weekly_exhausted usage flag is only meaningful while the
     # weekly window it was set in is still open; after weekly_reset_at it is

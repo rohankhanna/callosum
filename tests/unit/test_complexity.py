@@ -516,7 +516,7 @@ def test_peer_quality_malformed_marker_is_counted() -> None:
         async def source():
             yield (
                 b'data: {"type":"response.output_text.delta","delta":"'
-                b'<<qop nonce=AB12 subject=model-a0e7|medium score=nope reason=bad>>'
+                b"<<qop nonce=AB12 subject=model-a0e7|medium score=nope reason=bad>>"
                 b'"}\n\n'
             )
             yield b"data: [DONE]\n\n"

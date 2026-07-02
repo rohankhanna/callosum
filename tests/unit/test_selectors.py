@@ -20,9 +20,7 @@ from callosum.selectors import (
         ),
         (
             "callosum:remote/model-a0e8:high",
-            SelectorDecision(
-                source="remote", pinned_model="model-a0e8", pinned_effort="high"
-            ),
+            SelectorDecision(source="remote", pinned_model="model-a0e8", pinned_effort="high"),
         ),
         (
             "callosum:local/model-a0b6".replace(":30b", ""),  # plain local pin
@@ -33,9 +31,7 @@ from callosum.selectors import (
             # The parser gates only on REASONING_LEVELS; per-model support is
             # enforced downstream (catalog advertise + dispatch 503).
             "callosum:local/model-a0d2:high",
-            SelectorDecision(
-                source="local", pinned_model="model-a0d2", pinned_effort="high"
-            ),
+            SelectorDecision(source="local", pinned_model="model-a0d2", pinned_effort="high"),
         ),
     ],
 )

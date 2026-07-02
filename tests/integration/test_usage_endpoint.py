@@ -306,9 +306,7 @@ def test_usage_endpoint_reports_different_weekly_and_five_hourly_rates(tmp_path:
     assert weekly["input_uncached"]["rate"] == 1.0
     assert five_hourly["input_uncached"]["rate"] == 2.0
     relationship = next(
-        row
-        for row in body["relationships"]
-        if row["model"] == "model-a0e7" and row["reasoning_effort"] == "medium"
+        row for row in body["relationships"] if row["model"] == "model-a0e7" and row["reasoning_effort"] == "medium"
     )
     assert relationship["five_hourly_per_weekly_ratio"] == 2.0
     assert relationship["weekly_per_five_hourly_ratio"] == 0.5

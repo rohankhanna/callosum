@@ -188,11 +188,7 @@ def live_completion_models_from_metadata(
     for slug, m in metadata.items():
         if m.supported_in_api is False:
             continue
-        if (
-            not include_hidden
-            and m.visibility is not None
-            and m.visibility != "list"
-        ):
+        if not include_hidden and m.visibility is not None and m.visibility != "list":
             continue
         # If neither supported_in_api nor visibility was given, fall back
         # to the name-shape filter so we don't accidentally route to

@@ -62,9 +62,7 @@ def test_stamp_reasoning_non_dict_is_replaced(bad: Any) -> None:
 # ---------- end-to-end through the real crash site --------------------------
 
 
-def test_cell_retry_dispatch_tolerates_reasoning_null(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_cell_retry_dispatch_tolerates_reasoning_null(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """_dispatch_nonstream_with_cell_retry stamps effort at the site that
     used to raise on reasoning: null. Drive it with a null reasoning and
     assert it dispatches cleanly with the routed effort applied."""

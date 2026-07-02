@@ -51,8 +51,9 @@ def test_gate_fails_on_metric_when_volume_and_coverage_met() -> None:
 
 
 def test_gate_passes_when_lift_beats_margin() -> None:
-    report = _report(embedded=520, lift=DEFAULT_MIN_LIFT + 0.01, beats=True,
-                     label_distribution={"-1": 20, "0": 20, "1": 20})
+    report = _report(
+        embedded=520, lift=DEFAULT_MIN_LIFT + 0.01, beats=True, label_distribution={"-1": 20, "0": 20, "1": 20}
+    )
     result = evaluate_gate(report)
 
     assert result["all_met"] is True
@@ -78,9 +79,7 @@ def test_volume_below_floor_blocks_even_with_good_metric() -> None:
 
 def test_coverage_blocks_when_too_few_cells_meet_per_cell_floor() -> None:
     # only one cell reaches the per-cell floor
-    cells = [{"cell": "c0", "labels": 30}] + [
-        {"cell": f"c{i}", "labels": 3} for i in range(1, 5)
-    ]
+    cells = [{"cell": "c0", "labels": 30}] + [{"cell": f"c{i}", "labels": 3} for i in range(1, 5)]
     report = _report(embedded=520, cells=cells, lift=DEFAULT_MIN_LIFT + 0.1, beats=True)
     result = evaluate_gate(report)
     assert result["gates"]["coverage"]["met"] is False
@@ -89,8 +88,7 @@ def test_coverage_blocks_when_too_few_cells_meet_per_cell_floor() -> None:
 
 
 def test_metric_unavailable_blocks_with_reason() -> None:
-    report = _report(eval_available=False, lift=0.0, beats=False,
-                     label_distribution={})
+    report = _report(eval_available=False, lift=0.0, beats=False, label_distribution={})
     report["knn_shadow_eval"]["reason"] = "insufficient_embedded_labels"
     result = evaluate_gate(report)
     assert result["gates"]["metric"]["met"] is False
@@ -100,8 +98,7 @@ def test_metric_unavailable_blocks_with_reason() -> None:
 
 def test_single_class_labels_fail_metric_via_zero_lift() -> None:
     # all-neutral labels: majority baseline matches KNN, lift 0 -> metric fails.
-    report = _report(embedded=520, lift=0.0, beats=False,
-                     label_distribution={"-1": 0, "0": 50, "1": 0})
+    report = _report(embedded=520, lift=0.0, beats=False, label_distribution={"-1": 0, "0": 50, "1": 0})
     result = evaluate_gate(report)
     assert result["gates"]["metric"]["met"] is False
     assert result["gates"]["discrimination_diagnostic"]["observed_max_class_fraction"] == 1.0

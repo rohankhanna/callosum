@@ -357,16 +357,16 @@ class LocalModelRegistryBackend:
                 if response.status_code >= 400:
                     await response.aread()
                     raise error_from_response(response)
-                chunks: list[bytes] = []
+                chat_chunks: list[bytes] = []
                 async for chunk in stall_guarded(
                     response.aiter_bytes(),
                     first_item_timeout_s=LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S,
                     idle_timeout_s=LOCAL_STREAM_IDLE_TIMEOUT_S,
                     what=f"local {entry.id}",
                 ):
-                    chunks.append(chunk)
+                    chat_chunks.append(chunk)
                     yield chunk
-                _record_chat_stream_summary(handle, chunks)
+                _record_chat_stream_summary(handle, chat_chunks)
         except httpx.HTTPError as exc:
             self._healthy = False
             self._last_health_reason = "network"

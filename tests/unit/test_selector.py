@@ -234,7 +234,9 @@ _PAST = _NOW - 3600  # window reset an hour ago
 _FUTURE = _NOW + 3600  # window still open for another hour
 
 
-def _snap(backend: InMemoryFakeBackend, *, quota: CodexQuotaSnapshot, usage: UsageSnapshot | None = None) -> BackendSnapshot:
+def _snap(
+    backend: InMemoryFakeBackend, *, quota: CodexQuotaSnapshot, usage: UsageSnapshot | None = None
+) -> BackendSnapshot:
     return BackendSnapshot(
         backend=backend,
         health=HealthStatus(available=True, reason="ok"),
@@ -244,12 +246,16 @@ def _snap(backend: InMemoryFakeBackend, *, quota: CodexQuotaSnapshot, usage: Usa
 
 
 def test_exhausted_meter_with_passed_reset_does_not_block() -> None:
-    snap = _snap(_fake("stale"), quota=_quota(five_hourly=100, weekly=100, five_hourly_reset_at=_PAST, weekly_reset_at=_PAST))
+    snap = _snap(
+        _fake("stale"), quota=_quota(five_hourly=100, weekly=100, five_hourly_reset_at=_PAST, weekly_reset_at=_PAST)
+    )
     assert blocking_meters(snap, now_ts=_NOW) == ()
 
 
 def test_exhausted_meter_with_open_window_still_blocks() -> None:
-    snap = _snap(_fake("live"), quota=_quota(five_hourly=100, weekly=1, five_hourly_reset_at=_FUTURE, weekly_reset_at=_FUTURE))
+    snap = _snap(
+        _fake("live"), quota=_quota(five_hourly=100, weekly=1, five_hourly_reset_at=_FUTURE, weekly_reset_at=_FUTURE)
+    )
     assert blocking_meters(snap, now_ts=_NOW) == ("five_hourly",)
 
 
@@ -276,6 +282,8 @@ def test_weekly_exhausted_flag_honored_with_no_quota() -> None:
 async def test_select_recovers_backend_after_overnight_window_reset() -> None:
     # The end-to-end morning case: the only backend reads 100% from last
     # night, but its window reset hours ago. It must be selectable again.
-    stale = _fake("overnight", quota=_quota(five_hourly=100, weekly=100, five_hourly_reset_at=_PAST, weekly_reset_at=_PAST))
+    stale = _fake(
+        "overnight", quota=_quota(five_hourly=100, weekly=100, five_hourly_reset_at=_PAST, weekly_reset_at=_PAST)
+    )
     chosen = await select([stale], model="model-a0d0", now_ts=float(_NOW))
     assert chosen is stale

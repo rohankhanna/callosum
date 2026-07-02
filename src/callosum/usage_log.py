@@ -445,9 +445,7 @@ class UsageLog:
                     "FROM peer_quality_opinions"
                 )
                 self._conn.execute("DROP TABLE peer_quality_opinions")
-                self._conn.execute(
-                    "ALTER TABLE peer_quality_opinions__new RENAME TO peer_quality_opinions"
-                )
+                self._conn.execute("ALTER TABLE peer_quality_opinions__new RENAME TO peer_quality_opinions")
                 self._conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_peer_quality_opinions_request_id "
                     "ON peer_quality_opinions(request_id)"
@@ -749,9 +747,7 @@ class UsageLog:
         if session_id is None:
             return frozenset()
         effort_clause = (
-            "judge_reasoning_effort IS NULL"
-            if judge_reasoning_effort is None
-            else "judge_reasoning_effort = ?"
+            "judge_reasoning_effort IS NULL" if judge_reasoning_effort is None else "judge_reasoning_effort = ?"
         )
         params: list[object] = [session_id, judge_model]
         if judge_reasoning_effort is not None:

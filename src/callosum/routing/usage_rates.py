@@ -301,9 +301,7 @@ def _fit_rate(
     x = np.column_stack([col for _name, col in active])
     rank = int(np.linalg.matrix_rank(x))
     if rank < len(active):
-        return _insufficient_rate(
-            cell, total_samples, len(samples), updated_at, "collinear_token_features", unit=unit
-        )
+        return _insufficient_rate(cell, total_samples, len(samples), updated_at, "collinear_token_features", unit=unit)
     y = np.asarray([s.delta for s in samples], dtype=float)
     coef, *_ = np.linalg.lstsq(x, y, rcond=None)
     coeffs = {name: max(float(value), 0.0) for (name, _col), value in zip(active, coef, strict=True)}
@@ -323,9 +321,7 @@ def _fit_rate(
         "rate_difference": round(uncached - cached, 12) if uncached is not None and cached is not None else None,
         "unit": f"{unit}_per_token",
         "source": (
-            "measured_from_weekly_quota_log"
-            if uncached is not None and cached is not None
-            else "insufficient_data"
+            "measured_from_weekly_quota_log" if uncached is not None and cached is not None else "insufficient_data"
         ),
         "note": cache_note,
     }

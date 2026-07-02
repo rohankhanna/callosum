@@ -36,14 +36,12 @@ from callosum.jobs.p3_gate import (
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--db-path", required=True, type=Path)
-    parser.add_argument("--checkpoint-path", type=Path, default=None,
-                        help="labeler checkpoint; required if --apply-labels")
-    parser.add_argument("--apply-labels", action="store_true",
-                        help="run the shadow labeler before evaluating the gate")
+    parser.add_argument(
+        "--checkpoint-path", type=Path, default=None, help="labeler checkpoint; required if --apply-labels"
+    )
+    parser.add_argument("--apply-labels", action="store_true", help="run the shadow labeler before evaluating the gate")
     parser.add_argument("--min-labels", type=int, default=DEFAULT_MIN_LABELS)
     parser.add_argument("--min-cells", type=int, default=DEFAULT_MIN_CELLS)
     parser.add_argument("--min-per-cell", type=int, default=DEFAULT_MIN_PER_CELL)

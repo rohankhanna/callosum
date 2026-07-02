@@ -351,9 +351,7 @@ def test_caps_at_max_cell_attempts(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     assert rows[2][2] == "failed"
 
 
-def test_retry_budget_http_does_not_reroute_to_next_cell(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_retry_budget_http_does_not_reroute_to_next_cell(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A budget-exhausted 503 is terminal for the whole request, not another
     retryable cell failure to walk past."""
     log = UsageLog(tmp_path / "u.sqlite")
@@ -423,9 +421,7 @@ def test_inner_dispatch_wall_clock_budget_cancels_hanging_backend(tmp_path: Path
     backend = InMemoryFakeBackend(id="local", advertised_models=frozenset({"model-a"}))
     started = False
 
-    async def slow_call(
-        b: InMemoryFakeBackend, body: dict[str, Any], handle: CallHandle
-    ) -> dict[str, Any]:
+    async def slow_call(b: InMemoryFakeBackend, body: dict[str, Any], handle: CallHandle) -> dict[str, Any]:
         nonlocal started
         del b, body, handle
         started = True
@@ -446,9 +442,7 @@ def test_inner_dispatch_wall_clock_budget_cancels_hanging_backend(tmp_path: Path
                 session_registry=SessionRegistry(),
                 usage_log=log,
                 call=slow_call,
-                dispatch_budget=_DispatchRetryBudget.from_config(
-                    seconds=0.1, max_backend_attempts=4
-                ),
+                dispatch_budget=_DispatchRetryBudget.from_config(seconds=0.1, max_backend_attempts=4),
             )
         )
     elapsed = time.monotonic() - before
@@ -471,9 +465,7 @@ def test_inner_dispatch_backend_attempt_cap_stops_before_second_backend(
     second = InMemoryFakeBackend(id="second", advertised_models=frozenset({"model-a"}))
     calls: list[str] = []
 
-    async def failing_call(
-        backend: InMemoryFakeBackend, body: dict[str, Any], handle: CallHandle
-    ) -> dict[str, Any]:
+    async def failing_call(backend: InMemoryFakeBackend, body: dict[str, Any], handle: CallHandle) -> dict[str, Any]:
         del body, handle
         calls.append(backend.id)
         raise BackendError(classification="transient", message=f"{backend.id} failed")
@@ -491,9 +483,7 @@ def test_inner_dispatch_backend_attempt_cap_stops_before_second_backend(
                 session_registry=SessionRegistry(),
                 usage_log=log,
                 call=failing_call,
-                dispatch_budget=_DispatchRetryBudget.from_config(
-                    seconds=360.0, max_backend_attempts=1
-                ),
+                dispatch_budget=_DispatchRetryBudget.from_config(seconds=360.0, max_backend_attempts=1),
             )
         )
     assert calls == ["first"]
