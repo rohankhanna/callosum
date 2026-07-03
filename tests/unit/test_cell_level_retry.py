@@ -489,3 +489,47 @@ def test_inner_dispatch_backend_attempt_cap_stops_before_second_backend(
     assert calls == ["first"]
     assert exc_info.value.status_code == 503
     assert "backend attempt cap reached" in str(exc_info.value.detail)
+
+
+def test_stops_when_aggregate_retry_budget_is_exhausted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A single request should not stack multiple slow retries once the
+    aggregate per-cell-retry budget is spent."""
+    log = UsageLog(tmp_path / "u.sqlite")
+    monkeypatch.setattr(app_module, "MAX_CELL_RETRY_BUDGET_MS", 0)
+    seen = _install_inner_stub(
+        monkeypatch,
+        log=log,
+        behavior={
+            "model-a": HTTPException(status_code=503, detail="exhausted"),
+            "model-b": {"served": "b"},
+        },
+    )
+    body = {"model": "auto"}
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            _dispatch_nonstream_with_cell_retry(
+                body,
+                candidates=(CELLS[0], CELLS[1]),
+                usage_log=log,
+                model="auto",
+                route_name="/v1/responses",
+                backends_list=[],
+                preferred_id=None,
+                session_id=None,
+                session_registry=object(),
+                call=None,
+            )
+        )
+    assert exc_info.value.status_code == 503
+    assert [s["model"] for s in seen] == ["model-a"]
+    conn = sqlite3.connect(tmp_path / "u.sqlite")
+    rows = conn.execute(
+        "SELECT attempt_idx, classification, error_message FROM request_routing_attempts ORDER BY attempt_idx"
+    ).fetchall()
+    assert len(rows) == 1
+    attempt_idx, classification, error_message = rows[0]
+    assert attempt_idx == 0
+    assert classification == "failed_budget_exhausted"
+    assert error_message.startswith("exhausted; aggregate cell-retry budget 0ms exhausted after ")
