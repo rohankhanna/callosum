@@ -19,6 +19,12 @@ left to right direction
 
 actor "OpenAI-compatible\nclients" as Clients
 
+package "artifact-backed service" as ServiceRuntime {
+  component "systemd user service\nExecStart: runtime venv\nbin/callosum serve" as ServiceUnit
+  folder "~/.local/share/callosum\n/runtime/venv" as RuntimeVenv
+  component "installed callosum CLI\nservice start/stop/restart/status" as RuntimeCli
+}
+
 package "callosum FastAPI process" as Proxy {
   component "API surface\n/v1/responses\n/v1/chat/completions" as API
   component "Router\nfeatures -> capability filter\n-> predictor -> selector" as Router
@@ -49,6 +55,10 @@ package "scheduled auto-dev loop" as AutoDev {
 }
 
 Clients --> API : HTTP on 127.0.0.1
+ServiceUnit --> RuntimeVenv : runs installed artifact
+RuntimeVenv --> RuntimeCli
+RuntimeCli --> ServiceUnit : operator service control
+ServiceUnit --> API : starts FastAPI process
 API --> OperatorState : read routing mode\nand denylist
 API --> Router : route request
 Router --> Transforms : apply selected\ncell transforms

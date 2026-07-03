@@ -41,6 +41,19 @@ dispatch bootstrap --help
 `~/.local/share/scheduler-orchestration/runtime` per Dispatch's standard
 layout. Callosum does not require a project-local override.
 
+## Managed service boundary
+
+Dispatch jobs are orthogonal to the Callosum service's own deployment
+boundary. The managed Callosum service itself should run from the
+installed runtime CLI at:
+
+```bash
+~/.local/share/callosum/runtime/venv/bin/callosum
+```
+
+not from `uv run` against the repo checkout. See
+`docs/operations/runtime_deploy.md`.
+
 ## Safety defaults
 
 Dispatch execution is disabled by default. Set

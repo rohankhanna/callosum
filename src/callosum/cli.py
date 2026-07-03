@@ -34,6 +34,8 @@ from callosum.usage_diagnostic import (
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8765"
 DEFAULT_SYSTEMD_UNIT = "system-dependency-callosum.service"
+DEFAULT_RUNTIME_ROOT = Path(os.environ.get("XDG_DATA_HOME", "~/.local/share")).expanduser() / "callosum" / "runtime"
+SERVICE_SOURCE_ENV = "CALLOSUM_SERVICE_SOURCE"
 
 
 def _admin_token() -> str:
@@ -102,6 +104,30 @@ def _print(obj: Any, *, pretty: bool = True) -> None:
             print(json.dumps(obj))
     else:
         print(obj)
+
+
+def _repo_root_from_cwd() -> Path:
+    try:
+        return Path(
+            subprocess.check_output(
+                ["git", "rev-parse", "--show-toplevel"],
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ).strip()
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        sys.exit("callosum CLI: not inside a git checkout; pass --repo-root explicitly.")
+
+
+def _runtime_root_from_args(args: argparse.Namespace) -> Path:
+    raw = getattr(args, "runtime_root", None)
+    if raw is None:
+        return DEFAULT_RUNTIME_ROOT
+    return Path(raw).expanduser()
+
+
+def _runtime_callosum_binary(runtime_root: Path) -> Path:
+    return runtime_root / "venv" / "bin" / "callosum"
 
 
 # ---------- subcommand handlers -----------------------------------------
@@ -443,11 +469,47 @@ def cmd_probe_tools(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_build_runtime(args: argparse.Namespace) -> int:
+    repo_root = Path(args.repo_root).expanduser() if args.repo_root else _repo_root_from_cwd()
+    script = repo_root / "scripts" / "install_runtime_venv.sh"
+    if not script.exists():
+        sys.exit(f"callosum CLI: runtime install script not found: {script}")
+    env = os.environ.copy()
+    env.setdefault("UV_CACHE_DIR", "/tmp/callosum-uv-cache")
+    env.setdefault("XDG_CACHE_HOME", "/tmp/callosum-xdg-cache")
+    env["CALLOSUM_RUNTIME_ROOT"] = str(_runtime_root_from_args(args))
+    return subprocess.run([str(script)], cwd=str(repo_root), env=env, check=False).returncode
+
+
+def cmd_source_serve(args: argparse.Namespace) -> int:
+    repo_root = Path(args.repo_root).expanduser() if args.repo_root else _repo_root_from_cwd()
+    env = os.environ.copy()
+    env.setdefault("UV_CACHE_DIR", "/tmp/callosum-uv-cache")
+    env.setdefault("XDG_CACHE_HOME", "/tmp/callosum-xdg-cache")
+    argv = ["uv", "run", "callosum", "serve"]
+    if args.config is not None:
+        argv.extend(["--config", str(args.config)])
+    if args.host is not None:
+        argv.extend(["--host", args.host])
+    if args.port is not None:
+        argv.extend(["--port", str(args.port)])
+    return subprocess.run(argv, cwd=str(repo_root), env=env, check=False).returncode
+
+
 def _run_service_command(argv: list[str]) -> int:
     try:
         return subprocess.run(argv, check=False).returncode
     except FileNotFoundError:
         sys.exit(f"callosum CLI: command not found: {argv[0]}")
+
+
+def _set_service_source_mode(enabled: bool) -> int:
+    argv = ["systemctl", "--user"]
+    if enabled:
+        argv.extend(["set-environment", f"{SERVICE_SOURCE_ENV}=1"])
+    else:
+        argv.extend(["unset-environment", SERVICE_SOURCE_ENV])
+    return _run_service_command(argv)
 
 
 def cmd_service_status(args: argparse.Namespace) -> int:
@@ -464,6 +526,9 @@ def cmd_service_logs(args: argparse.Namespace) -> int:
 
 
 def cmd_service_restart(args: argparse.Namespace) -> int:
+    rc = _set_service_source_mode(args.source)
+    if rc != 0:
+        return rc
     return _run_service_command(["systemctl", "--user", "restart", args.unit])
 
 
@@ -472,6 +537,9 @@ def cmd_service_stop(args: argparse.Namespace) -> int:
 
 
 def cmd_service_start(args: argparse.Namespace) -> int:
+    rc = _set_service_source_mode(args.source)
+    if rc != 0:
+        return rc
     return _run_service_command(["systemctl", "--user", "start", args.unit])
 
 
@@ -512,6 +580,9 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     `callosum serve`; bare `callosum` is now reserved for the unified
     help surface.
     """
+    if getattr(args, "source", False):
+        return cmd_source_serve(args)
+
     from callosum.__main__ import serve_with_args
 
     serve_with_args(args)
@@ -554,8 +625,41 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_serve.add_argument("--host", default=None, help="Override [server].host from config.")
     p_serve.add_argument("--port", type=int, default=None, help="Override [server].port from config.")
+    p_serve.add_argument(
+        "--source",
+        action="store_true",
+        help="Development mode: run from the repo checkout via `uv run callosum serve`.",
+    )
+    p_serve.add_argument(
+        "--repo-root",
+        type=_Path,
+        default=None,
+        help="Repo checkout for --source (default: current git toplevel).",
+    )
     p_serve.set_defaults(func=_cmd_serve)
 
+    p_build = sub.add_parser(
+        "build",
+        help="Build the project and replace the installed runtime CLI in the runtime venv.",
+        description=(
+            "Build a wheel from the repo checkout and reinstall it into the "
+            "dedicated runtime venv. This updates the installed `callosum` "
+            "binary used by the managed service without restarting the service."
+        ),
+    )
+    p_build.add_argument(
+        "--repo-root",
+        type=_Path,
+        default=None,
+        help="Path to the callosum checkout (default: current git toplevel).",
+    )
+    p_build.add_argument(
+        "--runtime-root",
+        type=_Path,
+        default=None,
+        help="Runtime root (default: ~/.local/share/callosum/runtime).",
+    )
+    p_build.set_defaults(func=cmd_build_runtime)
     sub.add_parser("status", help="Print a consolidated operator-state snapshot.").set_defaults(func=cmd_status)
     sub.add_parser(
         "version",
@@ -819,6 +923,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_SYSTEMD_UNIT,
         help=f"systemd user unit name (default: {DEFAULT_SYSTEMD_UNIT}).",
     )
+    p_service.add_argument(
+        "--runtime-root",
+        type=_Path,
+        default=None,
+        help="Runtime root for the installed callosum binary (default: ~/.local/share/callosum/runtime).",
+    )
     psrv = p_service.add_subparsers(dest="subcommand", required=True)
     psrv.add_parser(
         "status",
@@ -842,18 +952,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Number of recent log lines to show.",
     )
     logs.set_defaults(func=cmd_service_logs)
-    psrv.add_parser(
+    restart = psrv.add_parser(
         "restart",
         help="Restart the managed Callosum service.",
-    ).set_defaults(func=cmd_service_restart)
+    )
+    restart.add_argument(
+        "--source",
+        action="store_true",
+        help="Run the managed service from the repo checkout instead of the installed runtime binary.",
+    )
+    restart.set_defaults(func=cmd_service_restart)
     psrv.add_parser(
         "stop",
         help="Stop the managed Callosum service.",
     ).set_defaults(func=cmd_service_stop)
-    psrv.add_parser(
+    start = psrv.add_parser(
         "start",
         help="Start the managed Callosum service.",
-    ).set_defaults(func=cmd_service_start)
+    )
+    start.add_argument(
+        "--source",
+        action="store_true",
+        help="Run the managed service from the repo checkout instead of the installed runtime binary.",
+    )
+    start.set_defaults(func=cmd_service_start)
 
     # Auth-rotate wizard. Wired here so the help surface lists it
     # alongside the other operator commands.
