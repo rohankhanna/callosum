@@ -37,8 +37,9 @@ from callosum.cell_grid import (
     cell_sample_counts,
     live_completion_models,
     reasoning_levels_for,
+    recent_quota_cooldown_cells,
 )
-from callosum.config import AutoRouterConfig
+from callosum.config import LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S, AutoRouterConfig
 from callosum.errors import RETRYABLE, BackendError, ErrorClass
 from callosum.fallback import FallbackExecutor, should_attempt_fallback
 from callosum.label_ui import install_label_ui
@@ -50,6 +51,7 @@ from callosum.routing.cost_estimator import (
 )
 from callosum.routing.cost_model import CostRankProvider
 from callosum.routing.factory import build_router
+from callosum.routing.feasibility import feasibility_eligible
 from callosum.routing.features import _approx_tokens
 from callosum.routing.protocols import CellCapabilities
 from callosum.routing.quota import (
@@ -1119,6 +1121,8 @@ def create_app(
             capabilities_of=_capabilities_of,
             time_estimator=_TIME_ESTIMATOR,
             output_forecaster=_OUTPUT_FORECASTER,
+            feasibility_enabled=auto_cfg.exploration_feasibility_enabled,
+            feasibility_budget_s=LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S,
         )
 
     smoke_tester = _PeriodicSmokeTester(
@@ -2403,14 +2407,49 @@ async def _dispatch_internal(
                 list(decision.candidates),
                 window_seconds=auto_cfg.quota_window_seconds,
             )
+            # Feasibility-aware exploration (): only force
+            # onto cells predicted to FINISH within the stall-guard budget, so
+            # a large real turn is not handed to a slow local cell that will
+            # time out, record no sample, and stay under floor forever (the
+            # doom loop). Cold cells stay eligible (grace). The exploit path
+            # is untouched — this constrains FORCING only.
+            _quota_candidates: Sequence[Cell] = decision.candidates
+            if auto_cfg.exploration_feasibility_enabled:
+                _quota_candidates = [
+                    c
+                    for c in decision.candidates
+                    if feasibility_eligible(
+                        c,
+                        decision.features.tokens,
+                        time_estimator=_TIME_ESTIMATOR,
+                        output_forecaster=_OUTPUT_FORECASTER,
+                        budget_s=LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S,
+                    )
+                ]
+                # If every candidate is a known-slow measured cell (all over
+                # budget), forcing nothing is correct — the router's optimal
+                # pick stands rather than burning a forced turn on a timeout.
+                # Cold cells are always eligible (grace), so an empty pool here
+                # means every candidate is trusted-measured-and-over-budget.
+            # Post-timeout cooldown (): a cell that just timed
+            # out on a forced turn is skipped this cycle so the quota does not
+            # re-target it. Re-arms only on a real completed sample.
+            _cooldown: frozenset[Cell] = frozenset()
+            if auto_cfg.exploration_cooldown_enabled:
+                _cooldown = recent_quota_cooldown_cells(
+                    usage_log.path,
+                    list(_quota_candidates),
+                    window_seconds=auto_cfg.exploration_cooldown_window_seconds,
+                )
             _forced = select_quota_deficit_cell(
-                decision.candidates,
+                _quota_candidates,
                 _quota_coverage,
                 floor_pct=effective_floor_pct(
-                    len(decision.candidates),
+                    len(_quota_candidates),
                     budget_pct=auto_cfg.exploration_budget_pct,
                     min_floor_pct=auto_cfg.quota_floor_pct,
                 ),
+                cooldown=_cooldown,
             )
             if _forced is not None and _forced != chosen:
                 chosen = _forced

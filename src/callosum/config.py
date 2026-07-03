@@ -179,6 +179,31 @@ class AutoRouterConfig(BaseModel):
     # Window over which a cell's share is measured. 30 days.
     quota_window_seconds: int = 2_592_000
 
+    # Exploration feasibility (work tracker ): a cell is forced onto
+    # an exploration turn only when the forward time estimator predicts it can
+    # FINISH within the stall-guard first-byte budget — otherwise the forced
+    # turn times out (status 0), records no completed sample, and the cell
+    # stays under its floor forever, so the even-split quota re-targets it
+    # indefinitely (the doom loop). Promotes the time estimator from a soft
+    # scheduling tie-break to a hard constraint on the EXPLORATION path only;
+    # the exploit (cost/quality) path keeps it as a soft tie-break. Cold cells
+    # with no measured latency fit stay eligible (grace) so exploration is not
+    # starved of the cells it most needs to sample. Disable to fall back to the
+    # pre-fix window-fit-only filter (escape hatch). See
+    # routing/feasibility.py.
+    exploration_feasibility_enabled: bool = True
+    # Post-timeout cooldown (the second half of ): a cell that
+    # just timed out on a forced-exploration turn is skipped by the quota for
+    # this window so it is not immediately re-targeted. Re-arms only after the
+    # cell records a real completed sample. The backstop to feasibility —
+    # bounds a cold cell's wasted forced turns to one. See
+    # cell_grid.recent_quota_cooldown_cells.
+    exploration_cooldown_enabled: bool = True
+    # How far back a failed forced-exploration turn keeps a cell cooled. Short
+    # by design — just enough to skip the next selection cycle; the cell
+    # re-arms as soon as it completes any sample. 10 min.
+    exploration_cooldown_window_seconds: int = 600
+
     # Temporary guardrail for remote reasoning-cost blowups: once xhigh cells
     # account for this share of recent successful traffic, keep automatic
     # routing away from xhigh while non-xhigh alternatives are available.

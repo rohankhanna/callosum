@@ -15,6 +15,7 @@ from typing import Any
 
 from callosum.cell_grid import Cell
 from callosum.routing.capability import CapabilityFilter
+from callosum.routing.feasibility import feasibility_eligible
 from callosum.routing.features import extract_features
 from callosum.routing.protocols import (
     CellSelector,
@@ -43,6 +44,16 @@ class NoCompatibleCellError(RuntimeError):
 # Generous enough that a 252K-token prompt still scores 1.0 against a
 # 256K-window cell.
 _OUTPUT_HEADROOM_TOKENS = 4096
+
+# Default exploration-feasibility budget: a forced-exploration cell whose
+# predicted p95 completion exceeds this is excluded from the cold-start
+# random pool (and, in app.py, from quota forcing) — it would trip the local
+# stall guard, time out, and (under the even-split quota) get re-targeted
+# forever. Mirrors CALLOSUM_LOCAL_FIRST_BYTE_TIMEOUT_S (the deadline a
+# large-context prefill trips); the env-tunable value is plumbed in from
+# app.py via build_router, so this is only the test/headless default.
+# See routing/feasibility.py and work tracker .
+_DEFAULT_FEASIBILITY_BUDGET_S = 180.0
 
 
 def _window_fit_factor(window: int, prompt_tokens: int) -> float:
@@ -91,6 +102,8 @@ class Router:
         capability_filter: CapabilityFilter,
         time_estimator: TimeUsageEstimator | None = None,
         output_forecaster: OutputTokenForecaster | None = None,
+        feasibility_enabled: bool = True,
+        feasibility_budget_s: float = _DEFAULT_FEASIBILITY_BUDGET_S,
     ) -> None:
         self._embedding = embedding
         self._predictor = predictor
@@ -98,6 +111,8 @@ class Router:
         self._filter = capability_filter
         self._time_estimator = time_estimator
         self._output_forecaster = output_forecaster
+        self._feasibility_enabled = feasibility_enabled
+        self._feasibility_budget_s = feasibility_budget_s
 
     async def route(self, body: dict[str, Any], cells: list[Cell]) -> RoutingDecision:
         """Run the pipeline once for an incoming request body.
@@ -131,7 +146,29 @@ class Router:
             fitting = [
                 c for c in compatible if _window_fit_factor(capabilities_map[c].context_window, features.tokens) >= 1.0
             ]
-            chosen = random.choice(fitting or compatible)
+            # Feasibility: among window-fitting cells, keep only those predicted
+            # to FINISH within the stall-guard budget, so cold-start exploration
+            # doesn't hand a large real turn to a slow local cell that will time
+            # out and record no sample (the doom loop, ). Cold
+            # cells with no measured fit stay eligible (grace) — see
+            # routing/feasibility.py. Fall back to the window-fitting pool, then
+            # the whole compatible pool, so feasibility never empties selection
+            # (better to try the least-bad cell than to 4xx).
+            if self._feasibility_enabled:
+                feasible = [
+                    c
+                    for c in fitting
+                    if feasibility_eligible(
+                        c,
+                        features.tokens,
+                        time_estimator=self._time_estimator,
+                        output_forecaster=self._output_forecaster,
+                        budget_s=self._feasibility_budget_s,
+                    )
+                ]
+            else:
+                feasible = fitting
+            chosen = random.choice(feasible or fitting or compatible)
             # Retry order still prefers fitting, cheap cells (Dispatch retries
             # on 5xx); the random PRIMARY pick is what drives exploration.
             rest = sorted(

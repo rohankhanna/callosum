@@ -82,6 +82,55 @@ This is intentionally a temporary operating cap, not a learned quality claim.
 work tracker tracks the later removal once the learned router has enough reliable
 cost/quality evidence to spend high reasoning effort deliberately.
 
+## Feasibility + cooldown (the doom-loop fix, )
+
+The floor says "every compatible cell must get its share of traffic" — but
+"compatible" used to mean only *capability + context-window fit*. A slow local
+cell that *fits* a 262K-token prompt but cannot *finish* it within the local
+stall-guard first-byte timeout (`CALLOSUM_LOCAL_FIRST_BYTE_TIMEOUT_S`, default
+180s) would be forced onto the turn, run to the timeout, return `status=0`,
+and record no completed sample. A cell with zero completed samples stays under
+its floor forever, so the even-split quota re-targeted the **same** slow cell
+indefinitely — GPU pegged, every turn failed. Live-confirmed 2026-06-28.
+
+The fix is two halves, shipped together (regression test:
+`tests/unit/routing/test_exploration_doom_loop.py`, a failing→green tiered-gate
+case seeding ):
+
+1. **Feasibility-aware candidate filter** (`src/callosum/routing/feasibility.py`).
+   A cell is eligible for *forced* exploration only when the forward time
+   estimator () predicts its p95 completion sits under the
+   stall-guard first-byte budget. The estimator is promoted from a soft
+   scheduling tie-break to a **hard constraint on the exploration path**
+   (cold-start random selection in `router.py` + quota forcing in `app.py`);
+   the exploit (cost/quality) path keeps it as a soft tie-break, so a
+   learned-optimal cell is never hard-excluded for being slow.
+
+   **Cold-cell grace — the deliberate tradeoff.** A cell whose latency
+   prediction rests on a model-pooled / global-prior / flat-fallback prior
+   rather than its own measured fit is *not* hard-excluded on that prior. The
+   prior is uncertain, and excluding on it would starve exploration of exactly
+   the cold cells we most need to sample (zero measured rows). Such a cell
+   stays eligible for one forced attempt; if it then times out, the cooldown
+   below bounds the damage to one wasted turn. The cost is at most one timed-out
+   forced turn per cold cell — the price of not starving exploration.
+
+2. **Post-timeout cooldown** (`cell_grid.recent_quota_cooldown_cells` +
+   `quota.select_quota_deficit_cell(cooldown=…)`). A cell that just timed out
+   on a `quota_explore` turn (most recent forced attempt `status != 200` with
+   no `status=200` row since, within the cooldown window) is skipped for the
+   next selection cycle. The floor's purpose is *coverage*, and coverage needs
+   a *completed* sample, not a timeout — so the cell re-arms only after it
+   records a real completed sample (organic traffic on a small turn counts too;
+   any completion proves the cell can finish something). This is the backstop to
+   feasibility: it bounds a cold cell's wasted forced turns to one even when the
+   latency prior could not rule it out.
+
+If every candidate is a known-slow measured cell (all over budget) the quota
+forces nothing and the router's optimal pick stands — burning a forced turn on
+a certain timeout is worse than not forcing. If every candidate is cooling down
+the quota likewise forces nothing.
+
 ## Observability
 
 `/status` carries `router.exploration_quota`: the `enabled` flag,
@@ -103,4 +152,9 @@ total exploration budget split evenly across the lane's candidates),
 `quota_floor_pct` (default 0.0 — optional absolute minimum per-cell floor),
 `quota_window_seconds` (default 30 days), `xhigh_cap_enabled` (default on),
 `xhigh_cap_pct` (default 0.01), and `xhigh_cap_window_seconds` (default seven
-days).
+days). Doom-loop fix knobs (): `exploration_feasibility_enabled`
+(default on — escape hatch to fall back to window-fit-only filtering) and
+`exploration_cooldown_enabled` / `exploration_cooldown_window_seconds` (default
+on / 600s — how long a timed-out forced turn keeps a cell out of the forced
+pool). The feasibility budget itself is the env-tunable
+`CALLOSUM_LOCAL_FIRST_BYTE_TIMEOUT_S` (default 180s).

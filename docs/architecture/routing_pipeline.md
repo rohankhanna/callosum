@@ -30,9 +30,17 @@ strategies, not multiple competing routers.
 7. **`router.route(body, cells_now)`** — the one decision (`routing/router.py`):
    `extract_features` (+ embedding) → `CapabilityFilter` (empty → 400) →
    `QualityPredictor.predict` (uniform=0.5 / knn=learned) →
-   `CostWeightedSelector.select` → `RoutingDecision`.
+   `CostWeightedSelector.select` → `RoutingDecision`. Cold-start (no
+   differentiated prediction) explores randomly among capability-filtered,
+   window-fitting, **feasibility-eligible** cells (predicted p95 latency under
+   the stall-guard first-byte budget; cold cells with no measured fit are
+   graced — see `feasibility.py` / ).
 8. **Exploration quota** (`exploration_quota.md`) — deficit-fill: on a
-   text-eligible, non-hard turn, steer to an under-floor cell.
+   text-eligible, non-hard turn, steer to an under-floor cell. Candidates are
+   **feasibility-filtered** first (don't force onto a cell predicted to time
+   out), and a cell in **post-timeout cooldown** (recent `quota_explore`
+   failure, no completed sample since) is skipped so the quota does not
+   re-target it — the doom-loop fix ().
 9. Rewrite body (`model`, effort) → per-cell transforms
    (`_TRANSFORM_REGISTRY.apply_request`) → stamp provenance (predictor id,
    predictions, embedding, candidate cells capped at `MAX_CELL_ATTEMPTS=3`).

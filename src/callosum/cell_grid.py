@@ -395,3 +395,76 @@ def cell_sample_counts(
         if cell is not None:
             counts[cell] = count
     return CellCoverage(counts=counts)
+
+
+def recent_quota_cooldown_cells(
+    usage_log_path: Path,
+    cells: list[Cell],
+    *,
+    window_seconds: int,
+    now: float | None = None,
+) -> frozenset[Cell]:
+    """Cells currently in post-timeout exploration cooldown.
+
+    A cell is cooling when, within window_seconds, its most recent
+    forced-exploration (effective_routing_mode='quota_explore') attempt
+    FAILED (status != 200 — a stall-guard timeout logs status=0; a
+    transient upstream failure logs a non-200) AND no successful
+    (status=200) row for the cell has arrived since. The cooldown re-arms
+    only on a real completed sample, because the exploration floor's purpose
+    is coverage and coverage requires a *completed* sample, not a timeout
+    (work tracker ````).
+
+    This is the backstop to the feasibility filter in routing/feasibility:
+    even a cold cell the estimator could not rule out (cold-cell grace) gets at
+    most one failed forced turn before the quota stops re-targeting it, so the
+    doom loop breaks regardless of whether the latency prior was trustworthy.
+    The success check spans ALL routing modes — an organic completed sample on
+    a small turn re-arms the cell too, since any completion proves the cell can
+    finish *something*. Both the failure and success scans are bounded to the
+    cooldown window: a failure older than the window no longer cools, and a
+    windowed comparison of the two most-recent timestamps is exactly the
+    "which happened last" test (a success outside the window is, by
+    definition, older than any in-window failure).
+
+    Returns the subset of cells currently cooling. Cells never forced
+    (no quota_explore row) are never cooling.
+    """
+    if not cells or not usage_log_path.exists():
+        return frozenset()
+    cutoff = (time.time() if now is None else now) - window_seconds
+    conn = sqlite3.connect(usage_log_path)
+    try:
+        fail_rows = conn.execute(
+            "SELECT model, reasoning_effort, MAX(ts_start)"
+            " FROM requests"
+            " WHERE effective_routing_mode = 'quota_explore'"
+            "   AND status != 200 AND ts_start >= ?"
+            " GROUP BY model, reasoning_effort",
+            (cutoff,),
+        ).fetchall()
+        ok_rows = conn.execute(
+            "SELECT model, reasoning_effort, MAX(ts_start)"
+            " FROM requests"
+            " WHERE status = 200 AND ts_start >= ?"
+            " GROUP BY model, reasoning_effort",
+            (cutoff,),
+        ).fetchall()
+    finally:
+        conn.close()
+    cell_lookup = {c.as_tuple(): c for c in cells}
+    last_ok: dict[tuple[str, str], float] = {}
+    for model, effort, ts in ok_rows:
+        if model is None or ts is None:
+            continue
+        last_ok[(model, effort or "")] = float(ts)
+    cooling: set[Cell] = set()
+    for model, effort, fail_ts in fail_rows:
+        if model is None or fail_ts is None:
+            continue
+        cell = cell_lookup.get((model, effort or ""))
+        if cell is None:
+            continue
+        if float(fail_ts) > last_ok.get((model, effort or ""), float("-inf")):
+            cooling.add(cell)
+    return frozenset(cooling)

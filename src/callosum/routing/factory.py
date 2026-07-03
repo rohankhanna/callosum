@@ -76,6 +76,8 @@ def build_router(
     *,
     time_estimator: TimeUsageEstimator | None = None,
     output_forecaster: OutputTokenForecaster | None = None,
+    feasibility_enabled: bool = True,
+    feasibility_budget_s: float | None = None,
 ) -> Router:
     """Resolve string ids → concrete impls → wired Router."""
     try:
@@ -94,11 +96,15 @@ def build_router(
         selector_cls = _SELECTOR_IMPLS[config.cell_selector]
     except KeyError as e:
         raise ValueError(f"unknown cell_selector {config.cell_selector!r}; available: {sorted(_SELECTOR_IMPLS)}") from e
-    return Router(
-        embedding=embedding_cls(),
-        predictor=predictor_cls(),
-        selector=selector_cls(),
-        capability_filter=CapabilityFilter(capabilities_of=capabilities_of),
-        time_estimator=time_estimator,
-        output_forecaster=output_forecaster,
-    )
+    router_kwargs: dict[str, object] = {
+        "embedding": embedding_cls(),
+        "predictor": predictor_cls(),
+        "selector": selector_cls(),
+        "capability_filter": CapabilityFilter(capabilities_of=capabilities_of),
+        "time_estimator": time_estimator,
+        "output_forecaster": output_forecaster,
+        "feasibility_enabled": feasibility_enabled,
+    }
+    if feasibility_budget_s is not None:
+        router_kwargs["feasibility_budget_s"] = feasibility_budget_s
+    return Router(**router_kwargs)  # type: ignore[arg-type]
