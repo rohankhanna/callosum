@@ -2290,7 +2290,17 @@ async def _dispatch_internal(
                 _routable = [b for b in _routable if getattr(b, "kind", "") != "litellm_gateway"]
         if _process_pin is not None:
             _routable = [b for b in _routable if b.id == _process_pin]
-        cells_now = _filter_cells_to_routable(cells_now, _routable)
+        # A backend with quota available but no discovered model catalog
+        # cannot serve any request, so it is not routable for dispatch
+        # (: cold-boot window where advertised_models is
+        # still empty). Keep such backends in _routable so the empty-
+        # catalog cause can be reported accurately below, but exclude
+        # them from the cell filter — _filter_cells_to_routable only
+        # counts a backend's advertised_models, so this is equivalent for
+        # cell selection while letting the error path distinguish a
+        # catalog-empty backend from a genuinely mode-excluded one.
+        _dispatch_routable = [b for b in _routable if b.advertised_models]
+        cells_now = _filter_cells_to_routable(cells_now, _dispatch_routable)
         if (
             auto_cfg.xhigh_cap_enabled
             and usage_log is not None
@@ -2332,6 +2342,27 @@ async def _dispatch_internal(
                         f"selected lane {requested_model!r} is not available yet: "
                         f"no backend currently serves model "
                         f"{_selector.pinned_model!r}{_effort_note}"
+                    ),
+                    headers={"Retry-After": "60"},
+                )
+            # Cold-boot empty-catalog window: backends are quota-available
+            # (so _routable is non-empty) but none have discovered their
+            # model catalog yet, so the cell filter emptied cells_now.
+            # This must NOT be reported as a routing-mode exclusion — the
+            # mode kept the backends; only the catalog is unpopulated
+            # (). Without this branch the cold-boot
+            # state falls through to "current routing mode excludes all
+            # currently-routable backends" below, which is misleading:
+            # the backends were NOT excluded by mode, they simply cannot
+            # serve anything until their catalog refreshes.
+            if _routable and not _dispatch_routable:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        f"no routable backend under routing mode {_routing!r} "
+                        "has a discovered model catalog yet (cold-boot window: "
+                        f"{len(_routable)} backend(s) quota-available but "
+                        "advertised_models empty; waiting on catalog refresh)"
                     ),
                     headers={"Retry-After": "60"},
                 )
@@ -4713,12 +4744,25 @@ async def _catalog_boot_resync(
     state_store: Any | None,
     attempts: int,
     interval_s: float,
+    tail_attempts: int = 12,
+    tail_interval_s: float = 60.0,
 ) -> None:
     """Background cold-boot retry for backends that booted with an empty model
     catalog. Keeps re-fetching the upstream model list until every backend has
     one (or the attempt budget is spent), so the cell grid recovers within
     minutes of a boot-time dependency lag instead of waiting on the hourly
     smoke tester. The model-catalog leg of the stale-on-cold-boot class.
+
+    Two phases: a fast phase (attempts x interval_s) for the common
+    dependency-lag case, then a slow tail (tail_attempts x
+    tail_interval_s) that keeps retrying past the fast budget. The tail
+    closes the give-up -> first-tick hole (): without it, a
+    dependency that takes longer than the fast budget to come up leaves the
+    catalog empty until the hourly smoke tester's first tick — which sleeps a
+    full hour before firing. The tail self-heals a slow dependency start in
+    minutes instead of up to 1h. Bounded: once both budgets are spent, the
+    hourly smoke tester takes over and the dispatcher fails closed with an
+    accurate empty-catalog 503 in the meantime.
     """
     pending = list(backends)
     for attempt in range(1, attempts + 1):
@@ -4733,9 +4777,31 @@ async def _catalog_boot_resync(
             attempts,
             [b.id for b in pending],
         )
+    # Slow tail: the fast budget is spent but at least one catalog is still
+    # empty. Keep retrying at a longer cadence so a slow-to-start dependency
+    # (credential service, network) still self-heals in minutes rather than
+    # waiting up to 1h for the first hourly smoke-tester tick.
+    for attempt in range(1, tail_attempts + 1):
+        logger.warning(
+            "catalog boot resync: slow tail %d/%d (interval=%.0fs), still-empty: %s",
+            attempt,
+            tail_attempts,
+            tail_interval_s,
+            [b.id for b in pending],
+        )
+        await asyncio.sleep(tail_interval_s)
+        pending = await _refresh_catalogs_pass(pending, state_store=state_store)
+        if not pending:
+            logger.warning(
+                "catalog boot resync: all catalogs populated during slow tail after %d retr(y/ies)",
+                attempt,
+            )
+            return
     logger.error(
-        "catalog boot resync: gave up after %d attempts; still-empty: %s",
+        "catalog boot resync: gave up after %d fast + %d slow attempts; "
+        "still-empty: %s; hourly smoke tester will retry",
         attempts,
+        tail_attempts,
         [b.id for b in pending],
     )
 

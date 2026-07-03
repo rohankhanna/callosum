@@ -168,6 +168,12 @@ class CodexAuthVaultBackend:
         self._transport_cooldown_until_ts: float = 0.0
         self._transport_failure_threshold: int = 3
         self._transport_cooldown_seconds: float = 30.0
+        # Warm-start the model catalog from the last-known-good persisted copy
+        # so a cold boot (upstream/auth slow/down) starts with a populated
+        # catalog instead of an empty-catalog window. The startup refresh
+        # overwrites this on success; on failure we keep serving from it.
+        # Parity with CredentialProxyBackend. See  (layer 2).
+        self._warm_start_catalog()
 
     @property
     def advertised_models(self) -> frozenset[str]:
@@ -195,6 +201,80 @@ class CodexAuthVaultBackend:
         callosum.cell_grid.ModelMetadata.
         """
         return self._model_metadata
+
+    def _warm_start_catalog(self) -> None:
+        """Seed the dynamic catalog from the persisted last-known-good copy.
+
+        Populates `_dynamic_advertised_models` / `_model_context_windows` /
+        `_model_metadata` from disk so a cold boot starts with a populated
+        catalog (preferred over the static TOML hint) even when the upstream
+        /models fetch is slow or failing. `_models_fetched_at` is left at 0.0
+        so the startup refresh's freshness gate does NOT skip — the live
+        refresh must still run and overwrite this hint on success. On a failed
+        refresh the warm-start set is retained (refresh only overwrites when
+        it gets models), so routing keeps working off the hint rather than
+        going empty.
+
+        The persisted blob is untrusted disk state: validate every field on
+        load and fall back to empty (→ static hint) on any shape problem.
+        Mirrors CredentialProxyBackend._warm_start_catalog for parity.
+        """
+        if self._state_store is None:
+            return
+        persisted = self._state_store.load_catalog(self.id)
+        if not isinstance(persisted, dict):
+            return
+        raw_models = persisted.get("advertised_models")
+        if not isinstance(raw_models, list):
+            return
+        slugs = frozenset(m for m in raw_models if isinstance(m, str) and m)
+        if not slugs:
+            return
+        raw_ctx = persisted.get("context_windows")
+        ctx_map: dict[str, int] = {}
+        if isinstance(raw_ctx, dict):
+            for slug, ctx in raw_ctx.items():
+                if isinstance(slug, str) and isinstance(ctx, int) and not isinstance(ctx, bool) and ctx > 0:
+                    ctx_map[slug] = ctx
+        raw_meta = persisted.get("model_metadata")
+        meta_map: dict[str, ModelMetadata] = {}
+        if isinstance(raw_meta, dict):
+            from callosum.cell_grid import model_metadata_from_dict
+
+            for slug, md_raw in raw_meta.items():
+                if not isinstance(slug, str):
+                    continue
+                md = model_metadata_from_dict(md_raw)
+                if md is not None:
+                    meta_map[slug] = md
+        self._dynamic_advertised_models = slugs
+        self._model_context_windows = ctx_map
+        self._model_metadata = meta_map
+        # Leave _models_fetched_at=0.0 so the startup refresh is NOT skipped
+        # by the freshness gate (ts - 0.0 is always past models_refresh_s).
+        self._models_fetched_at = 0.0
+
+    def _persist_catalog(self, *, fetched_at: float) -> None:
+        """Write the current dynamic catalog to disk as the next boot's hint.
+
+        Called after a successful refresh so the next cold boot warm-starts
+        from this live copy. Overwrites the previous blob so a model retired
+        upstream eventually drops from the hint. Mirrors
+        CredentialProxyBackend._persist_catalog for parity.
+        """
+        if self._state_store is None or self._dynamic_advertised_models is None:
+            return
+        from callosum.cell_grid import model_metadata_to_dict
+
+        self._state_store.save_catalog(
+            self.id,
+            {
+                "advertised_models": sorted(self._dynamic_advertised_models),
+                "context_windows": dict(self._model_context_windows),
+                "model_metadata": {slug: model_metadata_to_dict(md) for slug, md in self._model_metadata.items()},
+                "fetched_at": fetched_at,
+            },
+        )
 
     def cell_capabilities(self, model: str):  # type: ignore[no-untyped-def]
         """Return CellCapabilities for `model` — what the learning router
@@ -279,6 +359,7 @@ class CodexAuthVaultBackend:
             self._model_context_windows = context_windows
             self._model_metadata = metadata
             self._models_fetched_at = ts
+            self._persist_catalog(fetched_at=ts)
 
     async def health(self) -> HealthStatus:
         return HealthStatus(available=True, reason="ok")

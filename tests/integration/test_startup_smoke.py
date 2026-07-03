@@ -216,3 +216,109 @@ def test_startup_smoke_test_refreshes_credential_proxy_quota_cache() -> None:
 
     assert backend._last_quota is not None
     assert backend._last_quota.weekly_used_percent == 10
+
+
+# --------- catalog boot resync: give-up -> first-tick hole ()
+
+
+from callosum.app import _catalog_boot_resync  # noqa: E402
+
+
+class _FlakyCatalogBackend:
+    """Fake backend whose `refresh_advertised_models` raises for the first
+    `fail_n` calls (simulating a boot-time dependency that isn't ready yet)
+    and then populates `advertised_models`. Used to exercise
+    `_catalog_boot_resync`'s fast and slow-tail retry phases without real
+    upstream calls or real 15s/60s waits."""
+
+    def __init__(self, *, id: str, fail_n: int, models: frozenset[str]) -> None:
+        self.id = id
+        self.kind = "credential_proxy"
+        self._fail_n = fail_n
+        self._calls = 0
+        self._models = models
+        self.advertised_models: frozenset[str] = frozenset()
+
+    async def refresh_advertised_models(self) -> None:
+        self._calls += 1
+        if self._calls <= self._fail_n:
+            raise RuntimeError(f"simulated dependency-not-ready (call {self._calls})")
+        self.advertised_models = self._models
+
+
+def _resync_messages(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.name == "callosum.startup"]
+
+
+async def test_catalog_boot_resync_populates_during_fast_phase(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Common case: dependency comes up within the fast retry budget. The
+    catalog populates and the resync returns during the fast phase."""
+    caplog.set_level(logging.WARNING, logger="callosum.startup")
+    backend = _FlakyCatalogBackend(id="alpha", fail_n=2, models=frozenset({"model-a0e7"}))
+    await _catalog_boot_resync(
+        [backend],
+        state_store=None,
+        attempts=5,
+        interval_s=0.01,
+        tail_attempts=5,
+        tail_interval_s=0.01,
+    )
+    assert backend.advertised_models == frozenset({"model-a0e7"})
+    msgs = _resync_messages(caplog)
+    assert any("all catalogs populated after" in m for m in msgs), msgs
+    # Did not reach the slow tail.
+    assert not any("slow tail" in m for m in msgs), msgs
+
+
+async def test_catalog_boot_resync_slow_tail_closes_first_tick_hole(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Regression for the give-up -> first-tick hole (): a
+    dependency that takes LONGER than the fast budget to come up must still
+    self-heal during the slow tail, instead of leaving the catalog empty
+    until the hourly smoke tester's first tick. Before the tail phase, the
+    resync gave up after the fast budget and the catalog stayed empty for
+    up to 1h."""
+    caplog.set_level(logging.WARNING, logger="callosum.startup")
+    # fail_n=4: fast phase has 3 attempts, so the fast budget is spent while
+    # the catalog is still empty; the 4th refresh (first tail attempt) fails
+    # too, and the 5th (second tail attempt) populates.
+    backend = _FlakyCatalogBackend(id="beta", fail_n=4, models=frozenset({"model-a0e8"}))
+    await _catalog_boot_resync(
+        [backend],
+        state_store=None,
+        attempts=3,
+        interval_s=0.01,
+        tail_attempts=5,
+        tail_interval_s=0.01,
+    )
+    assert backend.advertised_models == frozenset({"model-a0e8"})
+    msgs = _resync_messages(caplog)
+    # The fast phase exhausted (entered the tail) ...
+    assert any("slow tail" in m for m in msgs), msgs
+    # ... and the tail populated the catalog rather than giving up.
+    assert any("all catalogs populated during slow tail" in m for m in msgs), msgs
+    assert not any("gave up" in m for m in msgs), msgs
+
+
+async def test_catalog_boot_resync_bounded_gives_up_after_both_phases(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The tail is bounded, not infinite: a dependency that never comes up
+    exhausts both phases and gives up with an error, handing off to the
+    hourly smoke tester. This keeps the resync from retrying forever."""
+    caplog.set_level(logging.ERROR, logger="callosum.startup")
+    backend = _FlakyCatalogBackend(id="gamma", fail_n=10_000, models=frozenset({"model-a0e9"}))
+    await _catalog_boot_resync(
+        [backend],
+        state_store=None,
+        attempts=3,
+        interval_s=0.01,
+        tail_attempts=4,
+        tail_interval_s=0.01,
+    )
+    assert backend.advertised_models == frozenset()
+    msgs = _resync_messages(caplog)
+    assert any("gave up after 3 fast + 4 slow attempts" in m for m in msgs), msgs

@@ -5,6 +5,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 REASONING_LEVELS: tuple[str, ...] = ("low", "medium", "high", "xhigh")
 
@@ -75,6 +76,79 @@ class ModelMetadata:
     # Empty tuple if the API didn't tell us; callers fall back to a default.
     supported_reasoning_levels: tuple[str, ...] = ()
     input_modalities: tuple[str, ...] = ()
+
+
+def model_metadata_to_dict(md: ModelMetadata) -> dict[str, Any]:
+    """Serialize a ModelMetadata record to a JSON-safe dict for disk persistence.
+
+    Round-trips with `model_metadata_from_dict`. Tuples become lists (JSON has
+    no tuple type); `model_metadata_from_dict` restores them. Used by the Codex
+    backends to warm-start their catalog from the last-known-good persisted copy
+    so a cold boot does not start with an empty model catalog.
+    """
+    return {
+        "slug": md.slug,
+        "display_name": md.display_name,
+        "description": md.description,
+        "context_window": md.context_window,
+        "supported_in_api": md.supported_in_api,
+        "visibility": md.visibility,
+        "priority": md.priority,
+        "default_reasoning_level": md.default_reasoning_level,
+        "supported_reasoning_levels": list(md.supported_reasoning_levels),
+        "input_modalities": list(md.input_modalities),
+    }
+
+
+def _opt_str(d: dict[str, Any], k: str) -> str | None:
+    v = d.get(k)
+    return v if isinstance(v, str) and v else None
+
+
+def _opt_int(d: dict[str, Any], k: str) -> int | None:
+    v = d.get(k)
+    # bool is a subclass of int; exclude it so a JSON `true` doesn't masquerade
+    # as priority=1. Mirrors the defensive parsing in _extract_model_catalog.
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+
+def _opt_bool(d: dict[str, Any], k: str) -> bool | None:
+    v = d.get(k)
+    return v if isinstance(v, bool) else None
+
+
+def _opt_str_tuple(d: dict[str, Any], k: str) -> tuple[str, ...]:
+    v = d.get(k)
+    if not isinstance(v, list):
+        return ()
+    return tuple(x for x in v if isinstance(x, str) and x)
+
+
+def model_metadata_from_dict(d: Any) -> ModelMetadata | None:
+    """Reconstruct a ModelMetadata record from a persisted dict.
+
+    Returns None on any shape problem (non-dict, missing/invalid slug, bad
+    field types) so a corrupted or tampered on-disk blob never crashes startup
+    — callers fall back to the empty/static catalog instead. The persisted
+    catalog is untrusted disk state; validate, don't trust.
+    """
+    if not isinstance(d, dict):
+        return None
+    slug = d.get("slug")
+    if not isinstance(slug, str) or not slug:
+        return None
+    return ModelMetadata(
+        slug=slug,
+        display_name=_opt_str(d, "display_name"),
+        description=_opt_str(d, "description"),
+        context_window=_opt_int(d, "context_window"),
+        supported_in_api=_opt_bool(d, "supported_in_api"),
+        visibility=_opt_str(d, "visibility"),
+        priority=_opt_int(d, "priority"),
+        default_reasoning_level=_opt_str(d, "default_reasoning_level"),
+        supported_reasoning_levels=_opt_str_tuple(d, "supported_reasoning_levels"),
+        input_modalities=_opt_str_tuple(d, "input_modalities"),
+    )
 
 
 @dataclass(frozen=True, slots=True)

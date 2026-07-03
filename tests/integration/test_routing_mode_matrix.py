@@ -164,6 +164,88 @@ def test_remote_only_mode_with_remote_exhausted_returns_503(
         state.close()
 
 
+def test_remote_only_cold_boot_empty_catalog_returns_accurate_503(
+    tmp_path: Path,
+) -> None:
+    """Cold-boot window (): a remote backend has quota
+    available but its discovered model catalog is still empty (catalog
+    refresh hasn't completed yet). The cell grid falls back to static
+    defaults, so cells_now is non-empty before the routability filter,
+    then the mode/catalog filters empty it.
+
+    remote-only must NOT misreport this as 'current routing mode excludes
+    all currently-routable backends' — the mode kept the backend; only the
+    catalog is unpopulated. The 503 must name the actual empty-catalog /
+    undiscovered-model condition, and a quota-available backend with no
+    discovered models must not be treated as dispatch-routable."""
+    remote = InMemoryFakeBackend(
+        id="remote",
+        advertised_models=frozenset(),  # cold-boot: catalog not yet discovered
+        usage=UsageSnapshot(
+            remaining_fraction=1.0,  # quota available — would be "routable"
+            cooldown_until_ts=None,
+            weekly_exhausted=False,
+            probed_at_ts=0.0,
+        ),
+        health=HealthStatus(available=True, reason="ok"),
+    )
+    remote.kind = "codex_auth_vault"
+    state = OperatorState(tmp_path / "op.sqlite")
+    state.set_routing("remote-only")
+    try:
+        app = create_app(backends=[remote], operator_state=state)
+        with TestClient(app) as client:
+            response = client.post(
+                "/v1/responses",
+                json={"model": "auto-learning", "input": []},
+            )
+        assert response.status_code == 503, response.text
+        assert "Retry-After" in response.headers
+        detail = response.json()["detail"].lower()
+        # Names the actual empty-catalog / undiscovered-model condition.
+        assert "catalog" in detail or "advertised_models" in detail
+        # NOT the misleading mode-exclusion message from the cold-boot bug.
+        assert "excludes all currently-routable backends" not in detail
+    finally:
+        state.close()
+
+
+def test_auto_mode_empty_catalog_remote_routes_to_healthy_local(tmp_path: Path, monkeypatch) -> None:
+    """A quota-available backend with no discovered models is not routable
+    for dispatch (): in auto mode with a cold-boot
+    empty-catalog remote plus a healthy catalog-bearing local, dispatch
+    must serve the request from local and never treat the empty-catalog
+    remote as a candidate."""
+    remote = InMemoryFakeBackend(
+        id="remote",
+        advertised_models=frozenset(),  # cold-boot: catalog not yet discovered
+        usage=UsageSnapshot(
+            remaining_fraction=1.0,  # quota available — would be "routable"
+            cooldown_until_ts=None,
+            weekly_exhausted=False,
+            probed_at_ts=0.0,
+        ),
+        health=HealthStatus(available=True, reason="ok"),
+    )
+    remote.kind = "codex_auth_vault"
+    local = _make_backend(id="local", kind="litellm_gateway")
+    monkeypatch.setenv("CALLOSUM_CANARY_PERCENT", "0")
+    state = OperatorState(tmp_path / "op.sqlite")
+    state.set_routing("auto")
+    try:
+        app = create_app(backends=[remote, local], operator_state=state)
+        with TestClient(app) as client:
+            response = client.post(
+                "/v1/responses",
+                json={"model": "auto-learning", "input": []},
+            )
+        assert response.status_code == 200, response.text
+        # Served by the catalog-bearing local backend, not the empty-catalog remote.
+        assert "resp-local" in response.text
+    finally:
+        state.close()
+
+
 def test_auto_mode_all_healthy_routes_normally(tmp_path: Path) -> None:
     """Sanity: auto mode with everything healthy routes through normally."""
     remote = _make_backend(id="remote", kind="codex_auth_vault")

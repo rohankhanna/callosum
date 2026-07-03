@@ -5,6 +5,7 @@ import json
 import os
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 from callosum.backend import UsageSnapshot
 from callosum.codex_quota import CodexQuotaSnapshot
@@ -19,6 +20,7 @@ class StateStore:
     def __init__(self, base_dir: Path) -> None:
         self._usage_dir = base_dir / "usage"
         self._quota_dir = base_dir / "quota"
+        self._catalog_dir = base_dir / "catalog"
         self._timing_path = base_dir / "timing.json"
 
     def load_usage(self, backend_id: str) -> UsageSnapshot | None:
@@ -86,6 +88,47 @@ class StateStore:
         path = self._quota_dir / f"{backend_id}.json"
         tmp = path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(asdict(snapshot)))
+        os.replace(tmp, path)
+
+    def load_catalog(self, backend_id: str) -> dict[str, Any] | None:
+        """Reload the last-known-good model catalog for a backend.
+
+        The catalog is discovered at runtime via refresh_advertised_models and
+        is NOT known at cold start. Persisting it here lets a fresh process
+        warm-start its cell grid from disk so the cold-boot empty-catalog
+        window (dependency slow/down at boot → empty catalog → 503) does not
+        occur: the grid is populated immediately and the startup refresh
+        overwrites this hint on success.
+
+        Returns the raw dict blob; the caller owns ModelMetadata
+        (de)serialization and shape validation. Returns None on any read/parse
+        error or non-dict payload so a corrupted on-disk blob never crashes
+        startup — callers fall back to the static hint.
+        """
+        path = self._catalog_dir / f"{backend_id}.json"
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        return data
+
+    def save_catalog(self, backend_id: str, catalog: dict[str, Any]) -> None:
+        """Persist a backend's discovered model catalog as a last-known-good hint.
+
+        Atomic write (tmp + os.replace) matching save_usage/save_quota. The
+        caller serializes ModelMetadata into plain dicts before handing the
+        blob here; StateStore stays decoupled from the ModelMetadata shape.
+        Overwritten on every successful refresh so retired-upstream models
+        eventually drop from the warm-start hint.
+        """
+        self._catalog_dir.mkdir(parents=True, exist_ok=True)
+        path = self._catalog_dir / f"{backend_id}.json"
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(catalog))
         os.replace(tmp, path)
 
     def get_proxy_startup_timestamp(self) -> float | None:

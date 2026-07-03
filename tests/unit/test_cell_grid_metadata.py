@@ -13,6 +13,8 @@ from callosum.cell_grid import (
     ModelMetadata,
     build_cells_from_metadata,
     live_completion_models_from_metadata,
+    model_metadata_from_dict,
+    model_metadata_to_dict,
     reasoning_levels_for,
 )
 
@@ -181,3 +183,58 @@ def test_build_cells_from_metadata_can_include_hidden_for_explicit_pin() -> None
 
 def test_build_cells_from_metadata_handles_empty() -> None:
     assert build_cells_from_metadata({}) == []
+
+
+# ---------- ModelMetadata serialization round-trip (catalog persistence) ------
+
+
+def test_model_metadata_round_trips_through_dict() -> None:
+    """A fully-populated ModelMetadata must survive a to_dict/from_dict cycle
+    intact (tuples become lists and back). This is the contract the backends
+    rely on to warm-start the catalog from the persisted last-known-good copy."""
+    md = ModelMetadata(
+        slug="model-a0e7",
+        display_name="MODEL-A0E7",
+        description="a model",
+        context_window=200000,
+        supported_in_api=True,
+        visibility="list",
+        priority=2,
+        default_reasoning_level="xhigh",
+        supported_reasoning_levels=("low", "medium", "high", "xhigh"),
+        input_modalities=("text", "image"),
+    )
+    restored = model_metadata_from_dict(model_metadata_to_dict(md))
+    assert restored == md
+
+
+def test_model_metadata_from_dict_rejects_bad_shapes() -> None:
+    """The persisted catalog is untrusted disk state; the loader must return
+    None (never raise) for any malformed entry so startup can't crash."""
+    assert model_metadata_from_dict(None) is None
+    assert model_metadata_from_dict("not-a-dict") is None
+    assert model_metadata_from_dict({}) is None  # missing slug
+    assert model_metadata_from_dict({"slug": 123}) is None  # non-string slug
+    assert model_metadata_from_dict({"slug": ""}) is None  # empty slug
+
+
+def test_model_metadata_from_dict_skips_invalid_fields_keeps_slug() -> None:
+    """Individually-bad fields are dropped to None/empty; the slug (the one
+    required field) is preserved so a partially-corrupted record still loads."""
+    restored = model_metadata_from_dict(
+        {
+            "slug": "model-a0e7",
+            "context_window": "not-an-int",  # dropped
+            "supported_in_api": "not-a-bool",  # dropped
+            "priority": True,  # bool rejected as int (bool is int subclass)
+            "supported_reasoning_levels": "not-a-list",  # → ()
+            "input_modalities": [1, 2, "text"],  # only the string kept
+        }
+    )
+    assert restored is not None
+    assert restored.slug == "model-a0e7"
+    assert restored.context_window is None
+    assert restored.supported_in_api is None
+    assert restored.priority is None
+    assert restored.supported_reasoning_levels == ()
+    assert restored.input_modalities == ("text",)

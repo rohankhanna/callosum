@@ -1190,3 +1190,147 @@ def test_responses_to_chat_response_preserves_completed_as_stop() -> None:
     }
     chat = _responses_to_chat_response(payload, model="model-a0e8")
     assert chat["choices"][0]["finish_reason"] == "stop"
+
+
+# ---------- catalog persistence / warm-start (parity with credential_proxy) --
+
+
+async def test_refresh_persists_catalog_to_state_store(tmp_path: Path) -> None:
+    """A successful /models refresh persists the catalog so the next cold boot
+    warm-starts from it. Parity with CredentialProxyBackend."""
+    from callosum.state import StateStore
+
+    auth_path = tmp_path / "auth.json"
+    _write_auth_json(auth_path)
+    vault = _make_vault(auth_path)
+    state_dir = tmp_path / "state"
+    store = StateStore(state_dir)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/models")
+        return httpx.Response(
+            200,
+            json={
+                "models": [
+                    {
+                        "slug": "model-a0e7",
+                        "context_window": 200000,
+                        "default_reasoning_level": "xhigh",
+                        "supported_reasoning_levels": [{"effort": "low"}, {"effort": "high"}],
+                    },
+                    {"slug": "model-a0c3", "context_window": 200000},
+                ]
+            },
+        )
+
+    backend = CodexAuthVaultBackend(
+        id="persist-vault",
+        vault=vault,
+        advertised_models=frozenset({"placeholder"}),
+        transport=httpx.MockTransport(handler),
+        state_store=store,
+    )
+    try:
+        await backend.refresh_advertised_models(now=1000.0)
+        assert backend.advertised_models == frozenset({"model-a0e7", "model-a0c3"})
+    finally:
+        await backend.aclose()
+
+    persisted = store.load_catalog("persist-vault")
+    assert persisted is not None
+    assert sorted(persisted["advertised_models"]) == ["model-a0e7", "model-a0c3"]
+    assert persisted["context_windows"]["model-a0e7"] == 200000
+    assert persisted["model_metadata"]["model-a0e7"]["default_reasoning_level"] == "xhigh"
+    assert persisted["model_metadata"]["model-a0e7"]["supported_reasoning_levels"] == ["low", "high"]
+    assert persisted["fetched_at"] == 1000.0
+
+
+async def test_warm_start_serves_persisted_catalog_when_refresh_fails(
+    tmp_path: Path,
+) -> None:
+    """Cold-boot empty-catalog fix parity: a fresh backend whose refresh fails
+    still reports a non-empty advertised_models warm-started from disk."""
+    from callosum.state import StateStore
+
+    auth_path = tmp_path / "auth.json"
+    _write_auth_json(auth_path)
+    state_dir = tmp_path / "state"
+    store = StateStore(state_dir)
+
+    # First boot: refresh succeeds, persists catalog.
+    vault1 = _make_vault(auth_path)
+
+    def ok_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "models": [
+                    {"slug": "model-a0e7", "context_window": 200000},
+                    {"slug": "model-a0e8", "context_window": 400000},
+                ]
+            },
+        )
+
+    b1 = CodexAuthVaultBackend(
+        id="warm-vault",
+        vault=vault1,
+        advertised_models=frozenset(),
+        transport=httpx.MockTransport(ok_handler),
+        state_store=store,
+    )
+    try:
+        await b1.refresh_advertised_models(now=1000.0)
+        assert b1.advertised_models == frozenset({"model-a0e7", "model-a0e8"})
+    finally:
+        await b1.aclose()
+
+    # Second boot: refresh fails (network down). Warm-start from disk.
+    vault2 = _make_vault(auth_path)
+
+    def fail_handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("upstream down at boot", request=request)
+
+    b2 = CodexAuthVaultBackend(
+        id="warm-vault",  # same id → same persisted catalog
+        vault=vault2,
+        advertised_models=frozenset({"static-only-fallback"}),
+        transport=httpx.MockTransport(fail_handler),
+        state_store=store,
+    )
+    try:
+        assert b2.advertised_models == frozenset({"model-a0e7", "model-a0e8"})
+        assert b2.model_context_windows == {"model-a0e7": 200000, "model-a0e8": 400000}
+        assert set(b2.model_metadata) == {"model-a0e7", "model-a0e8"}
+        await b2.refresh_advertised_models()  # fails, must not clear warm-start
+        assert b2.advertised_models == frozenset({"model-a0e7", "model-a0e8"})
+    finally:
+        await b2.aclose()
+
+
+async def test_warm_start_corrupted_blob_falls_back_to_static(tmp_path: Path) -> None:
+    """A corrupted persisted catalog must not crash startup — fall back to the
+    static hint. Untrusted disk state."""
+    from callosum.state import StateStore
+
+    auth_path = tmp_path / "auth.json"
+    _write_auth_json(auth_path)
+    state_dir = tmp_path / "state"
+    store = StateStore(state_dir)
+    store.save_catalog("bad-vault", {"advertised_models": "not-a-list"})
+
+    vault = _make_vault(auth_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("down", request=request)
+
+    b = CodexAuthVaultBackend(
+        id="bad-vault",
+        vault=vault,
+        advertised_models=frozenset({"static-fallback"}),
+        transport=httpx.MockTransport(handler),
+        state_store=store,
+    )
+    try:
+        assert b.advertised_models == frozenset({"static-fallback"})
+    finally:
+        await b.aclose()
