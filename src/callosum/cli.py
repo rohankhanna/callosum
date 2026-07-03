@@ -196,6 +196,61 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_gate(args: argparse.Namespace) -> int:
+    """Run the tiered merge/promotion gate (work tracker ).
+
+    Tier 1 (deterministic CPU code tests + ruff + mypy --strict) is the only
+    merge-blocking tier. Tier 2 (GPU rate matrix) and Tier 3 (shadow canary)
+    report their own status but do not block a Tier-1-green merge. Exit 0
+    when the gate is green-for-merge (Tier 1 green), 1 when merge-blocked."""
+    from callosum.gate.harness import GateConfig, run_gate
+    from callosum.gate.tier1 import Tier1Config
+    from callosum.gate.types import Tier
+
+    repo_root = Path(args.repo_root).expanduser() if args.repo_root else _repo_root_from_cwd()
+    tiers: tuple[Tier, ...]
+    if args.tier:
+        wanted = {"1": Tier.TIER1, "2": Tier.TIER2, "3": Tier.TIER3}
+        tiers = tuple(wanted[t] for t in args.tier if t in wanted)
+    else:
+        tiers = (Tier.TIER1, Tier.TIER2, Tier.TIER3)
+    config = GateConfig(
+        tier1=Tier1Config(full_suite=not args.no_full_suite),
+        repo_root=str(repo_root),
+    )
+    report = run_gate(config, tiers=tiers)
+    if args.json:
+        import json
+        from dataclasses import asdict
+
+        print(
+            json.dumps(
+                {
+                    "merge_blocked": report.merge_blocked,
+                    "green_for_merge": report.green,
+                    "summary": report.summary,
+                    "tiers": [
+                        {
+                            "tier": r.tier.value,
+                            "status": r.status.value,
+                            "reason": r.reason,
+                            "checks": [asdict(c) for c in r.checks],
+                        }
+                        for r in report.results
+                    ],
+                },
+                indent=2,
+            )
+        )
+    else:
+        print(report.summary)
+        for r in report.results:
+            print(f"  {r.tier.value}: {r.status.value} — {r.reason}")
+            for c in r.checks:
+                print(f"      {c.name}: {c.status.value} (rc={c.returncode}, {c.duration_s:.1f}s)")
+    return 0 if report.green else 1
+
+
 def cmd_review(args: argparse.Namespace) -> int:
     """Human-readable summary of dev-loop dispatcher state: last run
     outcome, today's marker, and any auto/dev-loop-* branches
@@ -982,6 +1037,44 @@ def build_parser() -> argparse.ArgumentParser:
     from callosum.auth_rotate import add_subparser as _add_auth_rotate
 
     _add_auth_rotate(sub)
+
+    p_gate = sub.add_parser(
+        "gate",
+        help="Run the tiered merge/promotion gate: Tier-1 CPU tests (blocking) "
+        "+ Tier-2 GPU rate matrix (resumable, external) + Tier-3 shadow canary.",
+        description=(
+            "Run the tiered merge/promotion gate (work tracker ). "
+            "Tier 1 (pytest inaugural bug cases + unit suite + ruff + mypy --strict) "
+            "is the only merge-blocking tier. Tier 2 consumes the GPU rate matrix "
+            "published by the sibling benchmark suite repo (read-only, resumable). "
+            "Tier 3 evaluates the live shadow/canary guard with auto-revert. "
+            "Exit 0 when Tier 1 is green, 1 when merge-blocked."
+        ),
+    )
+    p_gate.add_argument(
+        "--tier",
+        action="append",
+        choices=["1", "2", "3"],
+        default=None,
+        help="Run only this tier (repeatable). Default: all three.",
+    )
+    p_gate.add_argument(
+        "--no-full-suite",
+        action="store_true",
+        help="Skip the full tests/unit suite; run only the inaugural bug cases + ruff + mypy.",
+    )
+    p_gate.add_argument(
+        "--repo-root",
+        type=_Path,
+        default=None,
+        help="Repo checkout to run against (default: current git toplevel).",
+    )
+    p_gate.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit a machine-readable JSON report instead of the human-readable summary.",
+    )
+    p_gate.set_defaults(func=cmd_gate)
 
     return parser
 
