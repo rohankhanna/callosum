@@ -23,7 +23,10 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from callosum.gate.tier2 import Tier2Config
 from urllib import error, request
 
 from callosum.config import load_config
@@ -196,6 +199,34 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _tier2_config_from_args(args: argparse.Namespace) -> Tier2Config:
+    """Build a Tier2Config from `callosum gate --tier2-*` flags.
+
+    Defaults mirror Tier2Config field defaults (30 samples, 0.9 threshold,
+    behavior-v1 suite) so an unflagged invocation leaves Tier 2 at pending
+    (the empty-config guard in ResumableTier2Runner refuses a vacuous
+    green over zero cells). --tier2-model accepts model_id or
+    model_id:weight_identity; an omitted weight becomes None (the
+    matrix keys it as "null").
+    """
+    from callosum.gate.tier2 import Tier2Config
+
+    models: list[tuple[str, str | None]] = []
+    for spec in args.tier2_models or ():
+        if ":" in spec:
+            model_id, weight = spec.split(":", 1)
+            models.append((model_id, weight or None))
+        else:
+            models.append((spec, None))
+    return Tier2Config(
+        expected_tests=tuple(args.tier2_expected_tests or ()),
+        models=tuple(models),
+        min_samples=args.tier2_min_samples,
+        threshold=args.tier2_threshold,
+        suite_version=args.tier2_suite_version,
+    )
+
+
 def cmd_gate(args: argparse.Namespace) -> int:
     """Run the tiered merge/promotion gate (work tracker ).
 
@@ -216,6 +247,7 @@ def cmd_gate(args: argparse.Namespace) -> int:
         tiers = (Tier.TIER1, Tier.TIER2, Tier.TIER3)
     config = GateConfig(
         tier1=Tier1Config(full_suite=not args.no_full_suite),
+        tier2=_tier2_config_from_args(args),
         repo_root=str(repo_root),
     )
     report = run_gate(config, tiers=tiers)
@@ -1107,6 +1139,42 @@ def build_parser() -> argparse.ArgumentParser:
         "--json",
         action="store_true",
         help="Emit a machine-readable JSON report instead of the human-readable summary.",
+    )
+    p_gate.add_argument(
+        "--tier2-expected-test",
+        action="append",
+        default=None,
+        dest="tier2_expected_tests",
+        metavar="TEST",
+        help="Tier-2 behavior test name to require (repeatable). Must match a test the "
+        "sibling benchmark suite rate matrix publishes (e.g. mmlu-pro). Default: none "
+        "(Tier-2 stays pending until configured).",
+    )
+    p_gate.add_argument(
+        "--tier2-model",
+        action="append",
+        default=None,
+        dest="tier2_models",
+        metavar="MODEL[:WEIGHT]",
+        help="Local model cell to evaluate, as model_id or model_id:weight_identity (repeatable). "
+        "weight_identity is optional and defaults to null. Default: none.",
+    )
+    p_gate.add_argument(
+        "--tier2-min-samples",
+        type=int,
+        default=30,
+        help="Minimum samples per test per cell for coverage (default: 30).",
+    )
+    p_gate.add_argument(
+        "--tier2-threshold",
+        type=float,
+        default=0.9,
+        help="Wilson lower bound a cell's per-test pass rate must meet (default: 0.9).",
+    )
+    p_gate.add_argument(
+        "--tier2-suite-version",
+        default="behavior-v1",
+        help="Suite version the published matrix must report (default: behavior-v1).",
     )
     p_gate.set_defaults(func=cmd_gate)
 

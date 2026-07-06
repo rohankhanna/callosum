@@ -234,6 +234,16 @@ class ResumableTier2Runner:
         reader = FileRateMatrixReader(cfg.matrix_path, expected_tests=cfg.expected_tests, min_samples=cfg.min_samples)
         if not reader.present:
             return self._pending("rate matrix not yet published by the sibling benchmarks repo")
+        if not cfg.expected_tests or not cfg.models:
+            # Refuse to report a vacuous green over zero configured cells. If
+            # the operator has not declared expected_tests/models, stay pending
+            # so a published matrix is never misread as "0 cell(s) x 0 test(s)
+            # above threshold" — a real pass. Configure via `callosum gate
+            # --tier2-expected-test ... --tier2-model ...` (work tracker
+            # ).
+            return self._pending(
+                "tier2 unconfigured: set --tier2-expected-test and --tier2-model before evaluating cells"
+            )
         coverage = self._snapshot(reader)
         Tier2Checkpoint(time.time(), _matrix_digest(cfg.matrix_path), reader.suite_version, coverage).write(
             cfg.checkpoint_path
