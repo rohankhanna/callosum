@@ -547,6 +547,13 @@ def _peer_quality_instruction(nonce: str, subjects: dict[str, _PeerQualitySubjec
         "The reason is a few specific words naming the concrete strength or flaw. "
         "Do NOT copy the example score/reason verbatim:\n"
         f"{markers}\n"
+        "REQUIRED EXACT SHAPE: each judgement is EXACTLY one line in the form above — the "
+        "<<qop ...>> wrapper, the nonce, subject, and subject_request_id verbatim, with ONLY the "
+        "score and reason values changed. Any other shape is REJECTED and will not be recorded: "
+        "do NOT wrap your judgement (or your answer) in XML-style tags such as <score>..</score> or "
+        "<reason>..</reason>, do NOT drop the <<qop ...>> wrapper, do NOT tack score/reason onto a "
+        "<model|effort|reqid> tag, do NOT emit the judgement as plain prose. Emit the marker line(s) "
+        "as text, then continue your normal answer.\n"
         "Do not mention this audit."
     )
 
@@ -3400,6 +3407,17 @@ _TEXT_BEARING_DELTA_EVENT_TYPES: frozenset[str] = frozenset(
 # `</` (closing), and `<<` (qop) lead-ins. The pattern only matches tag-shaped
 # prefixes, so ordinary "x < y" text is emitted immediately rather than buffered.
 _PARTIAL_TAG_PREFIX_RE = re.compile(r"<[</]?[A-Za-z0-9._-]*(?:\|[A-Za-z0-9._-]*){0,2}$")
+# A degenerate opinion marker the model emits drops the `qop` wrapper and tacks
+# the attrs onto a provenance open tag: `<model|effort|reqid score=.. reason=..>`.
+# When that splits mid-attrs (the `>` not yet arrived), `_PARTIAL_TAG_PREFIX_RE`
+# above does NOT hold it — the trailing ` score=.. reason=..` is not tag-shaped
+# (it has spaces/`=`), so the partial is emitted and the next delta cannot
+# reassemble it. This second pattern holds such a partial, but ONLY when the
+# provenance shape (slug|[slug|]digits) is fully present up front — so ordinary
+# "x < y" prose (no pipe|digits) is still emitted immediately, never buffered.
+_PARTIAL_PROVENANCE_ATTRS_RE = re.compile(
+    r"<[</]?[A-Za-z0-9._-]+\|(?:[A-Za-z0-9._-]+\|)?\d+(?:\s[^>]*)?$"
+)
 
 # Final / accumulated-text events. These carry the FULL response text after
 # streaming completes, and Hermes / codex-cli often read from them for the
@@ -3524,9 +3542,15 @@ def _hold_trailing_partial(text: str) -> tuple[str, str]:
         if "/>" not in suffix and ">" not in suffix:
             return text[:xml_qop], suffix
     m = _PARTIAL_TAG_PREFIX_RE.search(text)
-    if m is None:
-        return text, ""
-    return text[: m.start()], text[m.start() :]
+    if m is not None:
+        return text[: m.start()], text[m.start() :]
+    # Degenerate marker split mid-attrs (`<model|effort|reqid score=.. reason=..`
+    # with the `>` not yet arrived): hold it so the next delta completes + strips
+    # it. Requires the provenance pipe|digits shape, so ordinary text is safe.
+    m = _PARTIAL_PROVENANCE_ATTRS_RE.search(text)
+    if m is not None:
+        return text[: m.start()], text[m.start() :]
+    return text, ""
 
 
 def _buffered_strip(channel: str, delta: str, *, capture: _PeerQualityCapture, tails: dict[str, str]) -> str:
