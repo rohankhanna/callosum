@@ -204,3 +204,136 @@ def test_assemble_completed_skips_injection_when_text_already_present() -> None:
     # Only the existing message item; we did NOT append a duplicate.
     assert len(result["output"]) == 1
     assert result["output"][0]["content"][0]["text"] == "hello"
+
+
+# ---------- namespace stripping on the response stream -------------------
+
+
+async def _drain(it: AsyncIterator[bytes]) -> bytes:
+    out = bytearray()
+    async for chunk in it:
+        out += chunk
+    return bytes(out)
+
+
+def test_namespaced_tool_names_from_request_collects_namespaced_tools() -> None:
+    """`exec` (flat custom tool, no namespace) is NOT namespaced; tools inside
+    a `namespace` group, and flat tools carrying their own `namespace`, are.
+    Declarations are read from both top-level `tools` and the `additional_tools`
+    input item the codex CLI ships."""
+    from callosum.sse_tee import namespaced_tool_names_from_request
+
+    body = {
+        "tools": [{"type": "function", "name": "top_ns", "namespace": "grp"}],
+        "input": [
+            {"type": "additional_tools", "role": "developer", "tools": [
+                {"type": "custom", "name": "exec"},  # flat, no namespace
+                {"type": "namespace", "name": "collaboration", "tools": [
+                    {"type": "function", "name": "followup_task"},
+                ]},
+            ]},
+        ],
+    }
+    assert namespaced_tool_names_from_request(body) == {"top_ns", "followup_task"}
+    assert "exec" not in namespaced_tool_names_from_request(body)
+
+
+@pytest.mark.asyncio
+async def test_strip_namespace_stream_drops_bogus_namespace_for_unnamespaced_tool() -> None:
+    """The upstream returns `custom_tool_call` with `namespace == name` for a
+    tool the client declared WITHOUT a namespace; the stream strip removes it
+    so the codex CLI dispatches by `name` alone. Non-tool events and fields
+    like `obfuscation`/`sequence_number` pass through byte-for-byte."""
+    from callosum.sse_tee import namespaced_tool_names_from_request, strip_namespace_stream
+
+    body = {"input": [{"type": "additional_tools", "tools": [{"type": "custom", "name": "exec"}]}]}
+    namespaced = namespaced_tool_names_from_request(body)
+    added_event = (
+        'event: response.output_item.added\n'
+        'data: {"type":"response.output_item.added","item":{"id":"ctc_1",'
+        '"type":"custom_tool_call","call_id":"call_x","name":"exec",'
+        '"namespace":"exec","input":"await tools.exec_command({})"}}\n\n'
+    )
+    delta_event = (
+        'event: response.custom_tool_call_input.delta\n'
+        'data: {"type":"response.custom_tool_call_input.delta","delta":"await",'
+        '"item_id":"ctc_1","obfuscation":"Z9","sequence_number":21}\n\n'
+    )
+    # Feed the two events split across chunk boundaries to exercise per-event
+    # buffering (the added event straddles two chunks; its terminator lands in
+    # the second chunk with the next event).
+    stream = added_event.encode() + delta_event.encode()
+    chunks = [stream[:40], stream[40:120], stream[120:]]
+    out = await _drain(strip_namespace_stream(_iter_chunks(chunks), namespaced))
+    # Re-serialize the rewritten added event's payload and check the item.
+    added_blob = out.split(b"\n\n", 1)[0].decode("utf-8")
+    added_obj = json.loads(added_blob.split("data: ", 1)[1])
+    assert added_obj["item"]["type"] == "custom_tool_call"
+    assert added_obj["item"]["name"] == "exec"
+    assert "namespace" not in added_obj["item"]
+    # The untouched delta event survives with its obfuscation/sequence_number
+    # byte-for-byte (it was not a rewrite candidate).
+    assert b'"obfuscation":"Z9"' in out
+    assert b'"sequence_number":21' in out
+    # Output is still valid SSE framing.
+    assert out.count(b"\n\n") == 2
+
+
+@pytest.mark.asyncio
+async def test_strip_namespace_stream_preserves_legitimately_namespaced_tools() -> None:
+    """A tool declared under a `namespace` group keeps its `namespace` in the
+    response — the strip targets only tools the client declared flat."""
+    from callosum.sse_tee import namespaced_tool_names_from_request, strip_namespace_stream
+
+    body = {"input": [{"type": "additional_tools", "tools": [
+        {"type": "namespace", "name": "collaboration", "tools": [
+            {"type": "function", "name": "followup_task"},
+        ]},
+    ]}]}
+    namespaced = namespaced_tool_names_from_request(body)
+    added_event = (
+        'event: response.output_item.added\n'
+        'data: {"type":"response.output_item.added","item":{"id":"fc_1",'
+        '"type":"custom_tool_call","call_id":"call_y","name":"followup_task",'
+        '"namespace":"collaboration","input":"{}"}}\n\n'
+    )
+    out = await _drain(strip_namespace_stream(_iter_chunks([added_event.encode()]), namespaced))
+    assert b'"namespace":"collaboration"' in out
+
+
+@pytest.mark.asyncio
+async def test_strip_namespace_stream_passes_through_non_candidate_events() -> None:
+    """Events with no `data:` line (e.g. a stray comment) and malformed JSON
+    are passed through unchanged, never crash."""
+    from callosum.sse_tee import strip_namespace_stream
+
+    raw = b": keepalive ping\n\n" + b"event: bad\ndata: not-json\n\n"
+    out = await _drain(strip_namespace_stream(_iter_chunks([raw]), set()))
+    assert out == raw
+
+
+def test_strip_namespace_from_completed_strips_unnamespaced_only() -> None:
+    """Non-streaming path strips the bogus `namespace` from `custom_tool_call`
+    items in a completed payload, leaving namespaced tools and the response's
+    echoed tool *declarations* untouched."""
+    from callosum.sse_tee import strip_namespace_from_completed
+
+    payload = {
+        "type": "response.completed",
+        "response": {
+            "id": "r1",
+            "tools": [{"type": "custom", "name": "exec", "namespace": "exec"}],
+            "output": [
+                {"type": "custom_tool_call", "name": "exec", "namespace": "exec", "call_id": "c1"},
+                {"type": "custom_tool_call", "name": "followup_task", "namespace": "collaboration", "call_id": "c2"},
+            ],
+        },
+    }
+    namespaced = {"followup_task"}
+    strip_namespace_from_completed(payload, namespaced)
+    out = payload["response"]["output"]
+    assert "namespace" not in out[0]
+    assert out[0]["name"] == "exec"
+    assert out[1]["namespace"] == "collaboration"
+    # The echoed tool declaration is a declaration, not a call — untouched.
+    assert payload["response"]["tools"][0]["namespace"] == "exec"

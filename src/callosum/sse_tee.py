@@ -132,6 +132,140 @@ def extract_output_text_from_blob(blob: bytes) -> str:
     return "".join(delta_parts)
 
 
+def namespaced_tool_names_from_request(body: dict[str, Any]) -> set[str]:
+    """Names of tools the client declared UNDER a namespace.
+
+    The chatgpt `/codex/responses` upstream echoes a `namespace` onto the
+    `custom_tool_call` items it returns even for tools the client declared
+    WITHOUT one (the codex CLI's `exec` JS orchestrator is a flat
+    `{"type":"custom","name":"exec"}` declaration, yet the call comes back with
+    `namespace == name == "exec"`). The codex CLI then dispatches a custom tool
+    call by `namespace + name`, so `exec`+`exec` = `execexec` is rejected as an
+    unsupported custom tool — tool calls never run.
+
+    callosum reconciles this on the response side by stripping that bogus
+    `namespace` for tools the client did NOT declare as namespaced. THIS
+    function identifies the opposite set — tools the client DID declare under
+    a namespace — so the strip leaves their (legitimate) `namespace` intact
+    (e.g. a `collaboration` namespace group's `followup_task`).
+
+    Declarations are collected from the standard top-level `tools` array and
+    from the `additional_tools` input item the codex CLI ships its tools in.
+    A `{"type":"namespace","tools":[...]}` group namespaces every tool inside
+    it; a flat tool is namespaced only when it carries its own `namespace`.
+    """
+    namespaced: set[str] = set()
+
+    def visit(tool: Any) -> None:
+        if not isinstance(tool, dict):
+            return
+        if tool.get("type") == "namespace":
+            for inner in tool.get("tools") or []:
+                if isinstance(inner, dict) and isinstance(inner.get("name"), str):
+                    namespaced.add(inner["name"])
+            return
+        name = tool.get("name")
+        ns = tool.get("namespace")
+        if isinstance(name, str) and isinstance(ns, str) and ns:
+            namespaced.add(name)
+
+    for tool in body.get("tools") or []:
+        visit(tool)
+    for item in body.get("input") or []:
+        if isinstance(item, dict) and item.get("type") == "additional_tools":
+            for tool in item.get("tools") or []:
+                visit(tool)
+    return namespaced
+
+
+def _strip_namespace_from_custom_tool_calls(obj: Any, namespaced_names: set[str]) -> bool:
+    """Recursively drop `namespace` from every `custom_tool_call` dict whose
+    tool was NOT declared as namespaced. Returns True if anything changed.
+
+    Only `custom_tool_call` items are touched — tool *declarations* the
+    response echoes back (type `custom`/`namespace`/`function`) are left alone,
+    and `function_call` items (which carry no `namespace`) are untouched.
+    Mutates in place; safe to call on the parsed `response.completed` payload
+    or on a single parsed event."""
+    changed = False
+    if isinstance(obj, dict):
+        if (
+            obj.get("type") == "custom_tool_call"
+            and "namespace" in obj
+            and obj.get("name") not in namespaced_names
+        ):
+            del obj["namespace"]
+            changed = True
+        for v in obj.values():
+            if _strip_namespace_from_custom_tool_calls(v, namespaced_names):
+                changed = True
+    elif isinstance(obj, list):
+        for v in obj:
+            if _strip_namespace_from_custom_tool_calls(v, namespaced_names):
+                changed = True
+    return changed
+
+
+def strip_namespace_from_completed(payload: dict[str, Any], namespaced_names: set[str]) -> dict[str, Any]:
+    """Non-streaming path: strip the bogus `namespace` from `custom_tool_call`
+    items in a `response.completed` payload. Returns the (in-place mutated)
+    payload so callers can chain."""
+    _strip_namespace_from_custom_tool_calls(payload, namespaced_names)
+    return payload
+
+
+def _rewrite_responses_event(event: bytes, namespaced_names: set[str]) -> bytes:
+    """Rewrite one SSE event (WITHOUT its trailing blank-line terminator):
+    if its `data:` payload carries a `custom_tool_call` whose `namespace` the
+    upstream added wrongly, drop that `namespace`. Returns the original bytes
+    unchanged when the event isn't a rewrite candidate, so the events we don't
+    touch pass through byte-for-byte (preserving `obfuscation`,
+    `sequence_number`, and every other field the client depends on)."""
+    if b"\ndata: " not in event:
+        return event
+    text = event.decode("utf-8")
+    lines = text.split("\n")
+    data_idx: int | None = None
+    for i, ln in enumerate(lines):
+        if ln.startswith("data: "):
+            data_idx = i
+            break
+    if data_idx is None:
+        return event
+    try:
+        obj = json.loads(lines[data_idx][len("data: "):])
+    except (ValueError, json.JSONDecodeError):
+        return event
+    if not _strip_namespace_from_custom_tool_calls(obj, namespaced_names):
+        return event
+    lines[data_idx] = "data: " + json.dumps(obj)
+    return "\n".join(lines).encode("utf-8")
+
+
+async def strip_namespace_stream(
+    source: AsyncIterator[bytes],
+    namespaced_names: set[str],
+) -> AsyncIterator[bytes]:
+    """Streaming path: drop the bogus `namespace` from `custom_tool_call`
+    items as they flow through a `/responses` SSE stream.
+
+    Buffers per-event — each Responses-API event is one complete `data:` JSON
+    terminated by a blank line — so rewrites never split an event across a
+    chunk boundary. Every event we don't rewrite is yielded with its original
+    bytes (the `+ b"\\n\\n"` re-attaches the terminator we split on)."""
+    buffer = b""
+    async for chunk in source:
+        buffer += chunk
+        while b"\n\n" in buffer:
+            event, buffer = buffer.split(b"\n\n", 1)
+            yield _rewrite_responses_event(event, namespaced_names) + b"\n\n"
+    if buffer:
+        # Trailing bytes without a terminating blank line: a well-formed
+        # Responses stream doesn't end this way, but pass anything leftover
+        # through the same rewriter rather than dropping it.
+        yield _rewrite_responses_event(buffer, namespaced_names)
+
+
 def assemble_completed_with_text(blob: bytes) -> dict[str, Any] | None:
     """Return the `response.completed` payload's response object with the
     visible text materialized into `output[]`.

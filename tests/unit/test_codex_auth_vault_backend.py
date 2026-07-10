@@ -507,6 +507,144 @@ async def test_responses_forwards_body_verbatim_with_vault_headers(tmp_path: Pat
         await backend.aclose()
 
 
+async def test_responses_strips_custom_tool_call_namespace(tmp_path: Path) -> None:
+    """Parity with the active credential_proxy path: the Codex CLI emits
+    `custom_tool_call` input items with a top-level `namespace` field, and
+    ChatGPT's `/codex/responses` rejects `namespace` as an unknown parameter
+    (HTTP 400 "Unknown parameter: 'input[N].namespace'"). This inert
+    fallback must apply the same strip so activating it doesn't regress."""
+    auth_path = tmp_path / "auth.json"
+    _write_auth_json(auth_path)
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return _sse_response({"id": "resp-ns", "object": "response"})
+
+    vault = _make_vault(auth_path)
+    backend = CodexAuthVaultBackend(
+        id="vault-a",
+        vault=vault,
+        advertised_models=frozenset({"model-a0d0"}),
+        transport=httpx.MockTransport(handler),
+    )
+    request_body = {
+        "model": "model-a0d0",
+        "input": [
+            {"type": "custom_tool_call", "status": "completed", "call_id": "call_n",
+             "name": "exec", "namespace": "exec", "input": "await tools.exec_command({})"},
+        ],
+    }
+    try:
+        await backend.responses(request_body)
+        forwarded = captured["body"]
+        assert isinstance(forwarded, dict)
+        ctc = next(it for it in forwarded["input"] if it.get("type") == "custom_tool_call")
+        assert "namespace" not in ctc
+        assert ctc["name"] == "exec"
+        assert ctc["call_id"] == "call_n"
+    finally:
+        await backend.aclose()
+
+
+async def test_responses_stream_strips_custom_tool_call_namespace(tmp_path: Path) -> None:
+    """Same strip on the streaming path."""
+    auth_path = tmp_path / "auth.json"
+    _write_auth_json(auth_path)
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=b'data: {"type":"response.completed"}\n\n',
+        )
+
+    vault = _make_vault(auth_path)
+    backend = CodexAuthVaultBackend(
+        id="vault-a",
+        vault=vault,
+        advertised_models=frozenset({"model-a0d0"}),
+        transport=httpx.MockTransport(handler),
+    )
+    request_body = {
+        "model": "model-a0d0",
+        "input": [
+            {"type": "custom_tool_call", "call_id": "call_s", "name": "exec",
+             "namespace": "exec", "input": "x"},
+        ],
+    }
+    try:
+        chunks: list[bytes] = []
+        async for chunk in backend.responses_stream(request_body):
+            chunks.append(chunk)
+        forwarded = captured["body"]
+        assert isinstance(forwarded, dict)
+        ctc = next(it for it in forwarded["input"] if it.get("type") == "custom_tool_call")
+        assert "namespace" not in ctc
+    finally:
+        await backend.aclose()
+
+
+async def test_responses_stream_strips_bogus_custom_tool_call_namespace(tmp_path: Path) -> None:
+    """Parity with the active credential_proxy path: the upstream returns
+    `custom_tool_call` items with a `namespace` for tools the client declared
+    WITHOUT one; the codex CLI then mis-dispatches `namespace+name`. The
+    inert fallback must strip it from the streamed response too, while
+    leaving legitimately-namespaced tools intact."""
+    auth_path = tmp_path / "auth.json"
+    _write_auth_json(auth_path)
+    sse = (
+        b'event: response.output_item.added\n'
+        b'data: {"type":"response.output_item.added","item":{"id":"ctc_1",'
+        b'"type":"custom_tool_call","call_id":"call_e","name":"exec",'
+        b'"namespace":"exec","input":"await tools.exec_command({})"}}\n\n'
+        b'event: response.output_item.added\n'
+        b'data: {"type":"response.output_item.added","item":{"id":"ctc_2",'
+        b'"type":"custom_tool_call","call_id":"call_f","name":"followup_task",'
+        b'"namespace":"collaboration","input":"{}"}}\n\n'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=sse)
+
+    vault = _make_vault(auth_path)
+    backend = CodexAuthVaultBackend(
+        id="vault-a",
+        vault=vault,
+        advertised_models=frozenset({"model-a0d0"}),
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        chunks: list[bytes] = []
+        async for chunk in backend.responses_stream({
+            "model": "model-a0d0",
+            "input": [
+                {"type": "additional_tools", "role": "developer", "tools": [
+                    {"type": "custom", "name": "exec"},
+                    {"type": "namespace", "name": "collaboration", "tools": [
+                        {"type": "function", "name": "followup_task"},
+                    ]},
+                ]},
+            ],
+        }):
+            chunks.append(chunk)
+        out = b"".join(chunks).decode("utf-8")
+        items = []
+        for ev in out.split("\n\n"):
+            if "data: " in ev:
+                obj = json.loads(ev.split("data: ", 1)[1])
+                if obj.get("type") == "response.output_item.added":
+                    items.append(obj["item"])
+        by_name = {it["name"]: it for it in items}
+        assert "namespace" not in by_name["exec"]
+        assert by_name["exec"]["name"] == "exec"
+        assert by_name["followup_task"]["namespace"] == "collaboration"
+    finally:
+        await backend.aclose()
+
+
 async def test_responses_stream_passes_upstream_sse_through_byte_for_byte(tmp_path: Path) -> None:
     auth_path = tmp_path / "auth.json"
     _write_auth_json(auth_path)

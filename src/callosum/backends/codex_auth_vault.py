@@ -36,7 +36,12 @@ from callosum.backend import BackendKind, CallHandle, HealthStatus, UsageSnapsho
 from callosum.backends._http import DEFAULT_COOLDOWN_S, error_from_response
 from callosum.codex_quota import parse_codex_headers
 from callosum.errors import BackendError
-from callosum.sse_tee import ResponsesStreamCollector, assemble_completed_with_text
+from callosum.sse_tee import (
+    ResponsesStreamCollector,
+    assemble_completed_with_text,
+    namespaced_tool_names_from_request,
+    strip_namespace_stream,
+)
 from callosum.state import StateStore
 
 DEFAULT_BASE_URL = "https://chatgpt.com/backend-api/codex"
@@ -516,6 +521,13 @@ class CodexAuthVaultBackend:
         if handle is not None:
             handle.quota_before = self._last_quota
         streaming_body = {**body, "stream": True}
+        # Strip input-item fields the ChatGPT `/codex/responses` endpoint
+        # rejects (notably `namespace` on `custom_tool_call` items the Codex
+        # CLI emits) — same normalization the active credential_proxy path
+        # applies. See callosum.backends.credential_proxy.
+        from callosum.backends.credential_proxy import _strip_unsupported_input_fields
+
+        _strip_unsupported_input_fields(streaming_body)
         for attempt in (1, 2):
             tokens = await self._vault.current() if attempt == 1 else await self._vault.force_refresh()
             headers = self._build_headers(tokens.access_token, tokens.account_id, accept_event_stream=True)
@@ -536,7 +548,10 @@ class CodexAuthVaultBackend:
                         err = error_from_response(response)
                         self._apply_error_to_usage(err)
                         raise err
-                    collector = ResponsesStreamCollector(response.aiter_bytes())
+                    namespaced_names = namespaced_tool_names_from_request(body)
+                    collector = ResponsesStreamCollector(
+                        strip_namespace_stream(response.aiter_bytes(), namespaced_names)
+                    )
                     async for _chunk in collector.iter_through():
                         pass  # buffer the whole stream
                     if handle is not None:
@@ -568,6 +583,12 @@ class CodexAuthVaultBackend:
         # Open the stream; on upstream 401 in the response headers, close and
         # restart with refreshed tokens. We can only retry before any chunk
         # has been yielded — once streaming starts, we're committed.
+        # Strip upstream-rejected input-item fields (notably `namespace` on
+        # `custom_tool_call` items) before forwarding — same normalization as
+        # the active credential_proxy path. See callosum.backends.credential_proxy.
+        from callosum.backends.credential_proxy import _strip_unsupported_input_fields
+
+        _strip_unsupported_input_fields(body)
         for attempt in (1, 2):
             tokens = await self._vault.current() if attempt == 1 else await self._vault.force_refresh()
             headers = self._build_headers(tokens.access_token, tokens.account_id, accept_event_stream=True)
@@ -588,7 +609,10 @@ class CodexAuthVaultBackend:
                         err = error_from_response(response)
                         self._apply_error_to_usage(err)
                         raise err
-                    collector = ResponsesStreamCollector(response.aiter_bytes())
+                    namespaced_names = namespaced_tool_names_from_request(body)
+                    collector = ResponsesStreamCollector(
+                        strip_namespace_stream(response.aiter_bytes(), namespaced_names)
+                    )
                     async for chunk in collector.iter_through():
                         yield chunk
                     if handle is not None:
