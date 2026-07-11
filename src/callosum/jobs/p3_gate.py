@@ -35,7 +35,11 @@ DEFAULT_MIN_CELLS = 2  # MIN_SHADOW_CELLS
 DEFAULT_MIN_PER_CELL = 10  # MIN_SHADOW_EVALS
 DEFAULT_MIN_LIFT = 0.05  # "provably beats the majority-class baseline by a margin"
 DEFAULT_MAX_CLASS_FRACTION = 0.70  # discrimination diagnostic, not blocking
-DEFAULT_SAMPLE_LIMIT = 50
+# The gate should evaluate the full current peer-label pool by default. The
+# live 2026-07-08 measurement showed that bounded recent slices were unstable:
+# the same label pool could narrowly fail at 50 rows, pass at 200, then fail
+# on the full pool. A bounded sample remains available for ad-hoc diagnostics.
+DEFAULT_SAMPLE_LIMIT = 0
 
 
 def _label_distribution(report: dict[str, Any]) -> dict[str, int]:

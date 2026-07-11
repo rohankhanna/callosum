@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from callosum.jobs.p3_gate import DEFAULT_MIN_LIFT, evaluate_gate
+from callosum.jobs.p3_gate import DEFAULT_MIN_LIFT, DEFAULT_SAMPLE_LIMIT, evaluate_gate
 
 
 def _report(
@@ -129,3 +129,7 @@ def test_observed_block_reports_lift_and_rates() -> None:
     assert result["observed"]["baseline_majority_exact_rate"] == 0.78
     assert result["observed"]["embedded_labels"] == 520
     assert result["observed"]["cells"] == 13
+
+
+def test_default_sample_limit_uses_full_label_pool() -> None:
+    assert DEFAULT_SAMPLE_LIMIT == 0

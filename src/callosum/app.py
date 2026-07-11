@@ -44,6 +44,7 @@ from callosum.errors import RETRYABLE, BackendError, ErrorClass
 from callosum.fallback import FallbackExecutor, should_attempt_fallback
 from callosum.label_ui import install_label_ui
 from callosum.peer_quality import PeerQualityOpinion, extract_peer_quality_opinions
+from callosum.peer_quality_sidecar import SidecarJudgeCandidate, execute_sidecar_judge_candidate
 from callosum.routing.cost_estimator import (
     CompositeCostModelProvider,
     CompositeCostUsageEstimator,
@@ -126,6 +127,17 @@ _effective_routing_mode_context: ContextVar[str | None] = ContextVar("effective_
 _traffic_kind_context: ContextVar[str | None] = ContextVar("traffic_kind", default=None)
 
 _PEER_QUALITY_CAPTURE_RATE_ENV = "CALLOSUM_PEER_QUALITY_CAPTURE_RATE"
+# Out-of-band sidecar judge enqueue rate: fraction of completed turns that drop a
+# "judge this answer later" item into the peer_quality_sidecar_candidates queue.
+# Default 0.1 = judge ~1 in 10 eligible turns. Independent of the legacy in-band
+# rate; the live request is never tagged regardless of this value.
+_PEER_QUALITY_SIDECAR_ENQUEUE_RATE_ENV = "CALLOSUM_PEER_QUALITY_SIDECAR_ENQUEUE_RATE"
+# Legacy in-band capture (the leak-prone piggyback that asks the model to emit its
+# judgement as <<qop>> markers in the same text stream as the answer) is RETIRED in
+# favor of the out-of-band sidecar. It only fires when this flag is explicitly "1",
+# regardless of CALLOSUM_PEER_QUALITY_CAPTURE_RATE. Kept as a rollback target; the
+# default ("0") means the live request is never mutated.
+_PEER_QUALITY_INBAND_ENABLED_ENV = "CALLOSUM_PEER_QUALITY_INBAND_ENABLED"
 # Recent session assistant turns to scan for un-judged subjects. No hard cap on
 # how many get judged () — judging is bounded per turn by the
 # token budget below (defer-not-skip), not by a fixed count.
@@ -238,6 +250,132 @@ def _peer_quality_capture_rate() -> float:
         return float(os.environ.get(_PEER_QUALITY_CAPTURE_RATE_ENV, "0"))
     except ValueError:
         return 0.0
+
+
+def _peer_quality_sidecar_enqueue_rate() -> float:
+    try:
+        return float(os.environ.get(_PEER_QUALITY_SIDECAR_ENQUEUE_RATE_ENV, "0.1"))
+    except ValueError:
+        return 0.1
+
+
+def _peer_quality_sidecar_enqueue_enabled() -> bool:
+    rate = _peer_quality_sidecar_enqueue_rate()
+    if rate <= 0:
+        return False
+    if rate >= 1:
+        return True
+    return secrets.randbelow(10_000) < int(rate * 10_000)
+
+
+def _peer_quality_inband_enabled() -> bool:
+    """Legacy in-band capture is retired by default; only on explicit opt-in."""
+    return os.environ.get(_PEER_QUALITY_INBAND_ENABLED_ENV, "0") == "1"
+
+
+def _sidecar_quota_pause_pct() -> float:
+    try:
+        return float(os.environ.get("CALLOSUM_PEER_QUALITY_SIDECAR_QUOTA_PAUSE_PCT", "90"))
+    except ValueError:
+        return 90.0
+
+
+def _quota_near_exhaustion(quota_after: Any) -> bool:
+    """True if the just-served backend's tighter meter is at/above the pause pct.
+
+    Protective (not a size metric): firing a judge into an already-exhausted
+    account would 429 and cool the backend down for real traffic. Skips judging
+    only at the edge so almost every sampled turn still gets judged.
+    """
+    if quota_after is None:
+        return False
+    pct = _sidecar_quota_pause_pct()
+    five = getattr(quota_after, "five_hourly_used_percent", None)
+    weekly = getattr(quota_after, "weekly_used_percent", None)
+    pressure = max(five or 0, weekly or 0)
+    return pressure >= pct
+
+
+def _spawn_sidecar_judge(
+    *,
+    usage_log: UsageLog,
+    request_id: int,
+    session_id: str,
+    backend: Backend,
+    judge_model: str,
+    judge_reasoning_effort: str | None,
+    quota_after: Any,
+) -> None:
+    """Schedule a best-effort background sidecar judge for the just-completed turn.
+
+    Called from the post-completion logging path (after the client already has
+    its response), so the judge adds no client latency. Best-effort: any failure
+    is swallowed inside the task so it can never crash the server or disrupt
+    live traffic.
+    """
+    if _quota_near_exhaustion(quota_after):
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop (e.g. CLI/test context calling _log_attempt directly);
+        # synchronous judging only runs in the live server.
+        return
+    loop.create_task(
+        _sidecar_judge_task(
+            usage_log=usage_log,
+            request_id=request_id,
+            session_id=session_id,
+            backend=backend,
+            judge_model=judge_model,
+            judge_reasoning_effort=judge_reasoning_effort,
+        )
+    )
+
+
+async def _sidecar_judge_task(
+    *,
+    usage_log: UsageLog,
+    request_id: int,
+    session_id: str,
+    backend: Backend,
+    judge_model: str,
+    judge_reasoning_effort: str | None,
+) -> None:
+    """Pick one prior cross-cell subject and judge it on the just-served backend.
+
+    The candidate carries no queue id, so execute_sidecar_judge_candidate records
+    the sidecar request + opinion directly without touching any durable queue.
+    """
+    try:
+        subjects = usage_log.select_unjudged_cross_cell_subject(
+            session_id=session_id,
+            judge_request_id=request_id,
+            judge_model=judge_model,
+            judge_reasoning_effort=judge_reasoning_effort,
+            limit=1,
+        )
+        if not subjects:
+            return
+        subject_request_id, subject_model, subject_reasoning_effort, user_prompt_text, subject_response_text = (
+            subjects[0]
+        )
+        candidate = SidecarJudgeCandidate(
+            id=None,
+            request_id=None,
+            judge_backend_id=backend.id,
+            subject_request_id=subject_request_id,
+            session_id=session_id,
+            judge_model=judge_model,
+            judge_reasoning_effort=judge_reasoning_effort,
+            user_prompt_text=user_prompt_text,
+            subject_model=subject_model,
+            subject_reasoning_effort=subject_reasoning_effort,
+            subject_response_text=subject_response_text,
+        )
+        await execute_sidecar_judge_candidate(candidate, backend=backend, usage_log=usage_log)
+    except Exception as exc:  # best-effort: never disrupt live traffic
+        logging.warning("sidecar judge failed for request %s: %s", request_id, exc)
 
 
 def _inject_peer_quality_prompt(
@@ -1457,7 +1595,20 @@ def create_app(
             "peer_quality_capture": {
                 "env_var": _PEER_QUALITY_CAPTURE_RATE_ENV,
                 "configured_rate": _peer_quality_capture_rate(),
-                "enabled": _peer_quality_capture_rate() > 0,
+                # Legacy in-band capture is retired; the rate alone no longer fires
+                # it. `enabled` reflects the actual gate (the opt-in legacy flag AND
+                # a positive rate), so /status can't mislead an operator into
+                # thinking in-band tagging is live when it is off.
+                "enabled": _peer_quality_inband_enabled() and _peer_quality_capture_rate() > 0,
+                "inband_enabled_env": _PEER_QUALITY_INBAND_ENABLED_ENV,
+                "inband_enabled": _peer_quality_inband_enabled(),
+            },
+            "peer_quality_sidecar_enqueue": {
+                "env_var": _PEER_QUALITY_SIDECAR_ENQUEUE_RATE_ENV,
+                "configured_rate": _peer_quality_sidecar_enqueue_rate(),
+                # Deterministic (rate > 0), not the per-turn sampler — /status must
+                # report config, not run a random draw.
+                "enabled": _peer_quality_sidecar_enqueue_rate() > 0,
             },
             "xhigh_cap": {
                 "enabled": auto_cfg.xhigh_cap_enabled,
@@ -2585,7 +2736,7 @@ async def _dispatch_internal(
     preferred_id = session_registry.get(session_id) if session_id is not None else None
     if body.get("stream") is True:
         peer_quality_capture: _PeerQualityCapture | None = None
-        if _peer_quality_capture_enabled():
+        if _peer_quality_inband_enabled() and _peer_quality_capture_enabled():
             peer_quality_capture = _PeerQualityCapture(nonce=secrets.token_urlsafe(8))
             peer_quality_cell = Cell(model=model, reasoning_effort=_extract_reasoning_effort(body) or "")
             body = _inject_peer_quality_prompt(
@@ -4334,6 +4485,25 @@ def _log_attempt(
             injected_fired=peer_quality_capture.injected_fired,
             subject_count=peer_quality_capture.subject_count,
             skip_reason=peer_quality_capture.skip_reason,
+            injected_tokens=peer_quality_capture.injected_tokens,
+        )
+    # Out-of-band sidecar judging: synchronous, in-process. Sampled at
+    # CALLOSUM_PEER_QUALITY_SIDECAR_ENQUEUE_RATE. When a turn completes, fire a
+    # background judge task that asks the just-served cell to rate one prior
+    # cross-cell answer. The judge reply never reaches the client (it is a
+    # separate request parsed for a structured verdict), so the in-band prose
+    # leak is structurally impossible. No durable queue, no timer, no runner —
+    # judging happens here, at request completion. Best-effort: a judge failure
+    # is swallowed (one dropped label is harmless at 0.1 sampling).
+    if status == 200 and session_id is not None and _peer_quality_sidecar_enqueue_enabled():
+        _spawn_sidecar_judge(
+            usage_log=usage_log,
+            request_id=request_id,
+            session_id=session_id,
+            backend=backend,
+            judge_model=model,
+            judge_reasoning_effort=entry.reasoning_effort,
+            quota_after=handle.quota_after,
         )
     # Store request_id in context for response handlers to access
     _request_id_context.set(request_id)

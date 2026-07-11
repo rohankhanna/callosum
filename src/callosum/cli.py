@@ -824,7 +824,8 @@ def build_parser() -> argparse.ArgumentParser:
             "Provenance axis to break tokens down by (default: mode). "
             "'mode' groups by effective_routing_mode (the routing lens); "
             "'traffic_kind' groups by decision purpose — operator, "
-            "canary_redirect, quota_explore, peer_quality_capture, legacy — "
+            "canary_redirect, quota_explore, peer_quality_capture, "
+            "peer_quality_sidecar, legacy — "
             "which separates exploration/capture noise from real operator "
             "traffic (REQ-003); 'both' emits both breakdowns."
         ),

@@ -140,6 +140,22 @@ labeler is shadow-mode only and never switches live routing.
 - Standalone shadow report: `uv run python -m callosum.jobs.peer_quality_shadow_report --db-path <path>`
 - Live service: `callosum status` → `router.peer_quality_shadow` block carries the same fields.
 
+The same shadow-report surface also carries the sidecar measurement: the
+`sidecar_breakdown` reports completed sidecar request token totals,
+`tokens_per_opinion`, and `tokens_per_labeled_subject` so usable-label yield can
+be read from one JSON document.
+
+Peer-quality judging is now **synchronous and automatic** — there is no queue
+to drain and no command to run. When a turn completes, if it was sampled at
+`CALLOSUM_PEER_QUALITY_SIDECAR_ENQUEUE_RATE` (default `0.1`) and the serving
+backend is not near quota exhaustion, the live server fires one background
+judge request in-process and records the opinion directly into
+`peer_quality_opinions` (with `nonce="sidecar"`). Labels accrue on their own as
+traffic flows; just run the shadow report periodically to watch the counts
+grow. The earlier batch-runner / backfill / experiment jobs and the systemd
+timer were removed — they were over-engineering for this single-operator
+loopback service.
+
 ## 5. Capture schedule
 
 ### 5.1 Capture-start date
@@ -162,7 +178,7 @@ daemon. There is **no separate daily cap** on opinion accrual.
 | Probe | Cadence | Trigger |
 |---|---|---|
 | `apply_peer_quality_labels` | daily, before gate check | converts accrued opinions → embedded labels |
-| `peer_quality_shadow_report` | daily (inside gate check) | produces the metric the gate asserts |
+| `peer_quality_shadow_report` | daily (inside gate check; P3 default evaluates the full peer-label pool) | produces the metric the gate asserts |
 | `check_p3_gate.py` (the `--check`) | daily | the work tracker release condition |
 
 The work tracker due-probe scheduler () already runs

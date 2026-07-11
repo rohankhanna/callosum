@@ -116,10 +116,39 @@ CREATE TABLE IF NOT EXISTS peer_quality_capture_metrics (
     opinion_count INTEGER NOT NULL,
     echo_count INTEGER NOT NULL,
     malformed_count INTEGER NOT NULL,
+    injected_tokens INTEGER NOT NULL DEFAULT 0,
     created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_peer_quality_capture_metrics_session
     ON peer_quality_capture_metrics(session_id, created_at);
+
+CREATE TABLE IF NOT EXISTS peer_quality_sidecar_candidates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id INTEGER NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+    session_id TEXT,
+    judge_backend_id TEXT NOT NULL,
+    judge_model TEXT NOT NULL,
+    judge_reasoning_effort TEXT,
+    subject_request_id INTEGER NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+    subject_model TEXT NOT NULL,
+    subject_reasoning_effort TEXT,
+    user_prompt_text TEXT NOT NULL,
+    subject_response_text TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at REAL NOT NULL,
+    claimed_at REAL,
+    claimed_by TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_peer_quality_sidecar_candidates_dedup
+    ON peer_quality_sidecar_candidates(
+        COALESCE(session_id, ''),
+        judge_model,
+        COALESCE(judge_reasoning_effort, ''),
+        subject_request_id
+    );
+CREATE INDEX IF NOT EXISTS idx_peer_quality_sidecar_candidates_pending
+    ON peer_quality_sidecar_candidates(status, created_at);
+
 """
 
 # Columns added after the initial v1 schema. ALTER TABLE on each one (guarded
@@ -239,6 +268,10 @@ END""",
     "ALTER TABLE peer_quality_capture_metrics ADD COLUMN injected_fired INTEGER",
     "ALTER TABLE peer_quality_capture_metrics ADD COLUMN subject_count INTEGER",
     "ALTER TABLE peer_quality_capture_metrics ADD COLUMN skip_reason TEXT",
+    "ALTER TABLE peer_quality_capture_metrics ADD COLUMN injected_tokens INTEGER NOT NULL DEFAULT 0",
+    # Durable debt queue for the sidecar judge follow-up.
+    "ALTER TABLE peer_quality_sidecar_candidates ADD COLUMN claimed_at REAL",
+    "ALTER TABLE peer_quality_sidecar_candidates ADD COLUMN claimed_by TEXT",
     # Forward-looking policy attribution axis. This records why a request
     # existed or was modified from Callosum's perspective: normal operator
     # traffic, canary baseline, quota exploration, or peer-quality capture.
@@ -778,20 +811,23 @@ class UsageLog:
         injected_fired: bool = False,
         subject_count: int = 0,
         skip_reason: str | None = None,
+        injected_tokens: int = 0,
     ) -> None:
         """Persist request-level qop capture counters for observability.
 
         `injected_fired`/`subject_count`/`skip_reason` ()
         distinguish a sampled-but-not-injected request from one where the
         model was actually asked for an opinion and stayed silent.
+        `injected_tokens` makes current in-band token cost explicit for the
+        sidecar-vs-in-band comparison.
         """
         with self._lock:
             self._conn.execute(
                 "INSERT OR REPLACE INTO peer_quality_capture_metrics"
                 " (request_id, session_id, judge_backend_id, judge_model, judge_reasoning_effort,"
                 "  nonce, opinion_count, echo_count, malformed_count, created_at,"
-                "  injected_fired, subject_count, skip_reason)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "  injected_fired, subject_count, skip_reason, injected_tokens)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     request_id,
                     session_id,
@@ -806,8 +842,334 @@ class UsageLog:
                     1 if injected_fired else 0,
                     subject_count,
                     skip_reason,
+                    max(0, int(injected_tokens)),
                 ),
             )
+
+    def enqueue_peer_quality_sidecar_candidate(
+        self,
+        *,
+        request_id: int,
+        session_id: str | None,
+        judge_backend_id: str,
+        judge_model: str,
+        judge_reasoning_effort: str | None,
+        subject_request_id: int,
+        subject_model: str,
+        subject_reasoning_effort: str | None,
+        user_prompt_text: str,
+        subject_response_text: str,
+        created_at: float,
+    ) -> int | None:
+        """Persist one sidecar judge debt item, deduped by judge/subject cell."""
+        with self._lock:
+            cursor = self._conn.execute(
+                "INSERT OR IGNORE INTO peer_quality_sidecar_candidates "
+                "(request_id, session_id, judge_backend_id, judge_model, judge_reasoning_effort, "
+                " subject_request_id, subject_model, subject_reasoning_effort, user_prompt_text, "
+                " subject_response_text, status, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+                (
+                    request_id,
+                    session_id,
+                    judge_backend_id,
+                    judge_model,
+                    judge_reasoning_effort,
+                    subject_request_id,
+                    subject_model,
+                    subject_reasoning_effort,
+                    user_prompt_text,
+                    subject_response_text,
+                    created_at,
+                ),
+            )
+        if cursor.rowcount == 0:
+            return None
+        candidate_id = cursor.lastrowid
+        if candidate_id is None:
+            raise RuntimeError("sqlite3 did not return a rowid for the inserted sidecar candidate")
+        return int(candidate_id)
+
+    def enqueue_peer_quality_sidecar_candidates_for_request(
+        self,
+        *,
+        request_id: int,
+        max_subjects: int = 1,
+        created_at: float | None = None,
+    ) -> list[int]:
+        """Create pending sidecar judge debt for a completed judge request row.
+
+        Candidate selection mirrors the sidecar target design rather than the
+        in-band exact-text requirement: use recent same-session, cross-cell
+        prose outputs; skip subjects this judge cell already rated.
+        """
+        if max_subjects <= 0:
+            return []
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT session_id, backend_id, model, reasoning_effort, prompt_text, ts_end "
+                "FROM requests WHERE id = ? AND status = 200 AND model IS NOT NULL",
+                (request_id,),
+            ).fetchone()
+            if row is None:
+                return []
+            session_id, judge_backend_id, judge_model, judge_effort, _prompt_text, ts_end = row
+            if session_id is None:
+                return []
+            subject_rows = self._conn.execute(
+                """
+                SELECT id, model, reasoning_effort, prompt_text, response_text
+                FROM requests
+                WHERE session_id = ?
+                  AND id != ?
+                  AND status = 200
+                  AND model IS NOT NULL
+                  AND response_text IS NOT NULL
+                  AND prompt_text IS NOT NULL
+                  AND NOT (model = ? AND COALESCE(reasoning_effort, '') = COALESCE(?, ''))
+                  AND id NOT IN (
+                      SELECT subject_request_id FROM peer_quality_opinions
+                      WHERE session_id = ?
+                        AND judge_model = ?
+                        AND COALESCE(judge_reasoning_effort, '') = COALESCE(?, '')
+                        AND subject_request_id IS NOT NULL
+                  )
+                ORDER BY ts_start DESC
+                LIMIT ?
+                """,
+                (
+                    session_id,
+                    request_id,
+                    judge_model,
+                    judge_effort,
+                    session_id,
+                    judge_model,
+                    judge_effort,
+                    max_subjects,
+                ),
+            ).fetchall()
+        created = float(created_at if created_at is not None else ts_end)
+        inserted: list[int] = []
+        for subject_id, subject_model, subject_effort, prompt_text, response_text in subject_rows:
+            candidate_id = self.enqueue_peer_quality_sidecar_candidate(
+                request_id=request_id,
+                session_id=session_id,
+                judge_backend_id=judge_backend_id,
+                judge_model=judge_model,
+                judge_reasoning_effort=judge_effort,
+                subject_request_id=int(subject_id),
+                subject_model=subject_model,
+                subject_reasoning_effort=subject_effort,
+                user_prompt_text=prompt_text,
+                subject_response_text=response_text,
+                created_at=created,
+            )
+            if candidate_id is not None:
+                inserted.append(candidate_id)
+        return inserted
+
+    def select_unjudged_cross_cell_subject(
+        self,
+        *,
+        session_id: str,
+        judge_request_id: int,
+        judge_model: str,
+        judge_reasoning_effort: str | None,
+        limit: int = 1,
+    ) -> list[tuple[int, str, str | None, str, str]]:
+        """Return up to limit prior cross-cell subjects the judge cell hasn't rated.
+
+        Synchronous in-process judging (no durable queue): mirrors the subject
+        selection in enqueue_peer_quality_sidecar_candidates_for_request but
+        returns the subject rows directly instead of inserting sidecar debt. Each
+        row is (subject_request_id, subject_model, subject_reasoning_effort,
+        user_prompt_text, subject_response_text).
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT id, model, reasoning_effort, prompt_text, response_text
+                FROM requests
+                WHERE session_id = ?
+                  AND id != ?
+                  AND status = 200
+                  AND model IS NOT NULL
+                  AND response_text IS NOT NULL
+                  AND prompt_text IS NOT NULL
+                  AND NOT (model = ? AND COALESCE(reasoning_effort, '') = COALESCE(?, ''))
+                  AND id NOT IN (
+                      SELECT subject_request_id FROM peer_quality_opinions
+                      WHERE session_id = ?
+                        AND judge_model = ?
+                        AND COALESCE(judge_reasoning_effort, '') = COALESCE(?, '')
+                        AND subject_request_id IS NOT NULL
+                  )
+                ORDER BY ts_start DESC
+                LIMIT ?
+                """,
+                (
+                    session_id,
+                    judge_request_id,
+                    judge_model,
+                    judge_reasoning_effort,
+                    session_id,
+                    judge_model,
+                    judge_reasoning_effort,
+                    limit,
+                ),
+            ).fetchall()
+        return [(int(r[0]), str(r[1]), r[2], str(r[3]), str(r[4])) for r in rows]
+
+    def pending_peer_quality_sidecar_candidates(
+        self,
+        *,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return pending sidecar judge debt items in creation order."""
+        sql = (
+            "SELECT id, request_id, session_id, judge_backend_id, judge_model, judge_reasoning_effort, "
+            "subject_request_id, subject_model, subject_reasoning_effort, user_prompt_text, "
+            "subject_response_text, status, created_at, claimed_at, claimed_by "
+            "FROM peer_quality_sidecar_candidates WHERE status = 'pending' "
+            "ORDER BY created_at ASC, id ASC"
+        )
+        params: tuple[object, ...] = ()
+        if limit is not None:
+            sql += " LIMIT ?"
+            params = (limit,)
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        return [
+            {
+                "id": int(row[0]),
+                "request_id": int(row[1]),
+                "session_id": row[2],
+                "judge_backend_id": row[3],
+                "judge_model": row[4],
+                "judge_reasoning_effort": row[5],
+                "subject_request_id": int(row[6]),
+                "subject_model": row[7],
+                "subject_reasoning_effort": row[8],
+                "user_prompt_text": row[9],
+                "subject_response_text": row[10],
+                "status": row[11],
+                "created_at": float(row[12]),
+                "claimed_at": row[13],
+                "claimed_by": row[14],
+            }
+            for row in rows
+        ]
+
+    def claim_peer_quality_sidecar_candidates(
+        self,
+        *,
+        limit: int = 1,
+        claimed_by: str,
+        claimed_at: float | None = None,
+    ) -> list[dict[str, Any]]:
+        """Atomically claim pending sidecar debt items for execution."""
+        if limit <= 0:
+            return []
+        claimed_ts = float(claimed_at if claimed_at is not None else time.time())
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                rows = self._conn.execute(
+                    "SELECT id FROM peer_quality_sidecar_candidates"
+                    " WHERE status = 'pending'"
+                    " ORDER BY created_at ASC, id ASC"
+                    " LIMIT ?",
+                    (limit,),
+                ).fetchall()
+                if not rows:
+                    self._conn.commit()
+                    return []
+                candidate_ids = [int(row[0]) for row in rows]
+                self._conn.executemany(
+                    "UPDATE peer_quality_sidecar_candidates"
+                    " SET status = 'claimed', claimed_at = ?, claimed_by = ?"
+                    " WHERE id = ? AND status = 'pending'",
+                    [(claimed_ts, claimed_by, candidate_id) for candidate_id in candidate_ids],
+                )
+                placeholders = ",".join("?" for _ in candidate_ids)
+                claimed_rows = self._conn.execute(
+                    "SELECT id, request_id, session_id, judge_backend_id, judge_model, judge_reasoning_effort, "
+                    "subject_request_id, subject_model, subject_reasoning_effort, user_prompt_text, "
+                    "subject_response_text, status, created_at, claimed_at, claimed_by "
+                    f"FROM peer_quality_sidecar_candidates WHERE id IN ({placeholders}) "
+                    "ORDER BY created_at ASC, id ASC",
+                    tuple(candidate_ids),
+                ).fetchall()
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return [
+            {
+                "id": int(row[0]),
+                "request_id": int(row[1]),
+                "session_id": row[2],
+                "judge_backend_id": row[3],
+                "judge_model": row[4],
+                "judge_reasoning_effort": row[5],
+                "subject_request_id": int(row[6]),
+                "subject_model": row[7],
+                "subject_reasoning_effort": row[8],
+                "user_prompt_text": row[9],
+                "subject_response_text": row[10],
+                "status": row[11],
+                "created_at": float(row[12]),
+                "claimed_at": row[13],
+                "claimed_by": row[14],
+            }
+            for row in claimed_rows
+        ]
+
+    def requeue_stale_peer_quality_sidecar_candidates(
+        self,
+        *,
+        older_than_ts: float,
+    ) -> int:
+        """Return claimed-but-stale sidecar debt to the pending queue."""
+        with self._lock:
+            cursor = self._conn.execute(
+                "UPDATE peer_quality_sidecar_candidates "
+                "SET status = 'pending', claimed_at = NULL, claimed_by = NULL "
+                "WHERE status = 'claimed' AND claimed_at IS NOT NULL AND claimed_at <= ?",
+                (float(older_than_ts),),
+            )
+        return int(cursor.rowcount)
+
+    def requeue_peer_quality_sidecar_candidate(self, *, candidate_id: int) -> None:
+        """Return one claimed sidecar debt item to the pending queue.
+
+        This is used for transient upstream failures such as rate limits.  A
+        transient failure must not discard durable judging debt just because a
+        particular backend is temporarily unavailable.
+        """
+        with self._lock:
+            self._conn.execute(
+                "UPDATE peer_quality_sidecar_candidates "
+                "SET status = 'pending', claimed_at = NULL, claimed_by = NULL "
+                "WHERE id = ? AND status = 'claimed'",
+                (candidate_id,),
+            )
+
+    def complete_peer_quality_sidecar_candidate(
+        self,
+        *,
+        candidate_id: int,
+        status: str,
+    ) -> None:
+        """Persist the final state for a claimed sidecar debt item."""
+        if status not in {"done", "failed"}:
+            raise ValueError(f"unsupported sidecar candidate status: {status}")
+        with self._lock:
+            self._conn.execute(
+                "UPDATE peer_quality_sidecar_candidates SET status = ? WHERE id = ?",
+                (status, candidate_id),
+            )
+
 
     def per_mode_stats_since(self, *, since_ts: float) -> dict[str, dict[str, int]]:
         """Aggregate per-effective_routing_mode counts since `since_ts`.
