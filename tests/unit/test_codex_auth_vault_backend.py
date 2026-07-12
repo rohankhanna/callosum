@@ -465,6 +465,7 @@ async def test_responses_forwards_body_verbatim_with_vault_headers(tmp_path: Pat
         captured["account_id"] = request.headers.get("chatgpt-account-id")
         captured["beta"] = request.headers.get("OpenAI-Beta")
         captured["originator"] = request.headers.get("originator")
+        captured["version"] = request.headers.get("version")
         captured["body"] = json.loads(request.content)
         return _sse_response({"id": "resp-xyz", "object": "response"})
 
@@ -495,6 +496,11 @@ async def test_responses_forwards_body_verbatim_with_vault_headers(tmp_path: Pat
         assert captured["account_id"] == "acct-codex"
         assert captured["beta"] == "responses=v1"
         assert captured["originator"] == "codex_cli_rs"
+        # model-a0c4's backend routing requires a `version` header
+        # alongside originator (openai/codex#31967); without it luna 404s
+        # while sol/terra serve. Pin the header is wired to the resolver.
+        assert captured["version"] == _resolve_codex_client_version()
+        assert captured["version"]
         # Body forwarded with one mutation: stream is forced to true (Codex
         # Responses API now requires it). Other fields pass through unchanged.
         forwarded = captured["body"]

@@ -642,6 +642,13 @@ class CodexAuthVaultBackend:
             "Accept": "text/event-stream" if accept_event_stream else "application/json",
             "OpenAI-Beta": RESPONSES_BETA_HEADER_VALUE,
             "originator": "codex_cli_rs",
+            # ChatGPT routes certain models by originator + `version`
+            # header. model-a0c4's metadata sets
+            # minimal_client_version=0.144.0; without a `version` header
+            # ≥ that floor luna 404s "Model not found" while sol/terra
+            # serve fine. The official Codex CLI sends this header;
+            # mirror it. openai/codex#31967.
+            "version": _resolve_codex_client_version(),
         }
         if account_id:
             headers["chatgpt-account-id"] = account_id
