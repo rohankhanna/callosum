@@ -4986,7 +4986,34 @@ class _PeriodicCooldownProber:
                 continue
             now = time.time()
             in_active_cooldown = usage.cooldown_until_ts is not None and usage.cooldown_until_ts > now
+            # Also re-probe when blocking_meters is non-empty. After upstream
+            # merged its two quota windows into one weekly window riding the
+            # `x-codex-primary-*` headers, the parsed weekly_* fields are
+            # permanently None and weekly_exhausted never gets set, so the
+            # 100% quota block lives entirely in blocking_meters' five_hourly
+            # branch. Without this check, a backend blocked only by that meter
+            # (expired cooldown, weekly_exhausted=False) falls into a dead
+            # zone: the prober skips it, and _routable_backends excludes it
+            # from real traffic, so nothing refreshes the stale snapshot and
+            # the lock can hold for up to a week until a manual restart. The
+            # forced probe here refreshes the snapshot via
+            # _apply_response_to_handle; if quota reset it clears and the
+            # backend self-heals, if genuinely exhausted the probe 429s and
+            # _apply_error_to_usage sets a long cooldown (same cost as the
+            # old weekly_exhausted path: one probe per cycle for the week).
+            blocked: tuple[str, ...] = ()
             if not in_active_cooldown and not usage.weekly_exhausted:
+                try:
+                    health = await backend.health()
+                    quota = await backend.quota_snapshot()
+                except Exception:
+                    logger.exception("cooldown prober: snapshot failed for %r", backend.id)
+                    continue
+                blocked = blocking_meters(
+                    BackendSnapshot(backend=backend, health=health, usage=usage, quota=quota),
+                    now_ts=now,
+                )
+            if not in_active_cooldown and not usage.weekly_exhausted and not blocked:
                 continue
             try:
                 result = await _diagnose_backend(backend, force=True)
