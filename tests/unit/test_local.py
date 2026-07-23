@@ -124,7 +124,7 @@ def test_models_caches_until_refresh_ttl(monkeypatch) -> None:
     src.models()  # first call: fetches
     src.models()  # second call within TTL: cached
     src.models()
-    assert len(calls) == 1
+    assert len(calls) == 2
 
 
 def test_models_force_bypasses_cache(monkeypatch) -> None:
@@ -146,7 +146,7 @@ def test_models_force_bypasses_cache(monkeypatch) -> None:
     src = LocalModelRegistrySource(refresh_s=60.0)
     src.models(force=True)
     src.models(force=True)
-    assert len(calls) == 2
+    assert len(calls) == 4
 
 
 def test_models_handles_subprocess_filenotfound(monkeypatch) -> None:
@@ -191,3 +191,60 @@ def test_model_entry_from_cli_accepts_legacy_api_field() -> None:
     parsed = ModelEntry.from_cli_entry(entry)
     assert parsed is not None
     assert parsed.api_surfaces == ("responses",)
+
+
+def test_models_enrich_entries_with_capability_matrix(monkeypatch) -> None:
+    models_payload = _make_payload(
+        [
+            {
+                "model": {
+                    "id": "m1",
+                    "endpoint": "http://127.0.0.1:11434",
+                    "runtime": "ollama",
+                    "runtime_model": "m1:1b",
+                    "enabled": True,
+                    "api_surfaces": ["responses"],
+                },
+            },
+        ]
+    )
+    caps_payload = json.dumps(
+        {
+            "host": {"total_vram_gb": 24, "total_ram_gb": 64, "unified_memory": False},
+            "rows": [
+                {
+                    "model_id": "m1",
+                    "status": "unmeasured",
+                    "quantization": {"label": "ollama-q4_k_m"},
+                    "host_fit": {"runnable_on_host": True},
+                    "graph_metrics": {
+                        "estimated_clean_total_tokens_per_second": 12.5,
+                        "ceiling_search_prompt_tokens": 8192,
+                        "measured_clean_total_tokens": 4096,
+                        "local_first_avg_duration_seconds": 8.192,
+                        "ceiling_search_completion_tokens_per_second": 10.0,
+                    },
+                }
+            ]
+        }
+    )
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        if "capabilities" in cmd:
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=caps_payload, stderr="")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=models_payload, stderr="")
+
+    monkeypatch.setattr("callosum.local.subprocess.run", fake_run)
+    models = LocalModelRegistrySource().models(force=True)
+    assert len(models) == 1
+    assert models[0].local_quantization == "ollama-q4_k_m"
+    assert models[0].local_runnable_on_host is True
+    assert models[0].local_status == "unmeasured"
+    assert models[0].estimated_tokens_per_second == 12.5
+    assert models[0].local_pool_bytes == 24 * 1024**3
+    assert models[0].local_fit_limit_tokens == 8192
+    assert models[0].local_prefill_ms_per_token == 2.0
+    assert models[0].local_decode_bandwidth_kappa == 1.25
+    assert len(calls) == 2

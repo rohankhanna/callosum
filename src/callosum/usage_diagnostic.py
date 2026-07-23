@@ -42,7 +42,7 @@ class ModeBucketSummary:
 @dataclass(frozen=True, slots=True)
 class TrafficKindBucketSummary:
     # Policy-purpose bucket. `traffic_kind` is the Callosum decision-purpose
-    # axis (operator / canary_redirect / quota_explore / peer_quality_capture).
+    # axis (operator / canary_redirect / min_coverage_quota / peer_quality_capture).
     # Pre-F4 rows have NULL traffic_kind and coalesce to "legacy" so they are
     # visible without being mislabeled as real operator traffic.
     traffic_kind: str

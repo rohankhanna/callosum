@@ -10,7 +10,7 @@ import pytest
 
 from callosum import app as app_module
 from callosum.app import create_app
-from callosum.cell_grid import DEFAULT_MODELS, REASONING_LEVELS, build_cells
+from callosum.cell_grid import DEFAULT_MODELS, FALLBACK_REASONING_LEVELS, build_cells
 from callosum.fakes import InMemoryFakeBackend
 from callosum.usage_log import UsageLog
 
@@ -61,7 +61,7 @@ async def test_auto_learning_rewrites_body_and_logs_router_columns(tmp_path: Pat
     assert status == 200
     # The served (model, reasoning) must be a real grid cell.
     assert model in DEFAULT_MODELS
-    assert reasoning in REASONING_LEVELS
+    assert reasoning in FALLBACK_REASONING_LEVELS
 
 
 @pytest.mark.asyncio
@@ -91,7 +91,7 @@ async def test_explicit_model_request_routes_through_router(tmp_path: Path) -> N
     # Router picked a real cell from the grid. The exact (model, effort)
     # depends on cost ordering — we just assert it IS a grid cell.
     assert model in DEFAULT_MODELS
-    assert reasoning in REASONING_LEVELS
+    assert reasoning in FALLBACK_REASONING_LEVELS
 
 
 # ---------- arm-level exploration -----------------------------------------
@@ -203,15 +203,15 @@ async def test_xhigh_cap_removes_xhigh_from_auto_candidates(tmp_path: Path) -> N
 
 @pytest.mark.asyncio
 async def test_quota_enabled_spreads_and_stamps_provenance(tmp_path: Path) -> None:
-    """With the exploration quota on, a burst of eligible (tool-less, easy)
+    """With the minimum-coverage quota on, a burst of eligible (tool-less, easy)
     turns deficit-fills across the grid instead of collapsing, and forced turns
-    are stamped effective_routing_mode='quota_explore' ()."""
+    are stamped effective_routing_mode='min_coverage_quota' ()."""
     from callosum.config import AutoRouterConfig
 
     db = tmp_path / "u.sqlite"
     log = UsageLog(db)
     backend = _backend()
-    cfg = AutoRouterConfig(exploration_quota_enabled=True)
+    cfg = AutoRouterConfig(min_coverage_quota_enabled=True)
     async with _client(backends=[backend], usage_log=log, auto_router_config=cfg) as client:
         for _ in range(16):
             r = await client.post("/v1/responses", json={"model": "auto-learning", "input": []})
@@ -221,20 +221,20 @@ async def test_quota_enabled_spreads_and_stamps_provenance(tmp_path: Path) -> No
     # Deficit-fill from zero coverage => broad spread, not a single-cell collapse.
     assert len(set(served)) >= 8
     # At least the forced turns carry the quota provenance marker.
-    assert _effective_modes(db).count("quota_explore") >= 1
+    assert _effective_modes(db).count("min_coverage_quota") >= 1
 
 
 @pytest.mark.asyncio
 async def test_quota_forces_tool_turns_too(tmp_path: Path) -> None:
     """The quota has no tools exception: tool-bearing turns (all real Codex
     traffic) are forced toward under-floor cells like any other, so they spread
-    and carry the quota_explore marker ()."""
+    and carry the min_coverage_quota marker ()."""
     from callosum.config import AutoRouterConfig
 
     db = tmp_path / "u.sqlite"
     log = UsageLog(db)
     backend = _backend()
-    cfg = AutoRouterConfig(exploration_quota_enabled=True)
+    cfg = AutoRouterConfig(min_coverage_quota_enabled=True)
     tools = [{"type": "function", "name": "noop", "parameters": {"type": "object", "properties": {}}}]
     async with _client(backends=[backend], usage_log=log, auto_router_config=cfg) as client:
         for _ in range(16):
@@ -243,7 +243,7 @@ async def test_quota_forces_tool_turns_too(tmp_path: Path) -> None:
     served = _served_cells(db, "auto-learning")
     assert len(served) == 16
     assert len(set(served)) >= 8  # forced despite tools => spreads
-    assert _effective_modes(db).count("quota_explore") >= 1
+    assert _effective_modes(db).count("min_coverage_quota") >= 1
 
 
 @pytest.mark.asyncio
@@ -254,10 +254,14 @@ async def test_quota_skips_infeasible_under_floor_cell(
     guard already considers structurally too slow for this request."""
     from callosum.config import AutoRouterConfig
 
-    def _fake_feasible(body: dict[str, object], cell) -> bool:
+    def _fake_feasible(cell, _input_tokens: int, *, time_estimator, output_forecaster, budget_s: float) -> bool:
         return cell.model != "model-a0c3"
 
-    monkeypatch.setattr(app_module, "_cell_is_latency_feasible_for_body", _fake_feasible)
+    # The refactor replaced the removed _cell_is_latency_feasible_for_body
+    # helper with feasibility_eligible imported into callosum.app from
+    # callosum.routing.feasibility. Patch the imported name on the module
+    # the router resolves it from.
+    monkeypatch.setattr(app_module, "feasibility_eligible", _fake_feasible)
 
     db = tmp_path / "u.sqlite"
     log = UsageLog(db)
@@ -277,7 +281,7 @@ async def test_quota_skips_infeasible_under_floor_cell(
     finally:
         conn.close()
 
-    cfg = AutoRouterConfig(exploration_quota_enabled=True)
+    cfg = AutoRouterConfig(min_coverage_quota_enabled=True)
     async with _client(backends=[backend], usage_log=log, auto_router_config=cfg) as client:
         response = await client.post("/v1/responses", json={"model": "model-a0e7", "input": []})
     assert response.status_code == 200
@@ -290,7 +294,7 @@ async def test_quota_skips_infeasible_under_floor_cell(
     finally:
         conn.close()
     assert rows
-    quota_rows = [(model, reasoning) for effective_mode, model, reasoning in rows if effective_mode == "quota_explore"]
+    quota_rows = [(model, reasoning) for effective_mode, model, reasoning in rows if effective_mode == "min_coverage_quota"]
     assert all(model != "model-a0c3" for model, _reasoning in quota_rows)
 
 

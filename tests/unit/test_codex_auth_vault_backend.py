@@ -929,7 +929,7 @@ async def test_refresh_advertised_models_minimal_legacy_shape_still_works(
     """When the upstream returns only the legacy minimal shape (slug + maybe
     context_length, no ModelInfo extras), advertised_models still populates
     and model_metadata records exist with defensive None fields. The cell
-    grid then falls back to the regex + REASONING_LEVELS path.
+    grid then falls back to the regex + compatibility-effort path.
     """
     auth_path = tmp_path / "auth.json"
     _write_auth_json(auth_path)

@@ -33,6 +33,7 @@ from callosum.jobs.p3_gate import (
     DEFAULT_SAMPLE_LIMIT,
     run,
 )
+from callosum.routing.labeler.peer_quality import DEFAULT_SHADOW_CANDIDATE, SHADOW_CANDIDATE_CHOICES
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -49,6 +50,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-class-fraction", type=float, default=DEFAULT_MAX_CLASS_FRACTION)
     parser.add_argument("--sample-limit", type=int, default=DEFAULT_SAMPLE_LIMIT)
     parser.add_argument("--label-batch-size", type=int, default=200)
+    parser.add_argument(
+        "--shadow-candidate",
+        choices=SHADOW_CANDIDATE_CHOICES,
+        default=DEFAULT_SHADOW_CANDIDATE,
+        help="fixed diagnostic candidate; does not change the live P3 gate",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -63,6 +70,7 @@ def main(argv: list[str] | None = None) -> int:
             max_class_fraction=args.max_class_fraction,
             sample_limit=args.sample_limit,
             label_batch_size=args.label_batch_size,
+            shadow_candidate=args.shadow_candidate,
         )
     except ValueError as exc:
         print(str(exc), file=sys.stderr)

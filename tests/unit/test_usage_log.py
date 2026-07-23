@@ -189,13 +189,13 @@ def test_router_fields_persist(tmp_path: Path) -> None:
 
 def test_traffic_kind_persists(tmp_path: Path) -> None:
     log = UsageLog(tmp_path / "u.sqlite")
-    rowid = log.record(_entry(traffic_kind="quota_explore"))
+    rowid = log.record(_entry(traffic_kind="min_coverage_quota"))
     conn = sqlite3.connect(tmp_path / "u.sqlite")
     (traffic_kind,) = conn.execute(
         "SELECT traffic_kind FROM requests WHERE id = ?",
         (rowid,),
     ).fetchone()
-    assert traffic_kind == "quota_explore"
+    assert traffic_kind == "min_coverage_quota"
     log.close()
 
 

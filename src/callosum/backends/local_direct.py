@@ -27,8 +27,9 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import AsyncIterator
-from typing import Any, cast
+from collections.abc import AsyncIterator, Mapping
+from pathlib import Path
+from typing import Any, Protocol, cast
 
 import httpx
 
@@ -37,20 +38,34 @@ from callosum.backends._http import error_from_response, stall_guarded
 from callosum.cell_grid import ModelMetadata
 from callosum.config import LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S, LOCAL_STREAM_IDLE_TIMEOUT_S
 from callosum.errors import BackendError
-from callosum.local import LocalModelRegistrySource, ModelEntry
+from callosum.local import ModelEntry
+from callosum.local_model_catalog import CuratedLocalModel, curate_local_models, curated_local_model_ids
 from callosum.operator_state import (
     BACKEND_DEFAULT_INFERENCE_PARAMS,
     OperatorState,
     merge_inference_params,
 )
+from callosum.routing.local_performance import LocalPerformanceModel, build_local_performance_model
 from callosum.routing.protocols import CellCapabilities
 from callosum.sse_tee import ResponsesStreamCollector, ResponsesStreamSummary
+from callosum.usage_log import ModelFitProbe, UsageLog
 
 logger = logging.getLogger(__name__)
 
 
 DEFAULT_CALL_TIMEOUT_S = 300.0  # Cold-load latency for big models can exceed 60s
 LOCAL_PRIORITY_OFFSET = 10_000  # local cells sort after Codex cells in the grid
+
+
+def _gpu_seconds_per_token(tokens_per_second: float | None) -> float | None:
+    """Convert local throughput evidence into a GPU opportunity-cost signal."""
+    if tokens_per_second is None or tokens_per_second <= 0:
+        return None
+    return 1.0 / tokens_per_second
+
+
+class LocalModelSource(Protocol):
+    def models(self, *, force: bool = False) -> list[ModelEntry]: ...
 
 
 class LocalModelRegistryBackend:
@@ -64,11 +79,12 @@ class LocalModelRegistryBackend:
         self,
         *,
         id: str,
-        source: LocalModelRegistrySource,
+        source: LocalModelSource,
         client: httpx.AsyncClient | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         timeout_s: float = DEFAULT_CALL_TIMEOUT_S,
         operator_state: OperatorState | None = None,
+        usage_log_path: Path | None = None,
     ) -> None:
         self.id = id
         self._source = source
@@ -79,11 +95,42 @@ class LocalModelRegistryBackend:
             self._client = httpx.AsyncClient(transport=transport, timeout=timeout_s)
             self._owns_client = True
         self._operator_state = operator_state
+        # Full-context fit probe results live in the usage log; the backend
+        # reads them on a TTL so the per-request catalog admission path does
+        # not hit SQLite. None when no usage log is configured (batch jobs,
+        # tests) — the catalog then admits optimistically on fit.
+        self._usage_log_path = usage_log_path
+        self._usage_log: UsageLog | None = None
+        self._probe_results_cache: tuple[float, dict[str, ModelFitProbe]] | None = None
         # Health derives from "did the last source.models() call return
         # any models?" — proxy for "is the local-llm garage reachable
         # and configured?"
         self._healthy: bool = False
         self._last_health_reason: str = "unknown"
+
+    _PROBE_RESULTS_TTL_S = 60.0
+
+    def _probe_results(self) -> Mapping[str, ModelFitProbe]:
+        """Latest full-context fit probe per model id, cached on a TTL.
+
+        Returns an empty mapping when no usage log is configured or the read
+        fails, so the catalog admits optimistically on fit instead of crashing.
+        """
+        if self._usage_log_path is None:
+            return {}
+        now = time.monotonic()
+        cache = self._probe_results_cache
+        if cache is not None and now - cache[0] < self._PROBE_RESULTS_TTL_S:
+            return cache[1]
+        try:
+            if self._usage_log is None:
+                self._usage_log = UsageLog(self._usage_log_path)
+            probes = self._usage_log.all_model_fit_probes()
+        except OSError:
+            self._probe_results_cache = (now, {})
+            return {}
+        self._probe_results_cache = (now, dict(probes))
+        return self._probe_results_cache[1]
 
     # ---------- catalog ---------------------------------------------------
 
@@ -141,6 +188,53 @@ class LocalModelRegistryBackend:
             )
         return out
 
+    def curated_local_models(
+        self,
+        *,
+        min_tokens_per_second: float | None = None,
+    ) -> list[CuratedLocalModel]:
+        """Curated local fleet view for downstream routing policy.
+
+        This is the backend-facing seam that exposes the operator-owned
+        admission decision separately from raw discovery. Downstream
+        consumers can inspect both admitted ids and rejection reasons
+        without re-encoding the catalog policy.
+        """
+        return curate_local_models(
+            self._source.models(),
+            min_tokens_per_second=min_tokens_per_second,
+            probe_results=self._probe_results(),
+        )
+
+    def admitted_local_model_ids(
+        self,
+        *,
+        min_tokens_per_second: float | None = None,
+    ) -> frozenset[str]:
+        """Convenience view for the routing layer."""
+        return frozenset(
+            curated_local_model_ids(
+                self._source.models(),
+                min_tokens_per_second=min_tokens_per_second,
+                probe_results=self._probe_results(),
+            )
+        )
+
+    def local_model_admission_reasons(
+        self,
+        model: str,
+        *,
+        min_tokens_per_second: float | None = None,
+    ) -> tuple[str, ...]:
+        """Return the catalog reasons for one local model.
+
+        Empty tuple means the model is admitted.
+        """
+        for item in self.curated_local_models(min_tokens_per_second=min_tokens_per_second):
+            if item.id == model:
+                return item.reasons
+        return ("unknown-model",)
+
     def cell_capabilities(self, model: str) -> CellCapabilities:
         """Per-cell capabilities from local LLM gateway's registry.
 
@@ -153,18 +247,54 @@ class LocalModelRegistryBackend:
         """
         for m in self._source.models():
             if m.id == model:
+                reasons = self.local_model_admission_reasons(model)
                 return CellCapabilities(
                     context_window=m.context_window or 128_000,
                     modalities=frozenset({"text"}),
                     supports_tools=True,  # most modern local serving honors tools
                     cost_rank=0,
+                    local_throughput_tps=m.estimated_tokens_per_second,
+                    local_gpu_seconds_per_token=_gpu_seconds_per_token(m.estimated_tokens_per_second),
+                    local_quantization=m.local_quantization,
+                    local_runnable_on_host=m.local_runnable_on_host,
+                    local_status=m.local_status,
+                    local_catalog_admitted=not reasons,
+                    local_admission_reasons=reasons,
                 )
         return CellCapabilities(
             context_window=128_000,
             modalities=frozenset({"text"}),
             supports_tools=False,
             cost_rank=0,
+            local_catalog_admitted=False,
+            local_admission_reasons=("unknown-model",),
         )
+
+    def local_performance_model(self, model: str) -> LocalPerformanceModel | None:
+        """Optional per-model local latency surface from local LLM gateway evidence.
+
+        Returns None when the hub lacks enough structured performance hints,
+        letting the request-log time estimator remain the fallback.
+        """
+        for m in self._source.models():
+            if m.id != model:
+                continue
+            if m.local_pool_bytes is None or m.estimated_tokens_per_second is None:
+                return None
+            return build_local_performance_model(
+                model_id=m.id,
+                quantization=m.local_quantization,
+                pool_bytes=m.local_pool_bytes,
+                free_bytes=m.local_pool_bytes,
+                weight_bytes=None,
+                kv_bytes_per_token=None,
+                activation_bytes=None,
+                fit_limit_tokens=m.local_fit_limit_tokens,
+                estimated_tokens_per_second=m.estimated_tokens_per_second,
+                prefill_ms_per_token=m.local_prefill_ms_per_token or 2.0,
+                decode_bandwidth_kappa=m.local_decode_bandwidth_kappa or 1.0,
+            )
+        return None
 
     async def refresh_advertised_models(self, *, now: float | None = None) -> None:
         """Force the source to re-fetch. Mirrors codex_auth_vault's

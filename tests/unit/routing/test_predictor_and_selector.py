@@ -8,7 +8,7 @@ from callosum.routing.protocols import CellCapabilities, PromptFeatures
 from callosum.routing.selector.cost_weighted import CostWeightedSelector
 
 
-def _features():
+def _features() -> PromptFeatures:
     return PromptFeatures(text="x", tokens=100, modalities=frozenset({"text"}), needs_tools=False)
 
 
@@ -165,6 +165,118 @@ def test_selector_cost_still_dominates_parameter_count() -> None:
         ),
     }
     assert CostWeightedSelector().select(predictions, caps) == cheap_small
+
+
+def test_selector_uses_local_throughput_before_parameter_count_when_cost_ties() -> None:
+    slow_local = Cell(model="local-slow", reasoning_effort="default")
+    fast_local = Cell(model="local-fast", reasoning_effort="default")
+    predictions = {slow_local: 0.5, fast_local: 0.5}
+    caps = {
+        slow_local: CellCapabilities(
+            context_window=128_000,
+            modalities=frozenset({"text"}),
+            supports_tools=True,
+            cost_rank=0,
+            parameter_count=31_000_000_000,
+            local_throughput_tps=6.0,
+        ),
+        fast_local: CellCapabilities(
+            context_window=128_000,
+            modalities=frozenset({"text"}),
+            supports_tools=True,
+            cost_rank=0,
+            parameter_count=25_000_000_000,
+            local_throughput_tps=22.0,
+        ),
+    }
+    assert CostWeightedSelector().select(predictions, caps) == fast_local
+
+
+def test_selector_prefers_smaller_admitted_local_when_performance_ties() -> None:
+    """The admitted local hierarchy is exact-fit: after quality and
+    performance tie, spend the smaller admitted model first."""
+    small_local = Cell(model="local-small", reasoning_effort="default")
+    large_local = Cell(model="local-large", reasoning_effort="default")
+    predictions = {small_local: 0.5, large_local: 0.5}
+    caps = {
+        small_local: CellCapabilities(
+            context_window=128_000,
+            modalities=frozenset({"text"}),
+            supports_tools=True,
+            cost_rank=0,
+            parameter_count=7_000_000_000,
+            local_throughput_tps=20.0,
+            local_catalog_admitted=True,
+        ),
+        large_local: CellCapabilities(
+            context_window=128_000,
+            modalities=frozenset({"text"}),
+            supports_tools=True,
+            cost_rank=0,
+            parameter_count=30_000_000_000,
+            local_throughput_tps=20.0,
+            local_catalog_admitted=True,
+        ),
+    }
+    assert CostWeightedSelector().select(predictions, caps) == small_local
+
+
+def test_selector_prefers_faster_admitted_local_before_smaller_size() -> None:
+    """Throughput / ETA remain performance signals inside the admitted local
+    set. Exact-fit size is only the final tie-break."""
+    slow_small = Cell(model="local-small-slow", reasoning_effort="default")
+    fast_large = Cell(model="local-large-fast", reasoning_effort="default")
+    predictions = {slow_small: 0.5, fast_large: 0.5}
+    caps = {
+        slow_small: CellCapabilities(
+            context_window=128_000,
+            modalities=frozenset({"text"}),
+            supports_tools=True,
+            cost_rank=0,
+            parameter_count=7_000_000_000,
+            local_throughput_tps=8.0,
+            local_catalog_admitted=True,
+        ),
+        fast_large: CellCapabilities(
+            context_window=128_000,
+            modalities=frozenset({"text"}),
+            supports_tools=True,
+            cost_rank=0,
+            parameter_count=30_000_000_000,
+            local_throughput_tps=24.0,
+            local_catalog_admitted=True,
+        ),
+    }
+    assert CostWeightedSelector().select(predictions, caps) == fast_large
+
+
+def test_selector_uses_local_gpu_opportunity_cost_inside_admitted_local_set() -> None:
+    cheap_gpu = Cell(model="local-cheap-gpu", reasoning_effort="default")
+    expensive_gpu = Cell(model="local-expensive-gpu", reasoning_effort="default")
+    predictions = {cheap_gpu: 0.5, expensive_gpu: 0.5}
+    caps = {
+        cheap_gpu: CellCapabilities(
+            context_window=128_000,
+            modalities=frozenset({"text"}),
+            supports_tools=True,
+            cost_rank=0,
+            parameter_count=30_000_000_000,
+            local_throughput_tps=10.0,
+            local_gpu_seconds_per_token=0.02,
+            local_catalog_admitted=True,
+        ),
+        expensive_gpu: CellCapabilities(
+            context_window=128_000,
+            modalities=frozenset({"text"}),
+            supports_tools=True,
+            cost_rank=0,
+            parameter_count=7_000_000_000,
+            local_throughput_tps=20.0,
+            local_gpu_seconds_per_token=0.10,
+            local_catalog_admitted=True,
+        ),
+    }
+    assert CostWeightedSelector().select(predictions, caps) == cheap_gpu
 
 
 def test_selector_uses_time_estimate_to_break_same_cost_same_quality_tie() -> None:

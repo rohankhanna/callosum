@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from callosum.jobs.apply_peer_quality_labels import run as run_labeler
-from callosum.routing.labeler.peer_quality import peer_quality_shadow_report
+from callosum.routing.labeler.peer_quality import DEFAULT_SHADOW_CANDIDATE, peer_quality_shadow_report
 
 # Defaults grounded in the operator decision (, 2026-06-26)
 # and the code minimums (routing/labeler/peer_quality.py: MIN_SHADOW_*).
@@ -63,6 +63,7 @@ def evaluate_gate(
     min_per_cell: int = DEFAULT_MIN_PER_CELL,
     min_lift: float = DEFAULT_MIN_LIFT,
     max_class_fraction: float = DEFAULT_MAX_CLASS_FRACTION,
+    shadow_candidate: str = DEFAULT_SHADOW_CANDIDATE,
 ) -> dict[str, Any]:
     """Evaluate the P3 release conditions against a shadow report dict.
 
@@ -111,6 +112,11 @@ def evaluate_gate(
     all_met = volume_met and coverage_met and metric_met
 
     baseline = ev.get("baseline_majority_class") or {}
+    shadow_candidate_gate = _shadow_candidate_gate(
+        ev,
+        candidate=shadow_candidate,
+        min_lift=min_lift,
+    )
     return {
         "all_met": all_met,
         "blocking_on": blocking_on,
@@ -151,7 +157,63 @@ def evaluate_gate(
                 float(baseline["exact_rate"]) if baseline.get("exact_rate") is not None else None
             ),
             "knn_lift_over_majority": lift,
+            # Diagnostic-only comparators for . These help
+            # evaluate whether a per-cell prior or KNN/prior blend has useful
+            # signal without weakening the binding P3 gate above, which remains
+            # the current KNN lift over the majority-class baseline.
+            "shadow_comparators": ev.get("shadow_comparators") or {},
+            "shadow_candidate_gate": shadow_candidate_gate,
         },
+    }
+
+
+def _shadow_candidate_gate(
+    shadow_eval: dict[str, Any],
+    *,
+    candidate: str,
+    min_lift: float,
+) -> dict[str, Any]:
+    """Evaluate one configured shadow candidate without changing P3 release.
+
+    This is deliberately diagnostic.  all_met and blocking_on remain
+    bound to the live KNN metric above until an operator explicitly changes
+    the production predictor and its work tracker release condition.
+    """
+
+    comparators = shadow_eval.get("shadow_comparators") or {}
+    selected = comparators.get("shadow_candidate_predictor") or {}
+    selected_kind = str(selected.get("kind") or "")
+    expected_kind = candidate if candidate == DEFAULT_SHADOW_CANDIDATE else "knn_cell_prior_blend"
+    if selected_kind != expected_kind:
+        return {
+            "candidate": candidate,
+            "available": False,
+            "met": False,
+            "reason": "configured shadow candidate is absent or mismatched",
+        }
+    exact_rate = selected.get("exact_rate")
+    lift = selected.get("lift_over_majority")
+    beats = bool(selected.get("beats_majority_baseline"))
+    available = exact_rate is not None and lift is not None
+    exact_rate_float = float(exact_rate) if exact_rate is not None else None
+    lift_float = float(lift) if lift is not None else None
+    met = available and beats and lift_float is not None and lift_float > min_lift
+    reason: str | None = None
+    if not available:
+        reason = "configured shadow candidate unavailable"
+    elif not beats:
+        reason = "configured shadow candidate does not beat majority-class baseline"
+    elif not met:
+        reason = f"lift {lift_float:.3f} <= min_lift {min_lift:.3f}"
+    return {
+        "candidate": candidate,
+        "available": available,
+        "met": met,
+        "exact_rate": exact_rate_float,
+        "lift_over_majority": lift_float,
+        "beats_majority_baseline": beats,
+        "threshold_lift": min_lift,
+        "reason": reason,
     }
 
 
@@ -167,6 +229,7 @@ def run(
     max_class_fraction: float = DEFAULT_MAX_CLASS_FRACTION,
     sample_limit: int = DEFAULT_SAMPLE_LIMIT,
     label_batch_size: int = 200,
+    shadow_candidate: str = DEFAULT_SHADOW_CANDIDATE,
 ) -> tuple[dict[str, Any], int]:
     """Run the P3 gate check against db_path.
 
@@ -191,7 +254,11 @@ def run(
         if rc != 0:
             raise RuntimeError(f"labeler failed with rc={rc}")
 
-    report = peer_quality_shadow_report(db_path, sample_limit=sample_limit)
+    report = peer_quality_shadow_report(
+        db_path,
+        sample_limit=sample_limit,
+        shadow_candidate=shadow_candidate,
+    )
     result = evaluate_gate(
         report,
         min_labels=min_labels,
@@ -199,5 +266,6 @@ def run(
         min_per_cell=min_per_cell,
         min_lift=min_lift,
         max_class_fraction=max_class_fraction,
+        shadow_candidate=shadow_candidate,
     )
     return result, (0 if result["all_met"] else 1)

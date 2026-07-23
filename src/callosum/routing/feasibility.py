@@ -1,35 +1,35 @@
-"""Exploration feasibility: can a cell FINISH a request of this size before
+"""Coverage feasibility: can a cell FINISH a request of this size before
 the local stall-guard fires?
 
 Sibling to routing/capability.py (hard capability constraints) and to
 _window_fit_factor in router.py (soft context-window fit). Capability
 asks "can this cell serve this request at all?"; window-fit asks "does the
 prompt fit the advertised context window?"; feasibility asks "can it finish
-within the stall-guard budget?" — the question the exploration doom loop
+within the stall-guard budget?" — the question the coverage doom loop
 exposed as missing (work tracker ````). A cell that fits the
 window but whose predicted p95 completion exceeds
 CALLOSUM_LOCAL_FIRST_BYTE_TIMEOUT_S will trip the first-byte guard on a
 large real turn, time out with status=0, record no completed sample, and
-— under the even-split exploration quota — get re-targeted indefinitely
+— under the even-split minimum-coverage quota — get re-targeted indefinitely
 because it stays under its coverage floor forever.
 
 This module promotes the forward time estimator (````) from a
-soft scheduling tie-break to a HARD feasibility constraint on the EXPLORATION
+soft scheduling tie-break to a HARD feasibility constraint on the FORCED-COVERAGE
 path (cold-start random selection in router.py + quota forcing in
-app.py). It stays a soft tie-break on the EXPLOIT path (the router's
-cost/quality pick), so a learned-optimal cell is never hard-excluded for being
-slow — only forced exploration avoids it.
+app.py). It stays a soft tie-break on the normal selection path (the
+router's cost/quality pick), so a learned-optimal cell is never hard-excluded
+for being slow — only forced coverage avoids it.
 
 Cold-cell grace — the deliberate tradeoff named in ````: a
 cell whose latency prediction rests on a model-pooled / global-prior / flat
 fallback prior RATHER THAN its own measured fit is NOT hard-excluded on that
-prior. The prior is uncertain, and hard-excluding on it would starve
-exploration of exactly the cold cells we most need to sample (the ones with
-zero measured rows). Such a cell stays eligible for one forced attempt; if it
-then times out, the post-timeout cooldown in routing/quota.py skips it for
-the next cycle so the doom loop still breaks. The cost is at most one wasted
-forced turn per cold cell — the price of not starving exploration. The cell
-re-arms only after it records a real completed sample.
+prior. The prior is uncertain, and hard-excluding on it would starve coverage
+of exactly the cold cells we most need to sample (the ones with zero measured
+rows). Such a cell stays eligible for one forced attempt; if it then times
+out, the post-timeout cooldown in routing/quota.py skips it for the next
+cycle so the doom loop still breaks. The cost is at most one wasted forced
+turn per cold cell — the price of not starving coverage. The cell re-arms
+only after it records a real completed sample.
 
 The budget is the stall-guard FIRST-BYTE timeout (the deadline a large-context
 prefill trips), not a total-completion cap: the stall guard has no total
@@ -68,7 +68,7 @@ def feasibility_eligible(
     budget_s: float,
 ) -> bool:
     """True iff cell may be forced onto a request of input_tokens for
-    exploration without a predicted stall-guard timeout.
+    coverage without a predicted stall-guard timeout.
 
     Returns True (eligible) when:
 

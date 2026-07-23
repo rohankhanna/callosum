@@ -45,7 +45,7 @@ class NoCompatibleCellError(RuntimeError):
 # 256K-window cell.
 _OUTPUT_HEADROOM_TOKENS = 4096
 
-# Default exploration-feasibility budget: a forced-exploration cell whose
+# Default coverage-feasibility budget: a forced-coverage cell whose
 # predicted p95 completion exceeds this is excluded from the cold-start
 # random pool (and, in app.py, from quota forcing) — it would trip the local
 # stall guard, time out, and (under the even-split quota) get re-targeted
@@ -83,6 +83,10 @@ def _has_differentiated_predictions(predictions: dict[Cell, float]) -> bool:
         return False
     vals = list(predictions.values())
     return max(vals) - min(vals) > 0.01
+
+
+def _admitted_local_cells(cells: list[Cell], capabilities_map: dict[Cell, Any]) -> list[Cell]:
+    return [c for c in cells if getattr(capabilities_map[c], "local_catalog_admitted", None) is True]
 
 
 class Router:
@@ -147,7 +151,7 @@ class Router:
                 c for c in compatible if _window_fit_factor(capabilities_map[c].context_window, features.tokens) >= 1.0
             ]
             # Feasibility: among window-fitting cells, keep only those predicted
-            # to FINISH within the stall-guard budget, so cold-start exploration
+            # to FINISH within the stall-guard budget, so cold-start coverage
             # doesn't hand a large real turn to a slow local cell that will time
             # out and record no sample (the doom loop, ). Cold
             # cells with no measured fit stay eligible (grace) — see
@@ -168,12 +172,16 @@ class Router:
                 ]
             else:
                 feasible = fitting
-            chosen = random.choice(feasible or fitting or compatible)
+            primary_pool = feasible or fitting or compatible
+            local_primary_pool = _admitted_local_cells(primary_pool, capabilities_map)
+            chosen = random.choice(local_primary_pool or primary_pool)
             # Retry order still prefers fitting, cheap cells (Dispatch retries
-            # on 5xx); the random PRIMARY pick is what drives exploration.
+            # on 5xx); the random PRIMARY pick is what spreads coverage across
+            # the grid during cold start.
             rest = sorted(
                 (c for c in compatible if c != chosen),
                 key=lambda c: (
+                    0 if capabilities_map[c].local_catalog_admitted is True else 1,
                     -_window_fit_factor(capabilities_map[c].context_window, features.tokens),
                     capabilities_map[c].cost_rank,
                 ),

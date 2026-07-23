@@ -68,6 +68,14 @@ class ModelEntry:
     #: nemotron reasoning, phi-4-reasoning-plus) advertise only ("default",).
     #: Defaults to ("default",) when the field is absent (older hub builds).
     supported_reasoning_levels: tuple[str, ...] = ("default",)
+    local_quantization: str | None = None
+    local_runnable_on_host: bool | None = None
+    local_status: str | None = None
+    estimated_tokens_per_second: float | None = None
+    local_pool_bytes: int | None = None
+    local_fit_limit_tokens: int | None = None
+    local_prefill_ms_per_token: float | None = None
+    local_decode_bandwidth_kappa: float | None = None
 
     @classmethod
     def from_cli_entry(cls, entry: dict[str, Any]) -> ModelEntry | None:
@@ -115,10 +123,111 @@ class ModelEntry:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class CapabilityRow:
+    """One row from `local-llm capabilities --json`, normalized for callosum.
+
+    The hub's capability matrix is the authoritative structured source for
+    local runtime facts that are not part of the simpler `models local` roster:
+    host-fit, quantization, lifecycle status, and any future graph metrics such
+    as measured throughput. Callosum can consume the matrix opportunistically
+    without requiring every field to be present today.
+    """
+
+    model_id: str
+    quantization_label: str | None
+    runnable_on_host: bool | None
+    status: str | None
+    estimated_tokens_per_second: float | None
+    pool_bytes: int | None
+    fit_limit_tokens: int | None
+    prefill_ms_per_token: float | None
+    decode_bandwidth_kappa: float | None
+
+    @classmethod
+    def from_cli_row(cls, row: dict[str, Any]) -> CapabilityRow | None:
+        if not isinstance(row, dict):
+            return None
+        model_id = row.get("model_id")
+        if not isinstance(model_id, str) or not model_id:
+            return None
+        quant = row.get("quantization")
+        quantization_label = None
+        if isinstance(quant, dict):
+            label = quant.get("label")
+            if isinstance(label, str) and label:
+                quantization_label = label
+        host_fit = row.get("host_fit")
+        runnable = None
+        if isinstance(host_fit, dict):
+            rh = host_fit.get("runnable_on_host")
+            if isinstance(rh, bool):
+                runnable = rh
+        status = row.get("status") if isinstance(row.get("status"), str) else None
+        metrics = row.get("graph_metrics")
+        estimated_tps = None
+        fit_limit_tokens = None
+        prefill_ms_per_token = None
+        decode_bandwidth_kappa = None
+        if isinstance(metrics, dict):
+            for key in (
+                "estimated_clean_total_tokens_per_second",
+                "estimated_clean_output_tokens_per_second",
+                "ceiling_search_completion_tokens_per_second",
+            ):
+                value = metrics.get(key)
+                if isinstance(value, (int, float)) and value > 0:
+                    estimated_tps = float(value)
+                    break
+            for key in (
+                "ceiling_search_prompt_tokens",
+                "measured_clean_prompt_tokens",
+                "estimated_clean_prompt_tokens",
+            ):
+                value = metrics.get(key)
+                if isinstance(value, (int, float)) and value > 0:
+                    fit_limit_tokens = int(value)
+                    break
+            total_tokens = metrics.get("measured_clean_total_tokens")
+            duration_seconds = metrics.get("local_first_avg_duration_seconds")
+            if (
+                isinstance(total_tokens, (int, float))
+                and total_tokens > 0
+                and isinstance(duration_seconds, (int, float))
+                and duration_seconds > 0
+            ):
+                prefill_ms_per_token = max(0.1, float(duration_seconds) * 1000.0 / float(total_tokens))
+            if estimated_tps is not None:
+                ceiling_tps = metrics.get("ceiling_search_completion_tokens_per_second")
+                if isinstance(ceiling_tps, (int, float)) and ceiling_tps > 0 and estimated_tps > 0:
+                    decode_bandwidth_kappa = max(1.0, estimated_tps / float(ceiling_tps))
+        host = row.get("host")
+        pool_bytes = None
+        if isinstance(host, dict):
+            total_vram_gb = host.get("total_vram_gb")
+            total_ram_gb = host.get("total_ram_gb")
+            unified = bool(host.get("unified_memory"))
+            chosen_gb = total_ram_gb if unified else total_vram_gb
+            if isinstance(chosen_gb, (int, float)) and chosen_gb > 0:
+                pool_bytes = int(float(chosen_gb) * 1024**3)
+        return cls(
+            model_id=model_id,
+            quantization_label=quantization_label,
+            runnable_on_host=runnable,
+            status=status,
+            estimated_tokens_per_second=estimated_tps,
+            pool_bytes=pool_bytes,
+            fit_limit_tokens=fit_limit_tokens,
+            prefill_ms_per_token=prefill_ms_per_token,
+            decode_bandwidth_kappa=decode_bandwidth_kappa,
+        )
+
+
 @dataclass(slots=True)
 class _CacheState:
     fetched_at: float = 0.0
     models: list[ModelEntry] = field(default_factory=list)
+    capabilities: dict[str, CapabilityRow] = field(default_factory=dict)
     healthy: bool = False
 
 
@@ -180,11 +289,82 @@ class LocalModelRegistrySource:
             self._cache = self._fetch_locked()
             return list(self._cache.models)
 
+    def capabilities(self, *, force: bool = False) -> dict[str, CapabilityRow]:
+        """Return the parsed capability-matrix rows keyed by model id.
+
+        Uses the same TTL and fetch path as `models()`, because the two CLI
+        surfaces describe the same local fleet and should stay coherent within
+        one cache cycle.
+        """
+        with self._lock:
+            now = time.time()
+            if not force and (now - self._cache.fetched_at) < self._refresh_s and self._cache.healthy:
+                return dict(self._cache.capabilities)
+            self._cache = self._fetch_locked()
+            return dict(self._cache.capabilities)
+
     def _fetch_locked(self) -> _CacheState:
         """Invoke the CLI and parse. Any failure → empty result with
         healthy=False so the next call re-tries on the next refresh tick
         instead of caching the failure long-term."""
-        cmd = self._cli + ["models", "local", "--json"]
+        payload = self._run_json(["models", "local", "--json"])
+        if payload is None:
+            return _CacheState(fetched_at=time.time(), models=[], capabilities={}, healthy=False)
+        entries = payload.get("entries") if isinstance(payload, dict) else None
+        if not isinstance(entries, list):
+            return _CacheState(fetched_at=time.time(), models=[], capabilities={}, healthy=False)
+        models: list[ModelEntry] = []
+        capabilities = self._fetch_capabilities()
+        for entry in entries:
+            parsed = ModelEntry.from_cli_entry(entry)
+            if parsed is None:
+                continue
+            if not parsed.enabled:
+                continue
+            cap = capabilities.get(parsed.id)
+            if cap is not None:
+                parsed = ModelEntry(
+                    id=parsed.id,
+                    endpoint=parsed.endpoint,
+                    runtime=parsed.runtime,
+                    runtime_model=parsed.runtime_model,
+                    family=parsed.family,
+                    context_window=parsed.context_window,
+                    api_surfaces=parsed.api_surfaces,
+                    enabled=parsed.enabled,
+                    supported_reasoning_levels=parsed.supported_reasoning_levels,
+                    local_quantization=cap.quantization_label,
+                    local_runnable_on_host=cap.runnable_on_host,
+                    local_status=cap.status,
+                    estimated_tokens_per_second=cap.estimated_tokens_per_second,
+                    local_pool_bytes=cap.pool_bytes,
+                    local_fit_limit_tokens=cap.fit_limit_tokens,
+                    local_prefill_ms_per_token=cap.prefill_ms_per_token,
+                    local_decode_bandwidth_kappa=cap.decode_bandwidth_kappa,
+                )
+            models.append(parsed)
+        return _CacheState(fetched_at=time.time(), models=models, capabilities=capabilities, healthy=True)
+
+    def _fetch_capabilities(self) -> dict[str, CapabilityRow]:
+        payload = self._run_json(["capabilities", "--json"], warn_label="capability matrix")
+        if payload is None:
+            return {}
+        rows = payload.get("rows") if isinstance(payload, dict) else None
+        if not isinstance(rows, list):
+            return {}
+        host = payload.get("host") if isinstance(payload.get("host"), dict) else None
+        out: dict[str, CapabilityRow] = {}
+        for row in rows:
+            if host is not None and isinstance(row, dict) and not isinstance(row.get("host"), dict):
+                row = {**row, "host": host}
+            parsed = CapabilityRow.from_cli_row(row)
+            if parsed is None:
+                continue
+            out[parsed.model_id] = parsed
+        return out
+
+    def _run_json(self, args: list[str], *, warn_label: str = "models list") -> dict[str, Any] | None:
+        cmd = self._cli + args
         try:
             proc = subprocess.run(
                 cmd,
@@ -195,34 +375,28 @@ class LocalModelRegistrySource:
             )
         except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
             logger.warning(
-                "local LLM gateway: CLI invocation failed (%s); models list is empty this cycle",
+                "local LLM gateway: CLI invocation failed (%s); %s unavailable this cycle",
                 type(exc).__name__,
+                warn_label,
             )
-            return _CacheState(fetched_at=time.time(), models=[], healthy=False)
+            return None
         if proc.returncode != 0:
             logger.warning(
-                "local LLM gateway: CLI exited %d; stderr=%r",
+                "local LLM gateway: CLI exited %d while reading %s; stderr=%r",
                 proc.returncode,
+                warn_label,
                 proc.stderr[:300] if proc.stderr else "",
             )
-            return _CacheState(fetched_at=time.time(), models=[], healthy=False)
+            return None
         try:
             payload = json.loads(proc.stdout)
         except json.JSONDecodeError as exc:
-            logger.warning("local LLM gateway: CLI emitted non-JSON output (%s)", exc)
-            return _CacheState(fetched_at=time.time(), models=[], healthy=False)
-        entries = payload.get("entries") if isinstance(payload, dict) else None
-        if not isinstance(entries, list):
-            return _CacheState(fetched_at=time.time(), models=[], healthy=False)
-        models: list[ModelEntry] = []
-        for entry in entries:
-            parsed = ModelEntry.from_cli_entry(entry)
-            if parsed is None:
-                continue
-            if not parsed.enabled:
-                continue
-            models.append(parsed)
-        return _CacheState(fetched_at=time.time(), models=models, healthy=True)
+            logger.warning("local LLM gateway: CLI emitted non-JSON %s (%s)", warn_label, exc)
+            return None
+        if not isinstance(payload, dict):
+            logger.warning("local LLM gateway: CLI emitted non-object %s", warn_label)
+            return None
+        return payload
 
     def _merged_env(self) -> dict[str, str] | None:
         """Some local LLM gateway installs need specific env (PATH for uv,

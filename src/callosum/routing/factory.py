@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict
 from callosum.cell_grid import Cell
 from callosum.routing.capability import CapabilityFilter
 from callosum.routing.embedding.noop import NoopEmbeddingProvider
+from callosum.routing.predictor.cell_prior import CellMajorityPriorPredictor
 from callosum.routing.predictor.knn import KNNPredictor
 from callosum.routing.predictor.uniform import UniformPriorPredictor
 from callosum.routing.protocols import (
@@ -63,6 +64,7 @@ _EMBEDDING_IMPLS: dict[str, Callable[[], EmbeddingProvider]] = {
 _PREDICTOR_IMPLS: dict[str, Callable[[], QualityPredictor]] = {
     "uniform": UniformPriorPredictor,
     "knn": KNNPredictor,
+    "cell_majority_prior": CellMajorityPriorPredictor,
 }
 
 _SELECTOR_IMPLS: dict[str, Callable[[], CellSelector]] = {

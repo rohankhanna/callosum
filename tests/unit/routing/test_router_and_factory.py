@@ -208,6 +208,14 @@ def test_factory_rejects_unknown_impl_names() -> None:
         )
 
 
+def test_factory_wires_cell_majority_prior_predictor() -> None:
+    router = build_router(
+        RoutingConfig(quality_predictor="cell_majority_prior"),
+        capabilities_of=CAPS.__getitem__,
+    )
+    assert router._predictor.id == "cell_majority_prior"
+
+
 def test_decision_carries_predictions_keyed_by_cell_string() -> None:
     """RoutingDecision.predictions is keyed by 'model effort' strings so
     the request-log writer can serialize without a custom encoder. In cold

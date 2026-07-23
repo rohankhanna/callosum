@@ -52,7 +52,6 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
-from callosum.cell_grid import REASONING_LEVELS
 from callosum.selectors import SelectorError, is_selector, parse_selector
 
 logger = logging.getLogger("callosum.codex_catalog")
@@ -132,11 +131,11 @@ def _reasoning_levels_for_lane(model_id: str, template_levels: list[dict[str, An
     matching = [lvl for lvl in template_levels if lvl.get("effort") == effort]
     if matching:
         return matching
-    # Effort is a valid REASONING_LEVELS value the template didn't enumerate;
-    # synthesize a minimal preset so the picker still shows it.
-    if effort in REASONING_LEVELS:
-        return [{"effort": effort, "description": effort}]
-    return template_levels
+    # The provider advertised an effort that the selected template did not
+    # enumerate. Preserve the provider fact instead of filtering it through a
+    # static vocabulary; Codex can render recognized current/future values from
+    # this minimal preset, and the baked lane still dispatches by exact metadata.
+    return [{"effort": effort, "description": effort}]
 
 
 def _ordered_lane_ids(model_ids: Sequence[str], declared_lanes: Sequence[str]) -> list[str]:

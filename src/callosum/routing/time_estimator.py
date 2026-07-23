@@ -60,6 +60,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from callosum.cell_grid import Cell, is_completion_model
+from callosum.routing.local_performance import LocalPerformanceModel
 from callosum.routing.usage_estimate import (
     Estimate,
     EstimateInput,
@@ -395,9 +396,11 @@ class TimeUsageEstimator:
         provider: TimeModelProvider,
         *,
         is_remote: Callable[[Cell], bool] = _default_is_remote,
+        local_performance_model: Callable[[Cell], LocalPerformanceModel | None] | None = None,
     ) -> None:
         self._provider = provider
         self._is_remote = is_remote
+        self._local_performance_model = local_performance_model
 
     @property
     def id(self) -> str:
@@ -408,6 +411,26 @@ class TimeUsageEstimator:
         return UNIT
 
     def estimate(self, inp: EstimateInput) -> Estimate:
+        if not self._is_remote(inp.cell) and self._local_performance_model is not None:
+            local_model = self._local_performance_model(inp.cell)
+            if local_model is not None:
+                point = local_model.turn_latency_ms(
+                    input_tokens=inp.input_tokens,
+                    output_tokens=int(inp.output.p50),
+                )
+                high = local_model.turn_latency_ms(
+                    input_tokens=inp.input_tokens,
+                    output_tokens=int(inp.output.p95),
+                )
+                regime = local_model.regime_for(inp.input_tokens)
+                return Estimate(
+                    point=max(0.0, point),
+                    low=max(0.0, point),
+                    high=max(max(0.0, point), high),
+                    unit=UNIT,
+                    source=f"local-{regime.value}+{inp.output.source}",
+                    verifiable=True,
+                )
         model = self._provider.model_for(inp.cell)
         forecast: OutputTokenForecast = inp.output
         point = model.predict(inp.input_tokens, forecast.p50) + model.resid_p50

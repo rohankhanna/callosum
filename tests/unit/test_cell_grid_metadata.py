@@ -4,7 +4,8 @@ These exist to remove two of the remaining hardcoded assumptions in the
 proxy: which models are "completion-shaped" (was a regex) and what
 reasoning effort levels each supports (was a global constant). Now both
 come from /backend-api/codex/models when the upstream response includes
-them; the regex + constant remain as fallbacks for older responses.
+them; the regex + explicitly named compatibility fallback remain for older
+responses.
 """
 
 from __future__ import annotations
@@ -111,13 +112,13 @@ def test_reasoning_levels_for_falls_back_when_absent() -> None:
     """If the API didn't include supported_reasoning_levels, fall back."""
     metadata = {"gpt-NO-LEVELS": _md("gpt-NO-LEVELS")}  # empty levels
     out = reasoning_levels_for("gpt-NO-LEVELS", metadata)
-    # default fallback is REASONING_LEVELS
+    # The compatibility fallback is used only because metadata was absent.
     assert out == ("low", "medium", "high", "xhigh")
 
 
 def test_build_cells_from_metadata_uses_per_model_levels() -> None:
     """Different models can advertise different effort sets. The cell grid
-    should respect that, not project a global REASONING_LEVELS onto all."""
+    should respect that, not project a global fallback onto all."""
     metadata = {
         "gpt-A": _md(
             "gpt-A",

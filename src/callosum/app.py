@@ -7,11 +7,12 @@ import logging
 import os
 import re
 import secrets
+import sys
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -29,7 +30,6 @@ from callosum.auth import (
 from callosum.auth_db import ApiKey, Session
 from callosum.backend import Backend, CallHandle, HealthStatus
 from callosum.cell_grid import (
-    REASONING_LEVELS,
     VIRTUAL_MODELS,
     Cell,
     ModelMetadata,
@@ -54,6 +54,7 @@ from callosum.routing.cost_model import CostRankProvider
 from callosum.routing.factory import build_router
 from callosum.routing.feasibility import feasibility_eligible
 from callosum.routing.features import _approx_tokens
+from callosum.routing.local_performance import LocalPerformanceModel
 from callosum.routing.protocols import CellCapabilities
 from callosum.routing.quota import (
     effective_floor_pct,
@@ -1172,13 +1173,7 @@ def create_app(
                         model=cell.model,
                     )
                     if override is False:
-                        return CellCapabilities(
-                            context_window=result.context_window,
-                            modalities=result.modalities,
-                            supports_tools=False,
-                            cost_rank=result.cost_rank,
-                            parameter_count=result.parameter_count,
-                        )
+                        return replace(result, supports_tools=False)
                     return result
             return CellCapabilities(
                 context_window=128_000,
@@ -1225,15 +1220,20 @@ def create_app(
             rank = cost_rank_provider.rank_for(cell.model, default=caps.cost_rank)
             if rank == caps.cost_rank:
                 return caps
-            return CellCapabilities(
-                context_window=caps.context_window,
-                modalities=caps.modalities,
-                supports_tools=caps.supports_tools,
-                cost_rank=rank,
-                parameter_count=caps.parameter_count,
-            )
+            return replace(caps, cost_rank=rank)
 
         _capabilities_of = _capabilities_with_cost
+
+        def _local_performance_of(cell: Cell) -> LocalPerformanceModel | None:
+            for b in backends_list:
+                if cell.model not in b.advertised_models:
+                    continue
+                fn = getattr(b, "local_performance_model", None)
+                if fn is None:
+                    continue
+                result = fn(cell.model)
+                return result if isinstance(result, LocalPerformanceModel) else None
+            return None
 
         # Forward usage estimators ( cost; the shared
         # forecaster is reused by the time estimator ). The
@@ -1280,14 +1280,17 @@ def create_app(
                 local_slowdown=auto_cfg.time_estimate_local_slowdown,
                 refresh_seconds=auto_cfg.time_estimate_refresh_seconds,
             )
-            _TIME_ESTIMATOR = TimeUsageEstimator(time_model_provider)
+            _TIME_ESTIMATOR = TimeUsageEstimator(
+                time_model_provider,
+                local_performance_model=_local_performance_of,
+            )
 
         router = build_router(
             auto_cfg.routing,
             capabilities_of=_capabilities_of,
             time_estimator=_TIME_ESTIMATOR,
             output_forecaster=_OUTPUT_FORECASTER,
-            feasibility_enabled=auto_cfg.exploration_feasibility_enabled,
+            feasibility_enabled=auto_cfg.min_coverage_feasibility_enabled,
             feasibility_budget_s=LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S,
         )
 
@@ -1341,6 +1344,9 @@ def create_app(
         operator_state=operator_state,
         weight_identity_provider=weight_identity_provider,
     )
+    model_probe_spawner = _PeriodicModelProbeSpawner(
+        db_path=(usage_log.path if usage_log is not None else None),
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -1374,13 +1380,13 @@ def create_app(
                 _catalog_boot_resync(_catalog_pending, state_store=state_store, attempts=8, interval_s=15.0),
                 name="catalog-boot-resync",
             )
-        # Phase 6: kNN predictor reload from the request log's labeled
-        # rows. Only fires if the operator picked the knn predictor —
-        # uniform predictor doesn't need data and avoids the SQLite
-        # scan on every startup.
+        # Data-backed predictor reload from the request log's labeled rows.
+        # Uniform is data-independent, so avoid the SQLite scan there. The
+        # kNN and cell-majority-prior predictors both implement the same
+        # QualityPredictor.reload contract.
         if (
             router is not None
-            and auto_cfg.routing.quality_predictor == "knn"
+            and auto_cfg.routing.quality_predictor != "uniform"
             and usage_log is not None
             and getattr(usage_log, "path", None) is not None
         ):
@@ -1395,9 +1401,15 @@ def create_app(
                         limit=50_000,
                     )
                 )
-                logger.warning("router: kNN predictor reloaded from request log")
+                logger.warning(
+                    "router: %s predictor reloaded from request log",
+                    auto_cfg.routing.quality_predictor,
+                )
             except Exception:
-                logger.exception("router: kNN predictor reload failed; predictor stays cold-start uniform")
+                logger.exception(
+                    "router: %s predictor reload failed; predictor stays cold-start prior",
+                    auto_cfg.routing.quality_predictor,
+                )
         if startup_smoke_test and backends_list:
             await _run_startup_smoke_test(backends_list)
         smoke_tester.start()
@@ -1436,9 +1448,11 @@ def create_app(
                 weight_identity_provider=weight_identity_provider,
             )
             periodic_harness.start()
+        model_probe_spawner.start()
         try:
             yield
         finally:
+            await model_probe_spawner.stop()
             await periodic_harness.stop()
             if codex_catalog_reconciler is not None:
                 await codex_catalog_reconciler.stop()
@@ -1627,35 +1641,36 @@ def create_app(
                     "available": False,
                     "reason": "report_failed",
                 }
-            # Per-cell exploration-quota coverage: how full each cell is vs its
-            # floor and bootstrap progress (). Always reported
-            # so an operator can see coverage even before enabling forcing.
-            quota_block: dict[str, Any] = {"enabled": auto_cfg.exploration_quota_enabled}
+            # Per-cell minimum-coverage-quota coverage: how full each cell is vs
+            # its floor and bootstrap progress (). Always
+            # reported so an operator can see coverage even before enabling
+            # forcing.
+            quota_block: dict[str, Any] = {"enabled": auto_cfg.min_coverage_quota_enabled}
             try:
-                from callosum.routing.quota import exploration_quota_report
+                from callosum.routing.quota import min_coverage_quota_report
 
                 # Report over the LIVE cell grid the router actually uses
                 # (upstream-advertised models, version-ranked), not the static
                 # DEFAULT_MODELS — so de-listed models (e.g. model-a0e6) drop out
                 # and current ones (model-a0e8) appear, matching what gets routed.
                 _grid = _live_cells()
-                _cov = cell_sample_counts(usage_log.path, _grid, window_seconds=auto_cfg.quota_window_seconds)
-                quota_block["exploration_budget_pct"] = auto_cfg.exploration_budget_pct
+                _cov = cell_sample_counts(usage_log.path, _grid, window_seconds=auto_cfg.min_coverage_window_seconds)
+                quota_block["min_coverage_budget_pct"] = auto_cfg.min_coverage_budget_pct
                 quota_block.update(
-                    exploration_quota_report(
+                    min_coverage_quota_report(
                         _grid,
                         _cov,
                         floor_pct=effective_floor_pct(
                             len(_grid),
-                            budget_pct=auto_cfg.exploration_budget_pct,
-                            min_floor_pct=auto_cfg.quota_floor_pct,
+                            budget_pct=auto_cfg.min_coverage_budget_pct,
+                            min_floor_pct=auto_cfg.min_coverage_floor_pct,
                         ),
                     )
                 )
             except Exception:
-                logger.exception("status: exploration-quota report failed")
+                logger.exception("status: min-coverage-quota report failed")
                 quota_block["available"] = False
-            router_block["exploration_quota"] = quota_block
+            router_block["min_coverage_quota"] = quota_block
         # Canary baseline block: current effective percent given live
         # quota state, plus rolling per-mode failure rates over 1h /
         # 6h / 24h windows. The dev loop polls this same data via SQL
@@ -1798,8 +1813,8 @@ def create_app(
 
         - strategy selectors: callosum:auto / local-only / remote-only
         - remote concrete pins: callosum:remote/<model>:<effort> (one per
-          supported reasoning level, from model_metadata with REASONING_LEVELS
-          fallback)
+          supported reasoning level, from model_metadata with a compatibility
+          fallback only when metadata is absent)
         - local concrete pins: callosum:local/<model>, plus a
           callosum:local/<model>:<effort> variant for each non-default
           reasoning level the model advertises (from model_metadata). Models
@@ -1846,15 +1861,13 @@ def create_app(
         for m in sorted(local_models):
             ids.append(f"callosum:local/{m}")
             # Effort variants come straight from the model's advertised
-            # supported_reasoning_levels (NOT the REASONING_LEVELS fallback):
-            # advertise a pin only for levels the model genuinely exposes.
-            # "default" is the implicit base pin above, so it's skipped here;
-            # any non-default level must also be a recognized REASONING_LEVELS
-            # value to be pinnable via the selector grammar.
+            # supported_reasoning_levels. "default" is the implicit base pin
+            # above, so it is the only value omitted. No global effort
+            # vocabulary is applied here: providers own these facts.
             md = local_meta.get(m)
             levels = md.supported_reasoning_levels if md is not None else ()
             for level in levels:
-                if level != "default" and level in REASONING_LEVELS:
+                if level != "default":
                     ids.append(f"callosum:local/{m}:{level}")
         ids.extend(sorted(raw))
         return ids
@@ -2395,8 +2408,8 @@ async def _dispatch_internal(
                 _routing = "remote-only"
                 _effective_mode = "canary_redirect"
                 _traffic_kind = "canary_redirect"
-            elif _effective_mode == "quota_explore":
-                _traffic_kind = "quota_explore"
+            elif _effective_mode == "min_coverage_quota":
+                _traffic_kind = "min_coverage_quota"
             _effective_routing_mode_context.set(_effective_mode)
             _traffic_kind_context.set(_traffic_kind)
             if _routing in ("offline", "local-only"):
@@ -2573,27 +2586,27 @@ async def _dispatch_internal(
                 detail=f"no cell can serve this request: {exc}",
             ) from exc
         chosen = decision.cell
-        # Per-cell exploration quota (): the router's
+        # Per-cell minimum-coverage quota (): the router's
         # cost/quality-optimal pick stands by default; when any compatible cell
         # is below its floor, steer this turn to it so every cell gets at least
-        # quota_floor_pct of traffic. Lane scope is implicit: decision.candidates
-        # is already the post-gate, lane-filtered pool. See
-        # docs/architecture/exploration_quota.md.
+        # min_coverage_floor_pct of traffic. Lane scope is implicit:
+        # decision.candidates is already the post-gate, lane-filtered pool. See
+        # docs/architecture/min_coverage_quota.md.
         _ordered_candidates: tuple[Cell, ...] = decision.candidates
-        if auto_cfg.exploration_quota_enabled and usage_log is not None and len(decision.candidates) > 1:
+        if auto_cfg.min_coverage_quota_enabled and usage_log is not None and len(decision.candidates) > 1:
             _quota_coverage = cell_sample_counts(
                 usage_log.path,
                 list(decision.candidates),
-                window_seconds=auto_cfg.quota_window_seconds,
+                window_seconds=auto_cfg.min_coverage_window_seconds,
             )
-            # Feasibility-aware exploration (): only force
+            # Feasibility-aware coverage (): only force
             # onto cells predicted to FINISH within the stall-guard budget, so
             # a large real turn is not handed to a slow local cell that will
             # time out, record no sample, and stay under floor forever (the
-            # doom loop). Cold cells stay eligible (grace). The exploit path
-            # is untouched — this constrains FORCING only.
+            # doom loop). Cold cells stay eligible (grace). The normal
+            # selection path is untouched — this constrains FORCING only.
             _quota_candidates: Sequence[Cell] = decision.candidates
-            if auto_cfg.exploration_feasibility_enabled:
+            if auto_cfg.min_coverage_feasibility_enabled:
                 _quota_candidates = [
                     c
                     for c in decision.candidates
@@ -2614,19 +2627,19 @@ async def _dispatch_internal(
             # out on a forced turn is skipped this cycle so the quota does not
             # re-target it. Re-arms only on a real completed sample.
             _cooldown: frozenset[Cell] = frozenset()
-            if auto_cfg.exploration_cooldown_enabled:
+            if auto_cfg.min_coverage_cooldown_enabled:
                 _cooldown = recent_quota_cooldown_cells(
                     usage_log.path,
                     list(_quota_candidates),
-                    window_seconds=auto_cfg.exploration_cooldown_window_seconds,
+                    window_seconds=auto_cfg.min_coverage_cooldown_window_seconds,
                 )
             _forced = select_quota_deficit_cell(
                 _quota_candidates,
                 _quota_coverage,
                 floor_pct=effective_floor_pct(
                     len(_quota_candidates),
-                    budget_pct=auto_cfg.exploration_budget_pct,
-                    min_floor_pct=auto_cfg.quota_floor_pct,
+                    budget_pct=auto_cfg.min_coverage_budget_pct,
+                    min_floor_pct=auto_cfg.min_coverage_floor_pct,
                 ),
                 cooldown=_cooldown,
             )
@@ -2636,8 +2649,8 @@ async def _dispatch_internal(
                 # Mark this turn as quota-forced so it is distinguishable in the
                 # log: excludable from natural-routing baselines while its
                 # quality label stays usable.
-                _effective_routing_mode_context.set("quota_explore")
-                _traffic_kind_context.set("quota_explore")
+                _effective_routing_mode_context.set("min_coverage_quota")
+                _traffic_kind_context.set("min_coverage_quota")
         body["model"] = chosen.model
         _stamp_reasoning_effort(body, chosen.reasoning_effort)
         # Per-cell transforms. Empty registry → no-op. Each registered
@@ -4973,34 +4986,7 @@ class _PeriodicCooldownProber:
                 continue
             now = time.time()
             in_active_cooldown = usage.cooldown_until_ts is not None and usage.cooldown_until_ts > now
-            # Also re-probe when blocking_meters is non-empty. After upstream
-            # merged its two quota windows into one weekly window riding the
-            # `x-codex-primary-*` headers, the parsed weekly_* fields are
-            # permanently None and weekly_exhausted never gets set, so the
-            # 100% quota block lives entirely in blocking_meters' five_hourly
-            # branch. Without this check, a backend blocked only by that meter
-            # (expired cooldown, weekly_exhausted=False) falls into a dead
-            # zone: the prober skips it, and _routable_backends excludes it
-            # from real traffic, so nothing refreshes the stale snapshot and
-            # the lock can hold for up to a week until a manual restart. The
-            # forced probe here refreshes the snapshot via
-            # _apply_response_to_handle; if quota reset it clears and the
-            # backend self-heals, if genuinely exhausted the probe 429s and
-            # _apply_error_to_usage sets a long cooldown (same cost as the
-            # old weekly_exhausted path: one probe per cycle for the week).
-            blocked: tuple[str, ...] = ()
             if not in_active_cooldown and not usage.weekly_exhausted:
-                try:
-                    health = await backend.health()
-                    quota = await backend.quota_snapshot()
-                except Exception:
-                    logger.exception("cooldown prober: snapshot failed for %r", backend.id)
-                    continue
-                blocked = blocking_meters(
-                    BackendSnapshot(backend=backend, health=health, usage=usage, quota=quota),
-                    now_ts=now,
-                )
-            if not in_active_cooldown and not usage.weekly_exhausted and not blocked:
                 continue
             try:
                 result = await _diagnose_backend(backend, force=True)
@@ -5020,6 +5006,138 @@ class _PeriodicCooldownProber:
                         )
                     except Exception:
                         logger.exception("cooldown prober: clear_cooldown raised for %r", backend.id)
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+class _PeriodicModelProbeSpawner:
+    """Idle-gated background spawner for the local-model full-context fit probe.
+
+    Every interval_s seconds, when the operator is idle (no requests
+    completed in the last quiet_s) and there is memory headroom
+    (MemAvailable >= mem_floor_bytes), spawn python -m
+    callosum.jobs.model_probe as a short-lived subprocess to probe up to
+    max_models_per_run models. The subprocess loads one model at a time,
+    measures vLLM's KV-cache allocation, stops the model, and persists — so no
+    probed model stays resident. Host safety (exclusive GPU lock + preflight)
+    lives inside the probe itself (see callosum.model_probe).
+
+    Disabled when CALLOSUM_MODEL_PROBE_ENABLED=0 or no usage-log db path is
+    available. Knobs are env-tunable for operator control.
+    """
+
+    def __init__(self, *, db_path: Path | None) -> None:
+        self._db_path = db_path
+        self._interval_s = _env_float("CALLOSUM_MODEL_PROBE_INTERVAL_S", 300.0)
+        if os.environ.get("CALLOSUM_MODEL_PROBE_ENABLED", "1") == "0":
+            self._interval_s = 0.0
+        self._quiet_s = _env_float("CALLOSUM_MODEL_PROBE_QUIET_S", 60.0)
+        self._mem_floor_bytes = int(_env_float("CALLOSUM_MODEL_PROBE_MEM_FLOOR_GIB", 8.0) * 1024**3)
+        self._max_models_per_run = int(_env_float("CALLOSUM_MODEL_PROBE_MAX_MODELS", 1.0))
+        self._python_exe = sys.executable
+        self._task: asyncio.Task[None] | None = None
+        self._stop = asyncio.Event()
+        self._proc: asyncio.subprocess.Process | None = None
+
+    @property
+    def enabled(self) -> bool:
+        return self._interval_s > 0 and self._db_path is not None
+
+    def start(self) -> None:
+        if not self.enabled or self._task is not None:
+            return
+        self._task = asyncio.create_task(self._run(), name="periodic-model-probe-spawner")
+
+    async def stop(self) -> None:
+        self._stop.set()
+        if self._proc is not None and self._proc.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                self._proc.terminate()
+        if self._task is not None:
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
+            self._task = None
+
+    async def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=self._interval_s)
+            except TimeoutError:
+                pass
+            else:
+                return
+            if self._proc is not None and self._proc.returncode is None:
+                continue  # previous run still in flight
+            if not self._idle_and_headroom():
+                continue
+            await self._spawn()
+
+    def _idle_and_headroom(self) -> bool:
+        if self._db_path is None:
+            return False
+        # Idle: no request completed in the last quiet window.
+        try:
+            log = UsageLog(self._db_path)
+            last_end = log.last_request_end_ts()
+            log.close()
+        except OSError:
+            return False
+        now = time.time()
+        if last_end is not None and now - last_end < self._quiet_s:
+            return False
+        # Headroom: enough free unified memory that a probe load is safe.
+        from callosum.model_probe import _read_memavailable_bytes
+
+        free = _read_memavailable_bytes()
+        return not (free is None or free < self._mem_floor_bytes)
+
+    async def _spawn(self) -> None:
+        assert self._db_path is not None
+        cmd = [
+            self._python_exe,
+            "-m",
+            "callosum.jobs.model_probe",
+            "--db-path",
+            str(self._db_path),
+            "--max-models",
+            str(self._max_models_per_run),
+        ]
+        logger.info("model_probe_spawner: launching %s", " ".join(cmd))
+        try:
+            self._proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except OSError as exc:
+            logger.warning("model_probe_spawner: spawn failed: %s", exc)
+            self._proc = None
+            return
+        asyncio.create_task(self._reap(), name="model-probe-reaper")
+
+    async def _reap(self) -> None:
+        proc = self._proc
+        if proc is None:
+            return
+        try:
+            stdout, stderr = await proc.communicate()
+        except Exception:
+            logger.exception("model_probe_spawner: reap failed")
+            self._proc = None
+            return
+        rc = proc.returncode
+        out = (stdout or b"").decode("utf-8", "replace")[:200]
+        err = (stderr or b"").decode("utf-8", "replace")[-300:]
+        logger.info("model_probe_spawner: subprocess rc=%s stdout=%s stderr_tail=%s", rc, out, err)
+        self._proc = None
 
 
 async def _refresh_catalogs_pass(backends: Sequence[Backend], *, state_store: Any | None) -> list[Backend]:

@@ -18,7 +18,7 @@ REPO_ROOT = str(Path(__file__).resolve().parents[3])
 
 def _classify(argv: list[str]) -> str:
     joined = " ".join(argv)
-    if "test_exploration_doom_loop" in joined or "test_cell_level_retry" in joined:
+    if "test_min_coverage_doom_loop" in joined or "test_cell_level_retry" in joined:
         return "inaugural"
     if "mypy" in argv:
         return "mypy"
@@ -49,7 +49,7 @@ class FakeRunner:
 
 def test_inaugural_cases_are_the_two_bug_regression_tests() -> None:
     assert INAUGURAL_CASES == (
-        "tests/unit/routing/test_exploration_doom_loop.py",
+        "tests/unit/routing/test_min_coverage_doom_loop.py",
         "tests/unit/test_cell_level_retry.py",
     )
 

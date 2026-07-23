@@ -32,12 +32,12 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n3",
-      "target": "callosum.app:_dispatch_internal:n5"
+      "source": "callosum.app:_dispatch_internal:n5",
+      "target": "callosum.app:_dispatch_internal:n6"
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n5",
+      "source": "callosum.app:_dispatch_internal:n3",
       "target": "callosum.app:_dispatch_internal:n6"
     },
     {
@@ -57,22 +57,22 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n8",
+      "source": "callosum.app:_dispatch_internal:n9",
       "target": "callosum.app:_dispatch_internal:n10"
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n9",
+      "source": "callosum.app:_dispatch_internal:n10",
       "target": "callosum.app:_dispatch_internal:n11"
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n11",
+      "source": "callosum.app:_dispatch_internal:n10",
       "target": "callosum.app:_dispatch_internal:n12"
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n12",
+      "source": "callosum.app:_dispatch_internal:n11",
       "target": "callosum.app:_dispatch_internal:n13"
     },
     {
@@ -127,7 +127,7 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n22",
+      "source": "callosum.app:_dispatch_internal:n23",
       "target": "callosum.app:_dispatch_internal:n24"
     },
     {
@@ -137,7 +137,7 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n24",
+      "source": "callosum.app:_dispatch_internal:n25",
       "target": "callosum.app:_dispatch_internal:n26"
     },
     {
@@ -147,43 +147,18 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n23",
-      "target": "callosum.app:_dispatch_internal:n28"
-    },
-    {
-      "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n25",
-      "target": "callosum.app:_dispatch_internal:n28"
-    },
-    {
-      "function": "callosum.app:_dispatch_internal",
       "source": "callosum.app:_dispatch_internal:n27",
       "target": "callosum.app:_dispatch_internal:n28"
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n26",
-      "target": "callosum.app:_dispatch_internal:n28"
-    },
-    {
-      "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n21",
-      "target": "callosum.app:_dispatch_internal:n28"
-    },
-    {
-      "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n28",
+      "source": "callosum.app:_dispatch_internal:n27",
       "target": "callosum.app:_dispatch_internal:n29"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "source": "callosum.app:_dispatch_internal:n29",
       "target": "callosum.app:_dispatch_internal:n30"
-    },
-    {
-      "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n30",
-      "target": "callosum.app:_dispatch_internal:n31"
     },
     {
       "function": "callosum.app:_dispatch_internal",
@@ -197,7 +172,27 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n28",
+      "target": "callosum.app:_dispatch_internal:n33"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n30",
+      "target": "callosum.app:_dispatch_internal:n33"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
       "source": "callosum.app:_dispatch_internal:n32",
+      "target": "callosum.app:_dispatch_internal:n33"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n31",
+      "target": "callosum.app:_dispatch_internal:n33"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n26",
       "target": "callosum.app:_dispatch_internal:n33"
     },
     {
@@ -212,12 +207,12 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n33",
-      "target": "callosum.app:_dispatch_internal:n35"
+      "source": "callosum.app:_dispatch_internal:n35",
+      "target": "callosum.app:_dispatch_internal:n36"
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n35",
+      "source": "callosum.app:_dispatch_internal:n34",
       "target": "callosum.app:_dispatch_internal:n36"
     },
     {
@@ -228,11 +223,6 @@
     {
       "function": "callosum.app:_dispatch_internal",
       "source": "callosum.app:_dispatch_internal:n37",
-      "target": "callosum.app:_dispatch_internal:n38"
-    },
-    {
-      "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n36",
       "target": "callosum.app:_dispatch_internal:n38"
     },
     {
@@ -263,21 +253,16 @@
     {
       "function": "callosum.app:_dispatch_internal",
       "source": "callosum.app:_dispatch_internal:n42",
-      "target": "callosum.app:_dispatch_internal:n32"
-    },
-    {
-      "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n41",
-      "target": "callosum.app:_dispatch_internal:n32"
-    },
-    {
-      "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n32",
       "target": "callosum.app:_dispatch_internal:n43"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "source": "callosum.app:_dispatch_internal:n43",
+      "target": "callosum.app:_dispatch_internal:n44"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n42",
       "target": "callosum.app:_dispatch_internal:n44"
     },
     {
@@ -292,13 +277,13 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n45",
+      "source": "callosum.app:_dispatch_internal:n46",
       "target": "callosum.app:_dispatch_internal:n47"
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n46",
-      "target": "callosum.app:_dispatch_internal:n48"
+      "source": "callosum.app:_dispatch_internal:n45",
+      "target": "callosum.app:_dispatch_internal:n47"
     },
     {
       "function": "callosum.app:_dispatch_internal",
@@ -308,6 +293,16 @@
     {
       "function": "callosum.app:_dispatch_internal",
       "source": "callosum.app:_dispatch_internal:n48",
+      "target": "callosum.app:_dispatch_internal:n38"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n47",
+      "target": "callosum.app:_dispatch_internal:n38"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n38",
       "target": "callosum.app:_dispatch_internal:n49"
     },
     {
@@ -322,17 +317,12 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n48",
-      "target": "callosum.app:_dispatch_internal:n51"
-    },
-    {
-      "function": "callosum.app:_dispatch_internal",
       "source": "callosum.app:_dispatch_internal:n51",
       "target": "callosum.app:_dispatch_internal:n52"
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n52",
+      "source": "callosum.app:_dispatch_internal:n51",
       "target": "callosum.app:_dispatch_internal:n53"
     },
     {
@@ -342,22 +332,17 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n53",
+      "target": "callosum.app:_dispatch_internal:n54"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
       "source": "callosum.app:_dispatch_internal:n54",
       "target": "callosum.app:_dispatch_internal:n55"
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n53",
-      "target": "callosum.app:_dispatch_internal:n56"
-    },
-    {
-      "function": "callosum.app:_dispatch_internal",
       "source": "callosum.app:_dispatch_internal:n55",
-      "target": "callosum.app:_dispatch_internal:n56"
-    },
-    {
-      "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n54",
       "target": "callosum.app:_dispatch_internal:n56"
     },
     {
@@ -367,7 +352,7 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n57",
+      "source": "callosum.app:_dispatch_internal:n54",
       "target": "callosum.app:_dispatch_internal:n58"
     },
     {
@@ -377,27 +362,22 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n57",
+      "target": "callosum.app:_dispatch_internal:n60"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
       "source": "callosum.app:_dispatch_internal:n59",
       "target": "callosum.app:_dispatch_internal:n60"
     },
     {
       "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n58",
+      "target": "callosum.app:_dispatch_internal:n60"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
       "source": "callosum.app:_dispatch_internal:n60",
-      "target": "callosum.app:_dispatch_internal:n61"
-    },
-    {
-      "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n59",
-      "target": "callosum.app:_dispatch_internal:n61"
-    },
-    {
-      "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n57",
-      "target": "callosum.app:_dispatch_internal:n61"
-    },
-    {
-      "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n19",
       "target": "callosum.app:_dispatch_internal:n61"
     },
     {
@@ -412,7 +392,7 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n63",
+      "source": "callosum.app:_dispatch_internal:n62",
       "target": "callosum.app:_dispatch_internal:n64"
     },
     {
@@ -423,11 +403,16 @@
     {
       "function": "callosum.app:_dispatch_internal",
       "source": "callosum.app:_dispatch_internal:n63",
-      "target": "callosum.app:_dispatch_internal:n65"
+      "target": "callosum.app:_dispatch_internal:n66"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "source": "callosum.app:_dispatch_internal:n65",
+      "target": "callosum.app:_dispatch_internal:n66"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n64",
       "target": "callosum.app:_dispatch_internal:n66"
     },
     {
@@ -442,18 +427,13 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n67",
+      "source": "callosum.app:_dispatch_internal:n68",
       "target": "callosum.app:_dispatch_internal:n69"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "source": "callosum.app:_dispatch_internal:n69",
       "target": "callosum.app:_dispatch_internal:n70"
-    },
-    {
-      "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n68",
-      "target": "callosum.app:_dispatch_internal:n71"
     },
     {
       "function": "callosum.app:_dispatch_internal",
@@ -467,7 +447,12 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n66",
+      "source": "callosum.app:_dispatch_internal:n67",
+      "target": "callosum.app:_dispatch_internal:n71"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n24",
       "target": "callosum.app:_dispatch_internal:n71"
     },
     {
@@ -482,17 +467,17 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n71",
-      "target": "callosum.app:_dispatch_internal:n73"
-    },
-    {
-      "function": "callosum.app:_dispatch_internal",
       "source": "callosum.app:_dispatch_internal:n73",
       "target": "callosum.app:_dispatch_internal:n74"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "source": "callosum.app:_dispatch_internal:n74",
+      "target": "callosum.app:_dispatch_internal:n75"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n73",
       "target": "callosum.app:_dispatch_internal:n75"
     },
     {
@@ -507,17 +492,12 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n74",
-      "target": "callosum.app:_dispatch_internal:n77"
-    },
-    {
-      "function": "callosum.app:_dispatch_internal",
       "source": "callosum.app:_dispatch_internal:n77",
       "target": "callosum.app:_dispatch_internal:n78"
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n78",
+      "source": "callosum.app:_dispatch_internal:n77",
       "target": "callosum.app:_dispatch_internal:n79"
     },
     {
@@ -527,17 +507,27 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n80",
+      "source": "callosum.app:_dispatch_internal:n78",
       "target": "callosum.app:_dispatch_internal:n81"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "source": "callosum.app:_dispatch_internal:n80",
-      "target": "callosum.app:_dispatch_internal:n82"
+      "target": "callosum.app:_dispatch_internal:n81"
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n78",
+      "source": "callosum.app:_dispatch_internal:n79",
+      "target": "callosum.app:_dispatch_internal:n81"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n76",
+      "target": "callosum.app:_dispatch_internal:n81"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n81",
       "target": "callosum.app:_dispatch_internal:n82"
     },
     {
@@ -547,12 +537,17 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n81",
+      "target": "callosum.app:_dispatch_internal:n83"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
       "source": "callosum.app:_dispatch_internal:n83",
       "target": "callosum.app:_dispatch_internal:n84"
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n82",
+      "source": "callosum.app:_dispatch_internal:n84",
       "target": "callosum.app:_dispatch_internal:n85"
     },
     {
@@ -562,12 +557,17 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n85",
+      "source": "callosum.app:_dispatch_internal:n86",
       "target": "callosum.app:_dispatch_internal:n87"
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n77",
+      "source": "callosum.app:_dispatch_internal:n87",
+      "target": "callosum.app:_dispatch_internal:n88"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n85",
       "target": "callosum.app:_dispatch_internal:n88"
     },
     {
@@ -577,12 +577,12 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n88",
+      "source": "callosum.app:_dispatch_internal:n89",
       "target": "callosum.app:_dispatch_internal:n90"
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n89",
+      "source": "callosum.app:_dispatch_internal:n90",
       "target": "callosum.app:_dispatch_internal:n91"
     },
     {
@@ -592,7 +592,12 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n92",
+      "source": "callosum.app:_dispatch_internal:n91",
+      "target": "callosum.app:_dispatch_internal:n93"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n89",
       "target": "callosum.app:_dispatch_internal:n93"
     },
     {
@@ -607,7 +612,7 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n95",
+      "source": "callosum.app:_dispatch_internal:n93",
       "target": "callosum.app:_dispatch_internal:n96"
     },
     {
@@ -617,7 +622,7 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n97",
+      "source": "callosum.app:_dispatch_internal:n96",
       "target": "callosum.app:_dispatch_internal:n98"
     },
     {
@@ -627,22 +632,12 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n99",
+      "source": "callosum.app:_dispatch_internal:n98",
       "target": "callosum.app:_dispatch_internal:n100"
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n96",
-      "target": "callosum.app:_dispatch_internal:n100"
-    },
-    {
-      "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n93",
-      "target": "callosum.app:_dispatch_internal:n100"
-    },
-    {
-      "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n100",
+      "source": "callosum.app:_dispatch_internal:n88",
       "target": "callosum.app:_dispatch_internal:n101"
     },
     {
@@ -652,12 +647,12 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n102",
+      "source": "callosum.app:_dispatch_internal:n101",
       "target": "callosum.app:_dispatch_internal:n103"
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n103",
+      "source": "callosum.app:_dispatch_internal:n102",
       "target": "callosum.app:_dispatch_internal:n104"
     },
     {
@@ -697,27 +692,27 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n109",
+      "target": "callosum.app:_dispatch_internal:n111"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
       "source": "callosum.app:_dispatch_internal:n111",
       "target": "callosum.app:_dispatch_internal:n112"
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n109",
+      "source": "callosum.app:_dispatch_internal:n112",
       "target": "callosum.app:_dispatch_internal:n113"
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n112",
-      "target": "callosum.app:_dispatch_internal:n114"
-    },
-    {
-      "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n111",
-      "target": "callosum.app:_dispatch_internal:n114"
-    },
-    {
-      "function": "callosum.app:_dispatch_internal",
       "source": "callosum.app:_dispatch_internal:n113",
+      "target": "callosum.app:_dispatch_internal:n114"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n112",
       "target": "callosum.app:_dispatch_internal:n114"
     },
     {
@@ -728,11 +723,6 @@
     {
       "function": "callosum.app:_dispatch_internal",
       "source": "callosum.app:_dispatch_internal:n115",
-      "target": "callosum.app:_dispatch_internal:n116"
-    },
-    {
-      "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n104",
       "target": "callosum.app:_dispatch_internal:n116"
     },
     {
@@ -757,17 +747,22 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n115",
+      "target": "callosum.app:_dispatch_internal:n120"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n106",
+      "target": "callosum.app:_dispatch_internal:n120"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
       "source": "callosum.app:_dispatch_internal:n120",
       "target": "callosum.app:_dispatch_internal:n121"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "source": "callosum.app:_dispatch_internal:n121",
-      "target": "callosum.app:_dispatch_internal:n122"
-    },
-    {
-      "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n17",
       "target": "callosum.app:_dispatch_internal:n122"
     },
     {
@@ -807,7 +802,7 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n128",
+      "source": "callosum.app:_dispatch_internal:n129",
       "target": "callosum.app:_dispatch_internal:n130"
     },
     {
@@ -817,28 +812,23 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n129",
-      "target": "callosum.app:_dispatch_internal:n132"
-    },
-    {
-      "function": "callosum.app:_dispatch_internal",
       "source": "callosum.app:_dispatch_internal:n131",
       "target": "callosum.app:_dispatch_internal:n132"
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n130",
-      "target": "callosum.app:_dispatch_internal:n132"
-    },
-    {
-      "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n125",
-      "target": "callosum.app:_dispatch_internal:n132"
+      "source": "callosum.app:_dispatch_internal:n129",
+      "target": "callosum.app:_dispatch_internal:n133"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "source": "callosum.app:_dispatch_internal:n132",
-      "target": "callosum.app:_dispatch_internal:n133"
+      "target": "callosum.app:_dispatch_internal:n134"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n131",
+      "target": "callosum.app:_dispatch_internal:n134"
     },
     {
       "function": "callosum.app:_dispatch_internal",
@@ -852,12 +842,12 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n134",
+      "source": "callosum.app:_dispatch_internal:n135",
       "target": "callosum.app:_dispatch_internal:n136"
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n132",
+      "source": "callosum.app:_dispatch_internal:n124",
       "target": "callosum.app:_dispatch_internal:n136"
     },
     {
@@ -872,8 +862,13 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n138",
+      "source": "callosum.app:_dispatch_internal:n137",
       "target": "callosum.app:_dispatch_internal:n139"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n138",
+      "target": "callosum.app:_dispatch_internal:n140"
     },
     {
       "function": "callosum.app:_dispatch_internal",
@@ -897,12 +892,12 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n139",
-      "target": "callosum.app:_dispatch_internal:n143"
+      "source": "callosum.app:_dispatch_internal:n143",
+      "target": "callosum.app:_dispatch_internal:n144"
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n137",
+      "source": "callosum.app:_dispatch_internal:n21",
       "target": "callosum.app:_dispatch_internal:n144"
     },
     {
@@ -922,8 +917,143 @@
     },
     {
       "function": "callosum.app:_dispatch_internal",
-      "source": "callosum.app:_dispatch_internal:n145",
-      "target": "callosum.app:_dispatch_internal:n147"
+      "source": "callosum.app:_dispatch_internal:n147",
+      "target": "callosum.app:_dispatch_internal:n148"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n148",
+      "target": "callosum.app:_dispatch_internal:n149"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n149",
+      "target": "callosum.app:_dispatch_internal:n150"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n150",
+      "target": "callosum.app:_dispatch_internal:n151"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n150",
+      "target": "callosum.app:_dispatch_internal:n152"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n152",
+      "target": "callosum.app:_dispatch_internal:n153"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n151",
+      "target": "callosum.app:_dispatch_internal:n154"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n153",
+      "target": "callosum.app:_dispatch_internal:n154"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n152",
+      "target": "callosum.app:_dispatch_internal:n154"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n147",
+      "target": "callosum.app:_dispatch_internal:n154"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n154",
+      "target": "callosum.app:_dispatch_internal:n155"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n155",
+      "target": "callosum.app:_dispatch_internal:n156"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n156",
+      "target": "callosum.app:_dispatch_internal:n157"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n156",
+      "target": "callosum.app:_dispatch_internal:n158"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n154",
+      "target": "callosum.app:_dispatch_internal:n158"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n158",
+      "target": "callosum.app:_dispatch_internal:n159"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n159",
+      "target": "callosum.app:_dispatch_internal:n160"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n160",
+      "target": "callosum.app:_dispatch_internal:n161"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n161",
+      "target": "callosum.app:_dispatch_internal:n162"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n162",
+      "target": "callosum.app:_dispatch_internal:n163"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n163",
+      "target": "callosum.app:_dispatch_internal:n164"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n164",
+      "target": "callosum.app:_dispatch_internal:n165"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n161",
+      "target": "callosum.app:_dispatch_internal:n165"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n159",
+      "target": "callosum.app:_dispatch_internal:n166"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n166",
+      "target": "callosum.app:_dispatch_internal:n167"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n167",
+      "target": "callosum.app:_dispatch_internal:n168"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n168",
+      "target": "callosum.app:_dispatch_internal:n169"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "source": "callosum.app:_dispatch_internal:n167",
+      "target": "callosum.app:_dispatch_internal:n169"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
@@ -972,12 +1102,12 @@
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
-      "source": "callosum.app:_dispatch_nonstream:n7",
-      "target": "callosum.app:_dispatch_nonstream:n9"
+      "source": "callosum.app:_dispatch_nonstream:n8",
+      "target": "callosum.app:_dispatch_nonstream:n10"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
-      "source": "callosum.app:_dispatch_nonstream:n9",
+      "source": "callosum.app:_dispatch_nonstream:n6",
       "target": "callosum.app:_dispatch_nonstream:n10"
     },
     {
@@ -989,6 +1119,11 @@
       "function": "callosum.app:_dispatch_nonstream",
       "source": "callosum.app:_dispatch_nonstream:n11",
       "target": "callosum.app:_dispatch_nonstream:n12"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "source": "callosum.app:_dispatch_nonstream:n12",
+      "target": "callosum.app:_dispatch_nonstream:n13"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
@@ -1012,12 +1147,17 @@
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
-      "source": "callosum.app:_dispatch_nonstream:n16",
+      "source": "callosum.app:_dispatch_nonstream:n15",
       "target": "callosum.app:_dispatch_nonstream:n17"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
-      "source": "callosum.app:_dispatch_nonstream:n16",
+      "source": "callosum.app:_dispatch_nonstream:n13",
+      "target": "callosum.app:_dispatch_nonstream:n17"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "source": "callosum.app:_dispatch_nonstream:n17",
       "target": "callosum.app:_dispatch_nonstream:n18"
     },
     {
@@ -1032,11 +1172,6 @@
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
-      "source": "callosum.app:_dispatch_nonstream:n12",
-      "target": "callosum.app:_dispatch_nonstream:n21"
-    },
-    {
-      "function": "callosum.app:_dispatch_nonstream",
       "source": "callosum.app:_dispatch_nonstream:n20",
       "target": "callosum.app:_dispatch_nonstream:n21"
     },
@@ -1047,12 +1182,12 @@
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
-      "source": "callosum.app:_dispatch_nonstream:n22",
+      "source": "callosum.app:_dispatch_nonstream:n21",
       "target": "callosum.app:_dispatch_nonstream:n23"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
-      "source": "callosum.app:_dispatch_nonstream:n23",
+      "source": "callosum.app:_dispatch_nonstream:n19",
       "target": "callosum.app:_dispatch_nonstream:n24"
     },
     {
@@ -1062,7 +1197,7 @@
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
-      "source": "callosum.app:_dispatch_nonstream:n5",
+      "source": "callosum.app:_dispatch_nonstream:n25",
       "target": "callosum.app:_dispatch_nonstream:n26"
     },
     {
@@ -1072,7 +1207,7 @@
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
-      "source": "callosum.app:_dispatch_nonstream:n27",
+      "source": "callosum.app:_dispatch_nonstream:n19",
       "target": "callosum.app:_dispatch_nonstream:n28"
     },
     {
@@ -1092,27 +1227,12 @@
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
-      "source": "callosum.app:_dispatch_nonstream:n28",
+      "source": "callosum.app:_dispatch_nonstream:n31",
       "target": "callosum.app:_dispatch_nonstream:n32"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "source": "callosum.app:_dispatch_nonstream:n31",
-      "target": "callosum.app:_dispatch_nonstream:n27"
-    },
-    {
-      "function": "callosum.app:_dispatch_nonstream",
-      "source": "callosum.app:_dispatch_nonstream:n30",
-      "target": "callosum.app:_dispatch_nonstream:n27"
-    },
-    {
-      "function": "callosum.app:_dispatch_nonstream",
-      "source": "callosum.app:_dispatch_nonstream:n32",
-      "target": "callosum.app:_dispatch_nonstream:n27"
-    },
-    {
-      "function": "callosum.app:_dispatch_nonstream",
-      "source": "callosum.app:_dispatch_nonstream:n27",
       "target": "callosum.app:_dispatch_nonstream:n33"
     },
     {
@@ -1124,6 +1244,11 @@
       "function": "callosum.app:_dispatch_nonstream",
       "source": "callosum.app:_dispatch_nonstream:n34",
       "target": "callosum.app:_dispatch_nonstream:n35"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "source": "callosum.app:_dispatch_nonstream:n23",
+      "target": "callosum.app:_dispatch_nonstream:n36"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
@@ -1142,8 +1267,98 @@
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
-      "source": "callosum.app:_dispatch_nonstream:n35",
+      "source": "callosum.app:_dispatch_nonstream:n38",
       "target": "callosum.app:_dispatch_nonstream:n39"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "source": "callosum.app:_dispatch_nonstream:n39",
+      "target": "callosum.app:_dispatch_nonstream:n40"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "source": "callosum.app:_dispatch_nonstream:n5",
+      "target": "callosum.app:_dispatch_nonstream:n41"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "source": "callosum.app:_dispatch_nonstream:n41",
+      "target": "callosum.app:_dispatch_nonstream:n42"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "source": "callosum.app:_dispatch_nonstream:n42",
+      "target": "callosum.app:_dispatch_nonstream:n43"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "source": "callosum.app:_dispatch_nonstream:n43",
+      "target": "callosum.app:_dispatch_nonstream:n44"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "source": "callosum.app:_dispatch_nonstream:n44",
+      "target": "callosum.app:_dispatch_nonstream:n45"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "source": "callosum.app:_dispatch_nonstream:n45",
+      "target": "callosum.app:_dispatch_nonstream:n46"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "source": "callosum.app:_dispatch_nonstream:n43",
+      "target": "callosum.app:_dispatch_nonstream:n47"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "source": "callosum.app:_dispatch_nonstream:n46",
+      "target": "callosum.app:_dispatch_nonstream:n42"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "source": "callosum.app:_dispatch_nonstream:n45",
+      "target": "callosum.app:_dispatch_nonstream:n42"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "source": "callosum.app:_dispatch_nonstream:n47",
+      "target": "callosum.app:_dispatch_nonstream:n42"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "source": "callosum.app:_dispatch_nonstream:n42",
+      "target": "callosum.app:_dispatch_nonstream:n48"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "source": "callosum.app:_dispatch_nonstream:n48",
+      "target": "callosum.app:_dispatch_nonstream:n49"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "source": "callosum.app:_dispatch_nonstream:n49",
+      "target": "callosum.app:_dispatch_nonstream:n50"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "source": "callosum.app:_dispatch_nonstream:n50",
+      "target": "callosum.app:_dispatch_nonstream:n51"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "source": "callosum.app:_dispatch_nonstream:n51",
+      "target": "callosum.app:_dispatch_nonstream:n52"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "source": "callosum.app:_dispatch_nonstream:n52",
+      "target": "callosum.app:_dispatch_nonstream:n53"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "source": "callosum.app:_dispatch_nonstream:n50",
+      "target": "callosum.app:_dispatch_nonstream:n54"
     },
     {
       "function": "callosum.app:_dispatch_stream",
@@ -1192,12 +1407,12 @@
     },
     {
       "function": "callosum.app:_dispatch_stream",
-      "source": "callosum.app:_dispatch_stream:n7",
-      "target": "callosum.app:_dispatch_stream:n9"
+      "source": "callosum.app:_dispatch_stream:n8",
+      "target": "callosum.app:_dispatch_stream:n10"
     },
     {
       "function": "callosum.app:_dispatch_stream",
-      "source": "callosum.app:_dispatch_stream:n9",
+      "source": "callosum.app:_dispatch_stream:n6",
       "target": "callosum.app:_dispatch_stream:n10"
     },
     {
@@ -1217,7 +1432,12 @@
     },
     {
       "function": "callosum.app:_dispatch_stream",
-      "source": "callosum.app:_dispatch_stream:n12",
+      "source": "callosum.app:_dispatch_stream:n11",
+      "target": "callosum.app:_dispatch_stream:n13"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "source": "callosum.app:_dispatch_stream:n13",
       "target": "callosum.app:_dispatch_stream:n14"
     },
     {
@@ -1232,12 +1452,17 @@
     },
     {
       "function": "callosum.app:_dispatch_stream",
-      "source": "callosum.app:_dispatch_stream:n16",
+      "source": "callosum.app:_dispatch_stream:n15",
       "target": "callosum.app:_dispatch_stream:n17"
     },
     {
       "function": "callosum.app:_dispatch_stream",
-      "source": "callosum.app:_dispatch_stream:n12",
+      "source": "callosum.app:_dispatch_stream:n13",
+      "target": "callosum.app:_dispatch_stream:n17"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "source": "callosum.app:_dispatch_stream:n17",
       "target": "callosum.app:_dispatch_stream:n18"
     },
     {
@@ -1262,23 +1487,18 @@
     },
     {
       "function": "callosum.app:_dispatch_stream",
-      "source": "callosum.app:_dispatch_stream:n21",
+      "source": "callosum.app:_dispatch_stream:n22",
       "target": "callosum.app:_dispatch_stream:n23"
     },
     {
       "function": "callosum.app:_dispatch_stream",
-      "source": "callosum.app:_dispatch_stream:n23",
+      "source": "callosum.app:_dispatch_stream:n22",
       "target": "callosum.app:_dispatch_stream:n24"
     },
     {
       "function": "callosum.app:_dispatch_stream",
-      "source": "callosum.app:_dispatch_stream:n24",
+      "source": "callosum.app:_dispatch_stream:n20",
       "target": "callosum.app:_dispatch_stream:n25"
-    },
-    {
-      "function": "callosum.app:_dispatch_stream",
-      "source": "callosum.app:_dispatch_stream:n13",
-      "target": "callosum.app:_dispatch_stream:n26"
     },
     {
       "function": "callosum.app:_dispatch_stream",
@@ -1297,7 +1517,7 @@
     },
     {
       "function": "callosum.app:_dispatch_stream",
-      "source": "callosum.app:_dispatch_stream:n28",
+      "source": "callosum.app:_dispatch_stream:n20",
       "target": "callosum.app:_dispatch_stream:n29"
     },
     {
@@ -1317,12 +1537,7 @@
     },
     {
       "function": "callosum.app:_dispatch_stream",
-      "source": "callosum.app:_dispatch_stream:n32",
-      "target": "callosum.app:_dispatch_stream:n33"
-    },
-    {
-      "function": "callosum.app:_dispatch_stream",
-      "source": "callosum.app:_dispatch_stream:n31",
+      "source": "callosum.app:_dispatch_stream:n20",
       "target": "callosum.app:_dispatch_stream:n33"
     },
     {
@@ -1337,7 +1552,7 @@
     },
     {
       "function": "callosum.app:_dispatch_stream",
-      "source": "callosum.app:_dispatch_stream:n5",
+      "source": "callosum.app:_dispatch_stream:n35",
       "target": "callosum.app:_dispatch_stream:n36"
     },
     {
@@ -1347,7 +1562,7 @@
     },
     {
       "function": "callosum.app:_dispatch_stream",
-      "source": "callosum.app:_dispatch_stream:n37",
+      "source": "callosum.app:_dispatch_stream:n36",
       "target": "callosum.app:_dispatch_stream:n38"
     },
     {
@@ -1362,32 +1577,22 @@
     },
     {
       "function": "callosum.app:_dispatch_stream",
+      "source": "callosum.app:_dispatch_stream:n24",
+      "target": "callosum.app:_dispatch_stream:n41"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
       "source": "callosum.app:_dispatch_stream:n40",
       "target": "callosum.app:_dispatch_stream:n41"
     },
     {
       "function": "callosum.app:_dispatch_stream",
-      "source": "callosum.app:_dispatch_stream:n38",
+      "source": "callosum.app:_dispatch_stream:n41",
       "target": "callosum.app:_dispatch_stream:n42"
     },
     {
       "function": "callosum.app:_dispatch_stream",
-      "source": "callosum.app:_dispatch_stream:n41",
-      "target": "callosum.app:_dispatch_stream:n37"
-    },
-    {
-      "function": "callosum.app:_dispatch_stream",
-      "source": "callosum.app:_dispatch_stream:n40",
-      "target": "callosum.app:_dispatch_stream:n37"
-    },
-    {
-      "function": "callosum.app:_dispatch_stream",
       "source": "callosum.app:_dispatch_stream:n42",
-      "target": "callosum.app:_dispatch_stream:n37"
-    },
-    {
-      "function": "callosum.app:_dispatch_stream",
-      "source": "callosum.app:_dispatch_stream:n37",
       "target": "callosum.app:_dispatch_stream:n43"
     },
     {
@@ -1417,8 +1622,103 @@
     },
     {
       "function": "callosum.app:_dispatch_stream",
-      "source": "callosum.app:_dispatch_stream:n45",
+      "source": "callosum.app:_dispatch_stream:n46",
+      "target": "callosum.app:_dispatch_stream:n48"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "source": "callosum.app:_dispatch_stream:n48",
       "target": "callosum.app:_dispatch_stream:n49"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "source": "callosum.app:_dispatch_stream:n49",
+      "target": "callosum.app:_dispatch_stream:n50"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "source": "callosum.app:_dispatch_stream:n5",
+      "target": "callosum.app:_dispatch_stream:n51"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "source": "callosum.app:_dispatch_stream:n51",
+      "target": "callosum.app:_dispatch_stream:n52"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "source": "callosum.app:_dispatch_stream:n52",
+      "target": "callosum.app:_dispatch_stream:n53"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "source": "callosum.app:_dispatch_stream:n53",
+      "target": "callosum.app:_dispatch_stream:n54"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "source": "callosum.app:_dispatch_stream:n54",
+      "target": "callosum.app:_dispatch_stream:n55"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "source": "callosum.app:_dispatch_stream:n55",
+      "target": "callosum.app:_dispatch_stream:n56"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "source": "callosum.app:_dispatch_stream:n53",
+      "target": "callosum.app:_dispatch_stream:n57"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "source": "callosum.app:_dispatch_stream:n56",
+      "target": "callosum.app:_dispatch_stream:n52"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "source": "callosum.app:_dispatch_stream:n55",
+      "target": "callosum.app:_dispatch_stream:n52"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "source": "callosum.app:_dispatch_stream:n57",
+      "target": "callosum.app:_dispatch_stream:n52"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "source": "callosum.app:_dispatch_stream:n52",
+      "target": "callosum.app:_dispatch_stream:n58"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "source": "callosum.app:_dispatch_stream:n58",
+      "target": "callosum.app:_dispatch_stream:n59"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "source": "callosum.app:_dispatch_stream:n59",
+      "target": "callosum.app:_dispatch_stream:n60"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "source": "callosum.app:_dispatch_stream:n60",
+      "target": "callosum.app:_dispatch_stream:n61"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "source": "callosum.app:_dispatch_stream:n61",
+      "target": "callosum.app:_dispatch_stream:n62"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "source": "callosum.app:_dispatch_stream:n62",
+      "target": "callosum.app:_dispatch_stream:n63"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "source": "callosum.app:_dispatch_stream:n60",
+      "target": "callosum.app:_dispatch_stream:n64"
     },
     {
       "function": "callosum.routing.router:Router.route",
@@ -1477,12 +1777,17 @@
     },
     {
       "function": "callosum.routing.router:Router.route",
-      "source": "callosum.routing.router:Router.route:n11",
+      "source": "callosum.routing.router:Router.route:n10",
       "target": "callosum.routing.router:Router.route:n12"
     },
     {
       "function": "callosum.routing.router:Router.route",
-      "source": "callosum.routing.router:Router.route:n8",
+      "source": "callosum.routing.router:Router.route:n11",
+      "target": "callosum.routing.router:Router.route:n13"
+    },
+    {
+      "function": "callosum.routing.router:Router.route",
+      "source": "callosum.routing.router:Router.route:n12",
       "target": "callosum.routing.router:Router.route:n13"
     },
     {
@@ -1497,13 +1802,8 @@
     },
     {
       "function": "callosum.routing.router:Router.route",
-      "source": "callosum.routing.router:Router.route:n14",
-      "target": "callosum.routing.router:Router.route:n16"
-    },
-    {
-      "function": "callosum.routing.router:Router.route",
       "source": "callosum.routing.router:Router.route:n15",
-      "target": "callosum.routing.router:Router.route:n17"
+      "target": "callosum.routing.router:Router.route:n16"
     },
     {
       "function": "callosum.routing.router:Router.route",
@@ -1512,13 +1812,48 @@
     },
     {
       "function": "callosum.routing.router:Router.route",
-      "source": "callosum.routing.router:Router.route:n17",
+      "source": "callosum.routing.router:Router.route:n8",
       "target": "callosum.routing.router:Router.route:n18"
     },
     {
       "function": "callosum.routing.router:Router.route",
       "source": "callosum.routing.router:Router.route:n18",
       "target": "callosum.routing.router:Router.route:n19"
+    },
+    {
+      "function": "callosum.routing.router:Router.route",
+      "source": "callosum.routing.router:Router.route:n19",
+      "target": "callosum.routing.router:Router.route:n20"
+    },
+    {
+      "function": "callosum.routing.router:Router.route",
+      "source": "callosum.routing.router:Router.route:n20",
+      "target": "callosum.routing.router:Router.route:n21"
+    },
+    {
+      "function": "callosum.routing.router:Router.route",
+      "source": "callosum.routing.router:Router.route:n20",
+      "target": "callosum.routing.router:Router.route:n22"
+    },
+    {
+      "function": "callosum.routing.router:Router.route",
+      "source": "callosum.routing.router:Router.route:n21",
+      "target": "callosum.routing.router:Router.route:n23"
+    },
+    {
+      "function": "callosum.routing.router:Router.route",
+      "source": "callosum.routing.router:Router.route:n22",
+      "target": "callosum.routing.router:Router.route:n23"
+    },
+    {
+      "function": "callosum.routing.router:Router.route",
+      "source": "callosum.routing.router:Router.route:n23",
+      "target": "callosum.routing.router:Router.route:n24"
+    },
+    {
+      "function": "callosum.routing.router:Router.route",
+      "source": "callosum.routing.router:Router.route:n24",
+      "target": "callosum.routing.router:Router.route:n25"
     }
   ],
   "generated_from": "scripts/generate_static_graphs.py",
@@ -1526,1292 +1861,1582 @@
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:start",
-      "label": "callosum.app:_dispatch_internal\\nsrc/callosum/app.py:2001"
+      "label": "callosum.app:_dispatch_internal\\nsrc/callosum/app.py:2267"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n1",
-      "label": "2023: if auto_cfg is None"
+      "label": "2289: if auto_cfg is None"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n2",
-      "label": "2024: assign auto_cfg"
+      "label": "2290: assign auto_cfg"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n3",
-      "label": "2025: if live_cells_fn is None"
+      "label": "2291: if live_cells_fn is None"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n4",
-      "label": "2026: assign live_cells_fn"
+      "label": "2293: FunctionDef"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n5",
-      "label": "2027: Expr"
+      "label": "2297: assign live_cells_fn"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n6",
-      "label": "2033: assign requested_model"
+      "label": "2298: assign dispatch_budget"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n7",
-      "label": "2034: assign requested_reasoning"
+      "label": "2302: Expr"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n8",
-      "label": "2039: try"
+      "label": "2308: assign requested_model"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n9",
-      "label": "2040: assign _selector"
+      "label": "2309: assign requested_reasoning"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n10",
-      "label": "2042: raise"
+      "label": "2314: try"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n11",
-      "label": "2043: assign routing_mode"
+      "label": "2315: assign _selector"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n12",
-      "label": "2047: AnnAssign"
+      "label": "2317: raise"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n13",
-      "label": "2048: AnnAssign"
+      "label": "2318: assign routing_mode"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n14",
-      "label": "2049: AnnAssign"
+      "label": "2319: call _effective_routing_mode_context.set"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n15",
-      "label": "2053: AnnAssign"
+      "label": "2320: call _traffic_kind_context.set"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n16",
-      "label": "2054: AnnAssign"
+      "label": "2324: AnnAssign"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n17",
-      "label": "2067: if router is not None"
+      "label": "2325: AnnAssign"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n18",
-      "label": "2068: assign cells_now"
+      "label": "2326: AnnAssign"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n19",
-      "label": "2081: if operator_state is not None"
+      "label": "2330: AnnAssign"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n20",
-      "label": "2082: assign _routing"
+      "label": "2331: AnnAssign"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n21",
-      "label": "2087: if _selector is not None"
+      "label": "2344: if router is not None"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n22",
-      "label": "2088: if _selector.strategy is not None"
+      "label": "2345: assign _selector_is_concrete_pin"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n23",
-      "label": "2089: assign _routing"
+      "label": "2346: assign cells_now"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n24",
-      "label": "2090: if _selector.source == 'remote'"
+      "label": "2359: if operator_state is not None"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n25",
-      "label": "2091: assign _routing"
+      "label": "2360: assign _routing"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n26",
-      "label": "2092: if _selector.source == 'local'"
+      "label": "2365: if _selector is not None"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n27",
-      "label": "2093: assign _routing"
+      "label": "2366: if _selector.strategy is not None"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n28",
-      "label": "2096: assign _effective_mode"
+      "label": "2367: assign _routing"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n29",
-      "label": "2097: if _selector is not None"
+      "label": "2368: if _selector.source == 'remote'"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n30",
-      "label": "2098: assign _effective_mode"
+      "label": "2369: assign _routing"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n31",
-      "label": "2103: AnnAssign"
+      "label": "2370: if _selector.source == 'local'"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n32",
-      "label": "2104: for _b in backends_list"
+      "label": "2371: assign _routing"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n33",
-      "label": "2105: if getattr(_b, 'kind', '') == 'litellm_gateway'"
+      "label": "2374: assign _effective_mode"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n34",
-      "label": "2106: Continue"
+      "label": "2375: if _selector is not None"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n35",
-      "label": "2107: assign _q"
+      "label": "2376: assign _effective_mode"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n36",
-      "label": "2108: if _q is None"
+      "label": "2377: assign _traffic_kind"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n37",
-      "label": "2109: Continue"
+      "label": "2382: AnnAssign"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n38",
-      "label": "2110: assign _w"
+      "label": "2383: for _b in backends_list"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n39",
-      "label": "2111: if _w is None"
+      "label": "2384: if getattr(_b, 'kind', '') == 'litellm_gateway'"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n40",
-      "label": "2112: Continue"
+      "label": "2385: Continue"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n41",
-      "label": "2113: if _quota_pct is None or _w > _quota_pct"
+      "label": "2386: assign _q"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n42",
-      "label": "2114: assign _quota_pct"
+      "label": "2387: if _q is None"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n43",
-      "label": "2115: ImportFrom"
+      "label": "2388: Continue"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n44",
-      "label": "2117: assign _sched"
+      "label": "2389: assign _w"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n45",
-      "label": "2118: if _sched is not None"
+      "label": "2390: if _w is None"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n46",
-      "label": "2119: assign _canary"
+      "label": "2391: Continue"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n47",
-      "label": "2124: assign _canary"
+      "label": "2392: if _quota_pct is None or _w > _quota_pct"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n48",
-      "label": "2125: if _canary == CanaryDecision.REDIRECT_REMOTE"
+      "label": "2393: assign _quota_pct"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n49",
-      "label": "2129: assign _routing"
+      "label": "2394: ImportFrom"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n50",
-      "label": "2130: assign _effective_mode"
+      "label": "2396: assign _sched"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n51",
-      "label": "2131: call _effective_routing_mode_context.set"
+      "label": "2397: if _sched is not None"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n52",
-      "label": "2132: if _routing in ('offline', 'local-only')"
+      "label": "2398: assign _canary"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n53",
-      "label": "2133: assign cells_now"
+      "label": "2403: assign _canary"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n54",
-      "label": "2141: if _routing == 'remote-only'"
+      "label": "2404: if _canary == CanaryDecision.REDIRECT_REMOTE"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n55",
-      "label": "2142: assign cells_now"
+      "label": "2408: assign _routing"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n56",
-      "label": "2150: assign cells_now"
+      "label": "2409: assign _effective_mode"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n57",
-      "label": "2156: if _selector is not None and _selector.pinned_model is not None"
+      "label": "2410: assign _traffic_kind"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n58",
-      "label": "2157: assign cells_now"
+      "label": "2411: if _effective_mode == 'min_coverage_quota'"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n59",
-      "label": "2158: if _selector.pinned_effort is not None"
+      "label": "2412: assign _traffic_kind"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n60",
-      "label": "2159: assign cells_now"
+      "label": "2413: call _effective_routing_mode_context.set"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n61",
-      "label": "2160: assign _process_pin"
+      "label": "2414: call _traffic_kind_context.set"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n62",
-      "label": "2161: assign _process_pin_concrete_model"
+      "label": "2415: if _routing in ('offline', 'local-only')"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n63",
-      "label": "2171: if _process_pin_concrete_model"
+      "label": "2416: assign cells_now"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n64",
-      "label": "2172: assign cells_now"
+      "label": "2424: if _routing == 'remote-only'"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n65",
-      "label": "2191: assign _routable"
+      "label": "2425: assign cells_now"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n66",
-      "label": "2201: if operator_state is not None"
+      "label": "2433: assign cells_now"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n67",
-      "label": "2202: if _routing in ('offline', 'local-only')"
+      "label": "2439: if _selector is not None and _selector.pinned_model is not None"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n68",
-      "label": "2203: assign _routable"
+      "label": "2440: assign cells_now"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n69",
-      "label": "2204: if _routing == 'remote-only'"
+      "label": "2441: if _selector.pinned_effort is not None"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n70",
-      "label": "2205: assign _routable"
+      "label": "2442: assign cells_now"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n71",
-      "label": "2206: if _process_pin is not None"
+      "label": "2443: assign _process_pin"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n72",
-      "label": "2207: assign _routable"
+      "label": "2444: assign _process_pin_concrete_model"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n73",
-      "label": "2208: assign cells_now"
+      "label": "2452: if _process_pin_concrete_model"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n74",
-      "label": "2209: if auto_cfg.xhigh_cap_enabled and usage_log is not None and (not (_selector is not "
+      "label": "2453: assign cells_now"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n75",
-      "label": "2214: assign _xhigh_coverage"
+      "label": "2472: assign _routable"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n76",
-      "label": "2219: assign cells_now"
+      "label": "2482: if operator_state is not None"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n77",
-      "label": "2227: if not cells_now"
+      "label": "2483: if _routing in ('offline', 'local-only')"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n78",
-      "label": "2228: if _process_pin_concrete_model"
+      "label": "2484: assign _routable"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n79",
-      "label": "2229: assign _pinned_backend"
+      "label": "2485: if _routing == 'remote-only'"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n80",
-      "label": "2230: if _pinned_backend is not None and requested_model not in _pinned_backend.advertise"
+      "label": "2486: assign _routable"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n81",
-      "label": "2231: raise"
+      "label": "2487: if _process_pin is not None"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n82",
-      "label": "2245: if _selector is not None and _selector.pinned_model is not None"
+      "label": "2488: assign _routable"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n83",
-      "label": "2246: assign _effort_note"
+      "label": "2498: assign _dispatch_routable"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n84",
-      "label": "2251: raise"
+      "label": "2499: assign cells_now"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n85",
-      "label": "2260: if not _routable"
+      "label": "2500: if auto_cfg.xhigh_cap_enabled and usage_log is not None and (not (_selector is not "
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n86",
-      "label": "2261: raise"
+      "label": "2505: assign _xhigh_coverage"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n87",
-      "label": "2271: raise"
+      "label": "2510: assign cells_now"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n88",
-      "label": "2276: try"
+      "label": "2518: if not cells_now"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n89",
-      "label": "2277: assign decision"
+      "label": "2519: if _process_pin_concrete_model"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n90",
-      "label": "2279: raise"
+      "label": "2520: assign _pinned_backend"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n91",
-      "label": "2283: assign chosen"
+      "label": "2521: if _pinned_backend is not None and requested_model not in _pinned_backend.advertise"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n92",
-      "label": "2290: AnnAssign"
+      "label": "2522: raise"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n93",
-      "label": "2291: if auto_cfg.exploration_quota_enabled and usage_log is not None and (len(decision.c"
+      "label": "2533: if _selector is not None and _selector.pinned_model is not None"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n94",
-      "label": "2296: assign _quota_coverage"
+      "label": "2534: assign _effort_note"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n95",
-      "label": "2301: assign _forced"
+      "label": "2535: raise"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n96",
-      "label": "2310: if _forced is not None and _forced != chosen"
+      "label": "2554: if _routable and (not _dispatch_routable)"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n97",
-      "label": "2311: assign chosen"
+      "label": "2555: raise"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n98",
-      "label": "2312: assign _ordered_candidates"
+      "label": "2565: if not _routable"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n99",
-      "label": "2316: call _effective_routing_mode_context.set"
+      "label": "2566: raise"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n100",
-      "label": "2317: assign body['model']"
+      "label": "2576: raise"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n101",
-      "label": "2318: call _stamp_reasoning_effort"
+      "label": "2581: try"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n102",
-      "label": "2327: assign _tr"
+      "label": "2582: assign decision"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n103",
-      "label": "2328: AnnAssign"
+      "label": "2584: raise"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n104",
-      "label": "2329: if _tr is not None and len(_tr) > 0"
+      "label": "2588: assign chosen"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n105",
-      "label": "2330: ImportFrom"
+      "label": "2595: AnnAssign"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n106",
-      "label": "2333: ImportFrom"
+      "label": "2596: if auto_cfg.min_coverage_quota_enabled and usage_log is not None and (len(decision."
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n107",
-      "label": "2336: ImportFrom"
+      "label": "2597: assign _quota_coverage"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n108",
-      "label": "2343: assign _profile"
+      "label": "2608: AnnAssign"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n109",
-      "label": "2344: try"
+      "label": "2609: if auto_cfg.min_coverage_feasibility_enabled"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n110",
-      "label": "2345: assign _path"
+      "label": "2610: assign _quota_candidates"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n111",
-      "label": "2346: if _path.exists()"
+      "label": "2629: AnnAssign"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n112",
-      "label": "2347: assign _profile"
+      "label": "2630: if auto_cfg.min_coverage_cooldown_enabled"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n113",
-      "label": "2349: call logger.exception"
+      "label": "2631: assign _cooldown"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n114",
-      "label": "2353: assign _transform_ctx"
+      "label": "2636: assign _forced"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n115",
-      "label": "2359: assign body"
+      "label": "2646: if _forced is not None and _forced != chosen"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n116",
-      "label": "2365: assign recommender_classifier_cell"
+      "label": "2647: assign chosen"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n117",
-      "label": "2366: assign recommender_raw_output"
+      "label": "2648: assign _ordered_candidates"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n118",
-      "label": "2369: assign recommender_source"
+      "label": "2652: call _effective_routing_mode_context.set"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n119",
-      "label": "2372: assign prompt_embedding"
+      "label": "2653: call _traffic_kind_context.set"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n120",
-      "label": "2376: assign cell_candidates"
+      "label": "2654: assign body['model']"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n121",
-      "label": "2377: assign routing_mode"
+      "label": "2655: call _stamp_reasoning_effort"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n122",
-      "label": "2378: assign model"
+      "label": "2664: assign _tr"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n123",
-      "label": "2379: assign pinned"
+      "label": "2665: AnnAssign"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n124",
-      "label": "2380: assign active"
+      "label": "2666: if _tr is not None and len(_tr) > 0"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n125",
-      "label": "2387: if _selector is not None"
+      "label": "2667: ImportFrom"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n126",
-      "label": "2388: assign _want_local"
+      "label": "2670: ImportFrom"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n127",
-      "label": "2389: assign _want_remote"
+      "label": "2673: ImportFrom"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n128",
-      "label": "2390: if _want_local"
+      "label": "2680: assign _profile"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n129",
-      "label": "2391: assign active"
+      "label": "2681: try"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n130",
-      "label": "2392: if _want_remote"
+      "label": "2682: assign _path"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n131",
-      "label": "2393: assign active"
+      "label": "2683: if _path.exists()"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n132",
-      "label": "2394: if forced_backend_id is not None"
+      "label": "2684: assign _profile"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n133",
-      "label": "2395: assign active"
+      "label": "2686: call logger.exception"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n134",
-      "label": "2396: if not active"
+      "label": "2690: assign _transform_ctx"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n135",
-      "label": "2397: raise"
+      "label": "2696: assign body"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n136",
-      "label": "2401: assign preferred_id"
+      "label": "2704: assign recommender_classifier_cell"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n137",
-      "label": "2402: if body.get('stream') is True"
+      "label": "2705: if decision.time_estimates_ms"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n138",
-      "label": "2403: AnnAssign"
+      "label": "2706: assign recommender_raw_output"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n139",
-      "label": "2404: if _peer_quality_capture_enabled()"
+      "label": "2714: assign recommender_raw_output"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n140",
-      "label": "2405: assign peer_quality_capture"
+      "label": "2717: assign recommender_source"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n141",
-      "label": "2406: assign peer_quality_cell"
+      "label": "2720: assign prompt_embedding"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n142",
-      "label": "2407: assign body"
+      "label": "2724: assign cell_candidates"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n143",
-      "label": "2416: return"
+      "label": "2725: assign routing_mode"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n144",
-      "label": "2438: assign result"
+      "label": "2726: assign model"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n145",
-      "label": "2462: if _transform_ctx is not None and _tr is not None and isinstance(result, dict)"
+      "label": "2727: assign pinned"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n146",
-      "label": "2463: assign result"
+      "label": "2728: assign active"
     },
     {
       "function": "callosum.app:_dispatch_internal",
       "id": "callosum.app:_dispatch_internal:n147",
-      "label": "2464: return"
+      "label": "2735: if _selector is not None"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "id": "callosum.app:_dispatch_internal:n148",
+      "label": "2736: assign _want_local"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "id": "callosum.app:_dispatch_internal:n149",
+      "label": "2737: assign _want_remote"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "id": "callosum.app:_dispatch_internal:n150",
+      "label": "2738: if _want_local"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "id": "callosum.app:_dispatch_internal:n151",
+      "label": "2739: assign active"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "id": "callosum.app:_dispatch_internal:n152",
+      "label": "2740: if _want_remote"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "id": "callosum.app:_dispatch_internal:n153",
+      "label": "2741: assign active"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "id": "callosum.app:_dispatch_internal:n154",
+      "label": "2742: if forced_backend_id is not None"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "id": "callosum.app:_dispatch_internal:n155",
+      "label": "2743: assign active"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "id": "callosum.app:_dispatch_internal:n156",
+      "label": "2744: if not active"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "id": "callosum.app:_dispatch_internal:n157",
+      "label": "2745: raise"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "id": "callosum.app:_dispatch_internal:n158",
+      "label": "2749: assign preferred_id"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "id": "callosum.app:_dispatch_internal:n159",
+      "label": "2750: if body.get('stream') is True"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "id": "callosum.app:_dispatch_internal:n160",
+      "label": "2751: AnnAssign"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "id": "callosum.app:_dispatch_internal:n161",
+      "label": "2752: if _peer_quality_inband_enabled() and _peer_quality_capture_enabled()"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "id": "callosum.app:_dispatch_internal:n162",
+      "label": "2753: assign peer_quality_capture"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "id": "callosum.app:_dispatch_internal:n163",
+      "label": "2754: assign peer_quality_cell"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "id": "callosum.app:_dispatch_internal:n164",
+      "label": "2755: assign body"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "id": "callosum.app:_dispatch_internal:n165",
+      "label": "2764: return"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "id": "callosum.app:_dispatch_internal:n166",
+      "label": "2787: assign result"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "id": "callosum.app:_dispatch_internal:n167",
+      "label": "2812: if _transform_ctx is not None and _tr is not None and isinstance(result, dict)"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "id": "callosum.app:_dispatch_internal:n168",
+      "label": "2813: assign result"
+    },
+    {
+      "function": "callosum.app:_dispatch_internal",
+      "id": "callosum.app:_dispatch_internal:n169",
+      "label": "2814: return"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:start",
-      "label": "callosum.app:_dispatch_nonstream\\nsrc/callosum/app.py:2668"
+      "label": "callosum.app:_dispatch_nonstream\\nsrc/callosum/app.py:3099"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n1",
-      "label": "2689: AnnAssign"
+      "label": "3121: AnnAssign"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n2",
-      "label": "2690: AnnAssign"
+      "label": "3122: AnnAssign"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n3",
-      "label": "2691: AnnAssign"
+      "label": "3123: AnnAssign"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n4",
-      "label": "2692: assign cost_estimate"
+      "label": "3124: assign cost_estimate"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n5",
-      "label": "2693: while True"
+      "label": "3125: while True"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n6",
-      "label": "2694: assign backend"
+      "label": "3126: if dispatch_budget is not None"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n7",
-      "label": "2701: if backend is None"
+      "label": "3127: assign budget_reason"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n8",
-      "label": "2702: Break"
+      "label": "3128: if budget_reason is not None"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n9",
-      "label": "2703: assign handle"
+      "label": "3129: raise"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n10",
-      "label": "2704: assign ts_start"
+      "label": "3130: assign backend"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n11",
-      "label": "2705: try"
+      "label": "3137: if backend is None"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n12",
-      "label": "2706: assign result"
+      "label": "3138: Break"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n13",
-      "label": "2708: assign ts_end"
+      "label": "3139: if dispatch_budget is not None"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n14",
-      "label": "2709: call _log_attempt"
+      "label": "3140: assign budget_reason"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n15",
-      "label": "2733: assign last_error"
+      "label": "3141: if budget_reason is not None"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n16",
-      "label": "2734: if exc.classification not in RETRYABLE"
+      "label": "3142: raise"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n17",
-      "label": "2735: raise"
+      "label": "3143: assign handle"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n18",
-      "label": "2736: call excluded.add"
+      "label": "3144: assign ts_start"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n19",
-      "label": "2737: assign excluded_errors[backend.id]"
+      "label": "3145: try"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n20",
-      "label": "2738: Continue"
+      "label": "3146: assign remaining"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n21",
-      "label": "2739: assign ts_end"
+      "label": "3147: if remaining is not None and remaining <= 0"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n22",
-      "label": "2740: call _remember_binding"
+      "label": "3148: raise"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n23",
-      "label": "2745: assign (_, result)"
+      "label": "3149: assign result"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n24",
-      "label": "2747: call _log_attempt"
+      "label": "3155: assign ts_end"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n25",
-      "label": "2771: return"
+      "label": "3156: assign budget_error"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n26",
-      "label": "2774: AnnAssign"
+      "label": "3161: call _log_attempt"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n27",
-      "label": "2775: for backend in backends_list"
+      "label": "3185: raise"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n28",
-      "label": "2776: try"
+      "label": "3187: assign ts_end"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n29",
-      "label": "2777: assign usage"
+      "label": "3188: call _log_attempt"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n30",
-      "label": "2778: if usage and usage.cooldown_until_ts and (recovery_ts is None or usage.cooldown_unt"
+      "label": "3212: assign last_error"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n31",
-      "label": "2779: assign recovery_ts"
+      "label": "3213: if exc.classification not in RETRYABLE"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n32",
-      "label": "2781: Pass"
+      "label": "3214: raise"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n33",
-      "label": "2784: assign error_classifications"
+      "label": "3215: call excluded.add"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n34",
-      "label": "2786: assign backend_status"
+      "label": "3216: assign excluded_errors[backend.id]"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n35",
-      "label": "2787: if should_attempt_fallback(error_classifications)"
+      "label": "3217: Continue"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n36",
-      "label": "2788: assign fallback"
+      "label": "3218: assign ts_end"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n37",
-      "label": "2791: call fallback.record_attempt"
+      "label": "3219: call _remember_binding"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n38",
-      "label": "2796: raise"
+      "label": "3224: assign (_, result)"
     },
     {
       "function": "callosum.app:_dispatch_nonstream",
       "id": "callosum.app:_dispatch_nonstream:n39",
-      "label": "2805: raise"
+      "label": "3226: call _log_attempt"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "id": "callosum.app:_dispatch_nonstream:n40",
+      "label": "3250: return"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "id": "callosum.app:_dispatch_nonstream:n41",
+      "label": "3253: AnnAssign"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "id": "callosum.app:_dispatch_nonstream:n42",
+      "label": "3254: for backend in backends_list"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "id": "callosum.app:_dispatch_nonstream:n43",
+      "label": "3255: try"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "id": "callosum.app:_dispatch_nonstream:n44",
+      "label": "3256: assign usage"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "id": "callosum.app:_dispatch_nonstream:n45",
+      "label": "3257: if usage and usage.cooldown_until_ts and (recovery_ts is None or usage.cooldown_unt"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "id": "callosum.app:_dispatch_nonstream:n46",
+      "label": "3258: assign recovery_ts"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "id": "callosum.app:_dispatch_nonstream:n47",
+      "label": "3260: Pass"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "id": "callosum.app:_dispatch_nonstream:n48",
+      "label": "3263: assign error_classifications"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "id": "callosum.app:_dispatch_nonstream:n49",
+      "label": "3265: assign backend_status"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "id": "callosum.app:_dispatch_nonstream:n50",
+      "label": "3266: if should_attempt_fallback(error_classifications)"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "id": "callosum.app:_dispatch_nonstream:n51",
+      "label": "3267: assign fallback"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "id": "callosum.app:_dispatch_nonstream:n52",
+      "label": "3270: call fallback.record_attempt"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "id": "callosum.app:_dispatch_nonstream:n53",
+      "label": "3275: raise"
+    },
+    {
+      "function": "callosum.app:_dispatch_nonstream",
+      "id": "callosum.app:_dispatch_nonstream:n54",
+      "label": "3284: raise"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:start",
-      "label": "callosum.app:_dispatch_stream\\nsrc/callosum/app.py:2815"
+      "label": "callosum.app:_dispatch_stream\\nsrc/callosum/app.py:3294"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n1",
-      "label": "2837: AnnAssign"
+      "label": "3317: AnnAssign"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n2",
-      "label": "2838: AnnAssign"
+      "label": "3318: AnnAssign"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n3",
-      "label": "2839: AnnAssign"
+      "label": "3319: AnnAssign"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n4",
-      "label": "2840: assign cost_estimate"
+      "label": "3320: assign cost_estimate"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n5",
-      "label": "2841: while True"
+      "label": "3321: while True"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n6",
-      "label": "2842: assign backend"
+      "label": "3322: if dispatch_budget is not None"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n7",
-      "label": "2849: if backend is None"
+      "label": "3323: assign budget_reason"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n8",
-      "label": "2850: Break"
+      "label": "3324: if budget_reason is not None"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n9",
-      "label": "2851: assign handle"
+      "label": "3325: raise"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n10",
-      "label": "2852: assign ts_start"
+      "label": "3326: assign backend"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n11",
-      "label": "2853: assign iterator"
+      "label": "3333: if backend is None"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n12",
-      "label": "2854: try"
+      "label": "3334: Break"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n13",
-      "label": "2855: assign first_chunk"
+      "label": "3335: if dispatch_budget is not None"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n14",
-      "label": "2857: assign ts_end"
+      "label": "3336: assign budget_reason"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n15",
-      "label": "2858: call _log_attempt"
+      "label": "3337: if budget_reason is not None"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n16",
-      "label": "2882: call _remember_binding"
+      "label": "3338: raise"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n17",
-      "label": "2883: return"
+      "label": "3339: assign handle"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n18",
-      "label": "2885: assign ts_end"
+      "label": "3340: assign ts_start"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n19",
-      "label": "2886: call _log_attempt"
+      "label": "3341: assign iterator"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n20",
-      "label": "2910: assign last_error"
+      "label": "3342: try"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n21",
-      "label": "2911: if exc.classification not in RETRYABLE"
+      "label": "3343: assign remaining"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n22",
-      "label": "2912: raise"
+      "label": "3344: if remaining is not None and remaining <= 0"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n23",
-      "label": "2913: call excluded.add"
+      "label": "3345: raise"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n24",
-      "label": "2914: assign excluded_errors[backend.id]"
+      "label": "3346: assign first_chunk"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n25",
-      "label": "2915: Continue"
+      "label": "3352: assign ts_end"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n26",
-      "label": "2916: call _remember_binding"
+      "label": "3353: call _log_attempt"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n27",
-      "label": "2919: assign stream"
+      "label": "3377: call _remember_binding"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n28",
-      "label": "2920: assign stream"
+      "label": "3378: return"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n29",
-      "label": "2923: assign stream"
+      "label": "3380: assign ts_end"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n30",
-      "label": "2927: assign stream"
+      "label": "3381: assign budget_error"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n31",
-      "label": "2928: if peer_quality_capture is None"
+      "label": "3386: call _log_attempt"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n32",
-      "label": "2929: assign peer_quality_capture"
+      "label": "3410: raise"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n33",
-      "label": "2930: assign stream"
+      "label": "3412: assign ts_end"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n34",
-      "label": "2933: assign stream"
+      "label": "3413: call _log_attempt"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n35",
-      "label": "2935: return"
+      "label": "3437: assign last_error"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n36",
-      "label": "2961: AnnAssign"
+      "label": "3438: if exc.classification not in RETRYABLE"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n37",
-      "label": "2962: for backend in backends_list"
+      "label": "3439: raise"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n38",
-      "label": "2963: try"
+      "label": "3440: call excluded.add"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n39",
-      "label": "2964: assign usage"
+      "label": "3441: assign excluded_errors[backend.id]"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n40",
-      "label": "2965: if usage and usage.cooldown_until_ts and (recovery_ts is None or usage.cooldown_unt"
+      "label": "3442: Continue"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n41",
-      "label": "2966: assign recovery_ts"
+      "label": "3443: call _remember_binding"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n42",
-      "label": "2968: Pass"
+      "label": "3446: assign stream"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n43",
-      "label": "2971: assign error_classifications"
+      "label": "3447: assign stream"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n44",
-      "label": "2973: assign backend_status"
+      "label": "3450: assign stream"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n45",
-      "label": "2974: if should_attempt_fallback(error_classifications)"
+      "label": "3454: assign stream"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n46",
-      "label": "2975: assign fallback"
+      "label": "3455: if peer_quality_capture is None"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n47",
-      "label": "2978: call fallback.record_attempt"
+      "label": "3456: assign peer_quality_capture"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n48",
-      "label": "2983: raise"
+      "label": "3457: assign stream"
     },
     {
       "function": "callosum.app:_dispatch_stream",
       "id": "callosum.app:_dispatch_stream:n49",
-      "label": "2992: raise"
+      "label": "3460: assign stream"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "id": "callosum.app:_dispatch_stream:n50",
+      "label": "3462: return"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "id": "callosum.app:_dispatch_stream:n51",
+      "label": "3488: AnnAssign"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "id": "callosum.app:_dispatch_stream:n52",
+      "label": "3489: for backend in backends_list"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "id": "callosum.app:_dispatch_stream:n53",
+      "label": "3490: try"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "id": "callosum.app:_dispatch_stream:n54",
+      "label": "3491: assign usage"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "id": "callosum.app:_dispatch_stream:n55",
+      "label": "3492: if usage and usage.cooldown_until_ts and (recovery_ts is None or usage.cooldown_unt"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "id": "callosum.app:_dispatch_stream:n56",
+      "label": "3493: assign recovery_ts"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "id": "callosum.app:_dispatch_stream:n57",
+      "label": "3495: Pass"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "id": "callosum.app:_dispatch_stream:n58",
+      "label": "3498: assign error_classifications"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "id": "callosum.app:_dispatch_stream:n59",
+      "label": "3500: assign backend_status"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "id": "callosum.app:_dispatch_stream:n60",
+      "label": "3501: if should_attempt_fallback(error_classifications)"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "id": "callosum.app:_dispatch_stream:n61",
+      "label": "3502: assign fallback"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "id": "callosum.app:_dispatch_stream:n62",
+      "label": "3505: call fallback.record_attempt"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "id": "callosum.app:_dispatch_stream:n63",
+      "label": "3510: raise"
+    },
+    {
+      "function": "callosum.app:_dispatch_stream",
+      "id": "callosum.app:_dispatch_stream:n64",
+      "label": "3519: raise"
     },
     {
       "function": "callosum.routing.router:Router.route",
       "id": "callosum.routing.router:Router.route:start",
-      "label": "callosum.routing.router:Router.route\\nsrc/callosum/routing/router.py:95"
+      "label": "callosum.routing.router:Router.route\\nsrc/callosum/routing/router.py:121"
     },
     {
       "function": "callosum.routing.router:Router.route",
       "id": "callosum.routing.router:Router.route:n1",
-      "label": "96: Expr"
+      "label": "122: Expr"
     },
     {
       "function": "callosum.routing.router:Router.route",
       "id": "callosum.routing.router:Router.route:n2",
-      "label": "103: assign features"
+      "label": "129: assign features"
     },
     {
       "function": "callosum.routing.router:Router.route",
       "id": "callosum.routing.router:Router.route:n3",
-      "label": "104: assign compatible"
+      "label": "130: assign compatible"
     },
     {
       "function": "callosum.routing.router:Router.route",
       "id": "callosum.routing.router:Router.route:n4",
-      "label": "105: if not compatible"
+      "label": "131: if not compatible"
     },
     {
       "function": "callosum.routing.router:Router.route",
       "id": "callosum.routing.router:Router.route:n5",
-      "label": "106: raise"
+      "label": "132: raise"
     },
     {
       "function": "callosum.routing.router:Router.route",
       "id": "callosum.routing.router:Router.route:n6",
-      "label": "111: assign predictions"
+      "label": "137: assign predictions"
     },
     {
       "function": "callosum.routing.router:Router.route",
       "id": "callosum.routing.router:Router.route:n7",
-      "label": "112: assign capabilities_map"
+      "label": "138: assign capabilities_map"
     },
     {
       "function": "callosum.routing.router:Router.route",
       "id": "callosum.routing.router:Router.route:n8",
-      "label": "114: if not _has_differentiated_predictions(predictions)"
+      "label": "140: if not _has_differentiated_predictions(predictions)"
     },
     {
       "function": "callosum.routing.router:Router.route",
       "id": "callosum.routing.router:Router.route:n9",
-      "label": "124: assign fitting"
+      "label": "150: assign fitting"
     },
     {
       "function": "callosum.routing.router:Router.route",
       "id": "callosum.routing.router:Router.route:n10",
-      "label": "129: assign chosen"
+      "label": "161: if self._feasibility_enabled"
     },
     {
       "function": "callosum.routing.router:Router.route",
       "id": "callosum.routing.router:Router.route:n11",
-      "label": "132: assign rest"
+      "label": "162: assign feasible"
     },
     {
       "function": "callosum.routing.router:Router.route",
       "id": "callosum.routing.router:Router.route:n12",
-      "label": "139: return"
+      "label": "174: assign feasible"
     },
     {
       "function": "callosum.routing.router:Router.route",
       "id": "callosum.routing.router:Router.route:n13",
-      "label": "151: assign scaled_predictions"
+      "label": "175: assign primary_pool"
     },
     {
       "function": "callosum.routing.router:Router.route",
       "id": "callosum.routing.router:Router.route:n14",
-      "label": "160: if all((p < 0.5 for p in scaled_predictions.values()))"
+      "label": "176: assign local_primary_pool"
     },
     {
       "function": "callosum.routing.router:Router.route",
       "id": "callosum.routing.router:Router.route:n15",
-      "label": "161: assign chosen"
+      "label": "177: assign chosen"
     },
     {
       "function": "callosum.routing.router:Router.route",
       "id": "callosum.routing.router:Router.route:n16",
-      "label": "169: assign chosen"
+      "label": "181: assign rest"
     },
     {
       "function": "callosum.routing.router:Router.route",
       "id": "callosum.routing.router:Router.route:n17",
-      "label": "176: FunctionDef"
+      "label": "189: return"
     },
     {
       "function": "callosum.routing.router:Router.route",
       "id": "callosum.routing.router:Router.route:n18",
-      "label": "179: assign rest"
+      "label": "201: assign scaled_predictions"
     },
     {
       "function": "callosum.routing.router:Router.route",
       "id": "callosum.routing.router:Router.route:n19",
-      "label": "180: return"
+      "label": "205: assign time_estimates"
+    },
+    {
+      "function": "callosum.routing.router:Router.route",
+      "id": "callosum.routing.router:Router.route:n20",
+      "label": "211: if all((p < 0.5 for p in scaled_predictions.values()))"
+    },
+    {
+      "function": "callosum.routing.router:Router.route",
+      "id": "callosum.routing.router:Router.route:n21",
+      "label": "212: assign chosen"
+    },
+    {
+      "function": "callosum.routing.router:Router.route",
+      "id": "callosum.routing.router:Router.route:n22",
+      "label": "220: assign chosen"
+    },
+    {
+      "function": "callosum.routing.router:Router.route",
+      "id": "callosum.routing.router:Router.route:n23",
+      "label": "231: FunctionDef"
+    },
+    {
+      "function": "callosum.routing.router:Router.route",
+      "id": "callosum.routing.router:Router.route:n24",
+      "label": "234: assign rest"
+    },
+    {
+      "function": "callosum.routing.router:Router.route",
+      "id": "callosum.routing.router:Router.route:n25",
+      "label": "235: return"
     }
   ],
   "roots": [

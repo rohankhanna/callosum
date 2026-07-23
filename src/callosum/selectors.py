@@ -22,15 +22,12 @@ Notes
 - `callosum:offline` is explicitly rejected until no-network semantics can be
   enforced end to end (raises SelectorError -> caller returns 400).
 - A local pin may carry `:<effort>` symmetric to a remote pin. The parser is
-  stateless, so it validates only that `<effort>` is a syntactically valid
-  reasoning level (a member of `REASONING_LEVELS`) — exactly as for remote. The
-  *model-specific* check ("does THIS local model actually expose that level?")
-  lives where the per-model `supported_reasoning_levels` are known: the catalog
-  advertises a local-effort variant only for models that support it, and
-  dispatch surfaces a clean 503 when no live cell serves the pinned (model,
-  effort) pair. So `callosum:local/model-a0d2:high` parses and routes, while
-  `callosum:local/model-a0g2:high` parses but 503s (model-a0g2 advertises only
-  `("default",)`, so the cell grid has no high cell for it).
+  deliberately ignorant of effort vocabulary because providers own that
+  fast-moving metadata. It accepts any non-empty effort and the *model-specific*
+  check ("does THIS model actually expose that level?") lives where the live
+  `supported_reasoning_levels` are known: catalog discovery advertises the
+  facts and dispatch surfaces a clean 503 when no live cell serves the pinned
+  (model, effort) pair.
 - Anything not starting with `callosum:` returns None -> legacy pass-through,
   behavior unchanged.
 """
@@ -38,8 +35,6 @@ Notes
 from __future__ import annotations
 
 from dataclasses import dataclass
-
-from callosum.cell_grid import REASONING_LEVELS
 
 #: Prefix that marks a Callosum-owned selector id.
 SELECTOR_PREFIX = "callosum:"
@@ -114,16 +109,13 @@ def parse_selector(model: str | None) -> SelectorDecision | None:
     if not pinned_model:
         raise SelectorError(f"missing model in callosum pin {model!r}")
 
-    # Effort is optional and validated identically for both sources: the parser
-    # is stateless, so it gates only on the universe of valid reasoning levels.
-    # Per-model support (does this specific model expose the level?) is enforced
-    # downstream by the catalog (advertise) and dispatch (503), where the
-    # per-model `supported_reasoning_levels` are available.
+    # Effort is optional. Its vocabulary is provider-owned metadata, not parser
+    # policy: accept every non-empty value here and enforce exact per-model
+    # support downstream against the live cell grid. This prevents a stale
+    # client-side tuple from hiding newly released provider capabilities.
     pinned_effort: str | None = None
     if sep:
-        if effort not in REASONING_LEVELS:
-            raise SelectorError(
-                f"unknown reasoning effort {effort!r} in {model!r} (expected one of {list(REASONING_LEVELS)})"
-            )
+        if not effort:
+            raise SelectorError(f"missing reasoning effort in {model!r}")
         pinned_effort = effort
     return SelectorDecision(source=source, pinned_model=pinned_model, pinned_effort=pinned_effort)

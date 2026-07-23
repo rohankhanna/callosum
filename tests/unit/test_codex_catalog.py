@@ -27,6 +27,8 @@ def _template() -> dict:
             {"effort": "medium", "description": "medium"},
             {"effort": "high", "description": "high"},
             {"effort": "xhigh", "description": "xhigh"},
+            {"effort": "max", "description": "max"},
+            {"effort": "ultra", "description": "ultra"},
         ],
         "visibility": "list",
         "priority": 0,
@@ -113,14 +115,27 @@ def test_build_catalog_restamps_identity_and_keeps_rich_fields():
 
 def test_remote_pin_restricts_reasoning_levels_to_baked_effort():
     cat = cc.build_codex_catalog(
-        model_ids=["callosum:remote/model-a0e8:high"],
+        model_ids=["callosum:remote/model-a0d1:ultra"],
         declared_lanes=[],
         template=_template(),
     )
     (entry,) = cat["models"]
     levels = entry["supported_reasoning_levels"]
-    assert [lvl["effort"] for lvl in levels] == ["high"]
-    assert entry["default_reasoning_level"] == "high"
+    assert [lvl["effort"] for lvl in levels] == ["ultra"]
+    assert entry["default_reasoning_level"] == "ultra"
+
+
+def test_future_pinned_effort_is_preserved_when_template_does_not_know_it():
+    cat = cc.build_codex_catalog(
+        model_ids=["callosum:remote/future-model:adaptive-v2"],
+        declared_lanes=[],
+        template=_template(),
+    )
+    (entry,) = cat["models"]
+    assert entry["supported_reasoning_levels"] == [
+        {"effort": "adaptive-v2", "description": "adaptive-v2"},
+    ]
+    assert entry["default_reasoning_level"] == "adaptive-v2"
 
 
 def test_local_pin_restricts_reasoning_levels_to_baked_effort():
@@ -151,6 +166,8 @@ def test_strategy_selector_keeps_full_reasoning_levels():
         "medium",
         "high",
         "xhigh",
+        "max",
+        "ultra",
     ]
 
 

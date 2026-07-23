@@ -109,6 +109,49 @@ def test_remote_pin_with_effort_routes_to_remote(tmp_path: Path) -> None:
         state.close()
 
 
+def test_provider_defined_future_effort_routes_by_live_metadata(tmp_path: Path) -> None:
+    """The parser accepts new effort names; the live cell grid is authority."""
+
+    class _DynamicEffortRemote(InMemoryFakeBackend):
+        @property
+        def model_metadata(self):  # type: ignore[override]
+            from callosum.cell_grid import ModelMetadata
+
+            return {
+                "model-a0d8": ModelMetadata(
+                    slug="model-a0d8",
+                    supported_in_api=True,
+                    visibility="list",
+                    priority=1,
+                    supported_reasoning_levels=("adaptive-v2",),
+                ),
+            }
+
+    remote = _DynamicEffortRemote(
+        id="remote",
+        advertised_models=frozenset({"model-a0d8"}),
+        usage=UsageSnapshot(
+            remaining_fraction=1.0,
+            cooldown_until_ts=None,
+            weekly_exhausted=False,
+            probed_at_ts=0.0,
+        ),
+        health=HealthStatus(available=True, reason="ok"),
+    )
+    state = OperatorState(tmp_path / "op.sqlite")
+    state.set_routing("auto")
+    try:
+        with TestClient(create_app(backends=[remote], operator_state=state)) as client:
+            response = client.post(
+                "/v1/responses",
+                json={"model": "callosum:remote/model-a0d8:adaptive-v2", "input": []},
+            )
+        assert response.status_code == 200, response.text
+        assert response.json()["model"] == "model-a0d8"
+    finally:
+        state.close()
+
+
 def test_local_pin_with_effort_routes_to_local(tmp_path: Path) -> None:
     """A local pin carrying an effort the model supports routes to local
     (symmetric to the remote-pin-with-effort case). The fake's local metadata
@@ -334,9 +377,9 @@ def test_invalid_selectors_return_400(tmp_path: Path) -> None:
     try:
         app = create_app(backends=[remote, local], operator_state=state)
         with TestClient(app) as client:
-            # local/<model>:<effort> is now valid grammar ();
-            # an unsupported effort surfaces as a 503 at dispatch, not a 400.
-            for bad in ("callosum:offline", "callosum:local/model-a0e7:bogus"):
+            # Effort vocabulary is metadata-driven; only malformed selector
+            # structure/policy is rejected by the parser.
+            for bad in ("callosum:offline", "callosum:unknown-strategy"):
                 r = client.post("/v1/responses", json={"model": bad, "input": []})
                 assert r.status_code == 400, f"{bad}: {r.text}"
     finally:

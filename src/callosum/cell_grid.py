@@ -7,7 +7,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-REASONING_LEVELS: tuple[str, ...] = ("low", "medium", "high", "xhigh")
+# Used only when a backend omits per-model reasoning metadata. This is a
+# compatibility fallback, never the set of values a selector or catalog entry
+# is allowed to use: live provider facts always win when present.
+FALLBACK_REASONING_LEVELS: tuple[str, ...] = ("low", "medium", "high", "xhigh")
 
 # Cold-start fallback model list. Used by `build_cells()` when no explicit
 # models are passed. With dynamic model discovery (CodexAuthVaultBackend
@@ -172,7 +175,7 @@ class CellCoverage:
 
 def build_cells(
     models: tuple[str, ...] = DEFAULT_MODELS,
-    reasoning_levels: tuple[str, ...] = REASONING_LEVELS,
+    reasoning_levels: tuple[str, ...] = FALLBACK_REASONING_LEVELS,
     context_windows: dict[str, int] | None = None,
 ) -> list[Cell]:
     """Cross product of (models, reasoning_levels). Order is models-major then
@@ -279,13 +282,13 @@ def live_completion_models_from_metadata(
 def reasoning_levels_for(
     slug: str,
     metadata: dict[str, ModelMetadata],
-    fallback: tuple[str, ...] = REASONING_LEVELS,
+    fallback: tuple[str, ...] = FALLBACK_REASONING_LEVELS,
 ) -> tuple[str, ...]:
     """Return the reasoning effort levels supported by this model.
 
     Prefers `metadata[slug].supported_reasoning_levels` when populated.
-    Falls back to the global REASONING_LEVELS constant when the API
-    didn't include the field (old responses, fallback paths).
+    Falls back to FALLBACK_REASONING_LEVELS only when the API didn't
+    include the field (old responses and cold-start compatibility paths).
     """
     m = metadata.get(slug) if metadata else None
     if m is not None and m.supported_reasoning_levels:
@@ -299,7 +302,7 @@ def build_cells_from_metadata(
     include_hidden: bool = False,
 ) -> list[Cell]:
     """Build the cell grid using per-model `supported_reasoning_levels` from
-    upstream when available; falls back to the global REASONING_LEVELS for
+    upstream when available; falls back to FALLBACK_REASONING_LEVELS for
     any model whose metadata is missing or empty.
 
     Filtering matches `live_completion_models_from_metadata` so the cell
@@ -332,8 +335,8 @@ def coverage_from_db(
     fit a cost model. Cells with zero samples are present in the dict with value 0.
 
     `routing_mode` selects which logged tier to count; 'auto-learning' (organic)
-    is the default. (The exploration-quota enforcer will extend this to count
-    coverage across a lane's organic traffic — .)
+    is the default. (The minimum-coverage-quota enforcer will extend this to
+    count coverage across a lane's organic traffic — .)
     """
     counts: dict[Cell, int] = dict.fromkeys(cells, 0)
     if not usage_log_path.exists():
@@ -368,8 +371,8 @@ def cell_sample_counts(
 
     Counts every status-200 request served by each (model, reasoning_effort)
     cell within window_seconds — regardless of which virtual-model name or
-    routing mode produced it — so the exploration-quota enforcer can compute a
-    cell's share of recent traffic. Lane scope is implicit in cells: pass
+    routing mode produced it — so the minimum-coverage-quota enforcer can
+    compute a cell's share of recent traffic. Lane scope is implicit in cells: pass
     the lane's candidate cells and only those are counted. Cells with no rows
     are present with value 0. (Contrast coverage_from_db, which counts a
     single routing_mode tier over all time.) See .
@@ -404,14 +407,14 @@ def recent_quota_cooldown_cells(
     window_seconds: int,
     now: float | None = None,
 ) -> frozenset[Cell]:
-    """Cells currently in post-timeout exploration cooldown.
+    """Cells currently in post-timeout coverage cooldown.
 
     A cell is cooling when, within window_seconds, its most recent
-    forced-exploration (effective_routing_mode='quota_explore') attempt
+    forced-coverage (effective_routing_mode='min_coverage_quota') attempt
     FAILED (status != 200 — a stall-guard timeout logs status=0; a
     transient upstream failure logs a non-200) AND no successful
     (status=200) row for the cell has arrived since. The cooldown re-arms
-    only on a real completed sample, because the exploration floor's purpose
+    only on a real completed sample, because the coverage floor's purpose
     is coverage and coverage requires a *completed* sample, not a timeout
     (work tracker ````).
 
@@ -428,7 +431,7 @@ def recent_quota_cooldown_cells(
     definition, older than any in-window failure).
 
     Returns the subset of cells currently cooling. Cells never forced
-    (no quota_explore row) are never cooling.
+    (no min_coverage_quota row) are never cooling.
     """
     if not cells or not usage_log_path.exists():
         return frozenset()
@@ -438,7 +441,7 @@ def recent_quota_cooldown_cells(
         fail_rows = conn.execute(
             "SELECT model, reasoning_effort, MAX(ts_start)"
             " FROM requests"
-            " WHERE effective_routing_mode = 'quota_explore'"
+            " WHERE effective_routing_mode = 'min_coverage_quota'"
             "   AND status != 200 AND ts_start >= ?"
             " GROUP BY model, reasoning_effort",
             (cutoff,),

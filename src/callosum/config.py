@@ -127,8 +127,9 @@ class AutoRouterConfig(BaseModel):
 
     The former synthetic background-topper worker (auto-learning-synthetic)
     has been removed (); its only surviving piece is the
-    coverage machinery (CellCoverage / exploration_order), now reused by
-    the per-cell exploration quota. See docs/architecture/exploration_quota.md.
+    coverage machinery (CellCoverage / coverage_order), now reused by
+    the per-cell minimum-coverage quota. See
+    docs/architecture/min_coverage_quota.md.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -157,52 +158,56 @@ class AutoRouterConfig(BaseModel):
     # 4+ swap in BGE embeddings, a k-NN predictor, and the labeler.
     routing: RoutingConfig = Field(default_factory=lambda: RoutingConfig())
 
-    # Per-cell exploration quota (). Every compatible
-    # (model, reasoning_effort) cell, within its lane, must get at least
-    # `quota_floor_pct` of recent traffic; when a cell is below floor a turn is
-    # steered to it, otherwise routing is untouched. See
-    # docs/architecture/exploration_quota.md.
-    exploration_quota_enabled: bool = False
-    # Total exploration budget: the fraction of recent traffic reserved for the
+    # Per-cell minimum-coverage quota (): a deterministic
+    # routing rule, not a self-tuning system. Every compatible
+    # (model, reasoning_effort) cell, within its lane, must receive at least
+    # its even split of a fixed budget over a rolling window, so quality
+    # labels keep accruing across the whole grid instead of decaying on the
+    # cells the normal cost/quality pick would starve. When a cell's recent
+    # usage is below its floor the router steers one turn to the least-used
+    # eligible cell; otherwise routing is untouched. See
+    # docs/architecture/min_coverage_quota.md.
+    min_coverage_quota_enabled: bool = False
+    # Total coverage budget: the fraction of recent traffic reserved for the
     # per-cell floor, split EVENLY across the lane's candidate cells, so each
-    # cell's effective floor is `exploration_budget_pct / n_candidates`. This
-    # keeps total forced exploration bounded by the budget no matter how many
+    # cell's effective floor is `min_coverage_budget_pct / n_candidates`. This
+    # keeps total forced coverage bounded by the budget no matter how many
     # cells the grid grows to — a flat per-cell floor is only feasible while
-    # n <= 1/floor and silently crowds out exploitation as the grid grows.
+    # n <= 1/floor and silently crowds out the normal pick as the grid grows.
     # At n=10 a 0.10 budget reproduces the old flat 1% per cell.
-    exploration_budget_pct: float = 0.10
+    min_coverage_budget_pct: float = 0.10
     # Optional absolute minimum per-cell floor; 0 disables (pure even split).
     # Safety net so the even-split floor never decays to ~0 on very large grids.
     # When set above budget/n for some cell it overrides the even split there
-    # (and total forced exploration can then exceed the budget — opt-in).
-    quota_floor_pct: float = 0.0
+    # (and total forced coverage can then exceed the budget — opt-in).
+    min_coverage_floor_pct: float = 0.0
     # Window over which a cell's share is measured. 30 days.
-    quota_window_seconds: int = 2_592_000
+    min_coverage_window_seconds: int = 2_592_000
 
-    # Exploration feasibility (work tracker ): a cell is forced onto
-    # an exploration turn only when the forward time estimator predicts it can
+    # Coverage feasibility (work tracker ): a cell is forced onto a
+    # coverage turn only when the forward time estimator predicts it can
     # FINISH within the stall-guard first-byte budget — otherwise the forced
     # turn times out (status 0), records no completed sample, and the cell
     # stays under its floor forever, so the even-split quota re-targets it
     # indefinitely (the doom loop). Promotes the time estimator from a soft
-    # scheduling tie-break to a hard constraint on the EXPLORATION path only;
-    # the exploit (cost/quality) path keeps it as a soft tie-break. Cold cells
-    # with no measured latency fit stay eligible (grace) so exploration is not
-    # starved of the cells it most needs to sample. Disable to fall back to the
-    # pre-fix window-fit-only filter (escape hatch). See
+    # scheduling tie-break to a hard constraint on the FORCED-COVERAGE path
+    # only; the normal (cost/quality) selection path keeps it as a soft
+    # tie-break. Cold cells with no measured latency fit stay eligible (grace)
+    # so coverage is not starved of the cells it most needs to sample. Disable
+    # to fall back to the pre-fix window-fit-only filter (escape hatch). See
     # routing/feasibility.py.
-    exploration_feasibility_enabled: bool = True
+    min_coverage_feasibility_enabled: bool = True
     # Post-timeout cooldown (the second half of ): a cell that
-    # just timed out on a forced-exploration turn is skipped by the quota for
+    # just timed out on a forced-coverage turn is skipped by the quota for
     # this window so it is not immediately re-targeted. Re-arms only after the
     # cell records a real completed sample. The backstop to feasibility —
     # bounds a cold cell's wasted forced turns to one. See
     # cell_grid.recent_quota_cooldown_cells.
-    exploration_cooldown_enabled: bool = True
-    # How far back a failed forced-exploration turn keeps a cell cooled. Short
+    min_coverage_cooldown_enabled: bool = True
+    # How far back a failed forced-coverage turn keeps a cell cooled. Short
     # by design — just enough to skip the next selection cycle; the cell
     # re-arms as soon as it completes any sample. 10 min.
-    exploration_cooldown_window_seconds: int = 600
+    min_coverage_cooldown_window_seconds: int = 600
 
     # Temporary guardrail for remote reasoning-cost blowups: once xhigh cells
     # account for this share of recent successful traffic, keep automatic

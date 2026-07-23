@@ -5,7 +5,7 @@ from pathlib import Path
 
 from callosum.cell_grid import (
     DEFAULT_MODELS,
-    REASONING_LEVELS,
+    FALLBACK_REASONING_LEVELS,
     CellCoverage,
     build_cells,
     cell_sample_counts,
@@ -18,10 +18,10 @@ from callosum.cell_grid import (
 
 def test_build_cells_is_cross_product() -> None:
     cells = build_cells()
-    assert len(cells) == len(DEFAULT_MODELS) * len(REASONING_LEVELS)
+    assert len(cells) == len(DEFAULT_MODELS) * len(FALLBACK_REASONING_LEVELS)
     assert len(set(cells)) == len(cells)
     # Models-major ordering: first 4 cells share the first model.
-    assert all(c.model == DEFAULT_MODELS[0] for c in cells[: len(REASONING_LEVELS)])
+    assert all(c.model == DEFAULT_MODELS[0] for c in cells[: len(FALLBACK_REASONING_LEVELS)])
 
 
 def test_least_sampled_picks_lowest_count() -> None:
@@ -74,7 +74,7 @@ def test_cell_sample_counts_windows_and_ignores_routing_mode(tmp_path: Path) -> 
             # Counted regardless of routing_mode (unlike coverage_from_db):
             ("model-a0c3", "low", "auto", 200, now - 10),
             ("model-a0c3", "low", "pass-through", 200, now - 20),
-            ("model-a0c3", "low", "quota_explore", 200, now - 30),
+            ("model-a0c3", "low", "min_coverage_quota", 200, now - 30),
             # Excluded: failure status
             ("model-a0c3", "low", "auto", 500, now - 40),
             # Excluded: outside the window

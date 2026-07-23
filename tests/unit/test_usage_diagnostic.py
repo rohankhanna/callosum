@@ -220,7 +220,7 @@ def test_token_time_series_groups_by_traffic_kind(tmp_path: Path) -> None:
     db = tmp_path / "u.sqlite"
     log = UsageLog(db, capture_bodies=True)
     log.record(_entry(ts_start=1_000.0, prompt_tokens=40, req_payload={"input": "a"}, traffic_kind="operator"))
-    log.record(_entry(ts_start=1_100.0, prompt_tokens=60, req_payload={"input": "b"}, traffic_kind="quota_explore"))
+    log.record(_entry(ts_start=1_100.0, prompt_tokens=60, req_payload={"input": "b"}, traffic_kind="min_coverage_quota"))
     log.record(
         _entry(ts_start=1_200.0, prompt_tokens=20, req_payload={"input": "c"}, traffic_kind="peer_quality_capture")
     )
@@ -230,11 +230,11 @@ def test_token_time_series_groups_by_traffic_kind(tmp_path: Path) -> None:
     assert len(series) == 1
     bucket = series[0]
     assert bucket.traffic_kind_summaries is not None
-    # operator + quota_explore + peer_quality_capture, sorted by label
+    # operator + min_coverage_quota + peer_quality_capture, sorted by label
     assert [k.traffic_kind for k in bucket.traffic_kind_summaries] == [
+        "min_coverage_quota",
         "operator",
         "peer_quality_capture",
-        "quota_explore",
     ]
     # mode axis was not requested -> empty, totals derived from traffic_kind rows
     assert bucket.mode_summaries == ()

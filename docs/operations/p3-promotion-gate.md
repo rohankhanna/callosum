@@ -15,6 +15,12 @@ P3 flips `auto_router.routing.quality_predictor` from `"uniform"` to
 are already live; the flip makes the KNN predictor authoritative for cell
 selection.
 
+The router also exposes `quality_predictor = "cell_majority_prior"` as an
+explicit, non-default candidate. It uses the leave-one-out per-cell majority
+signal identified by the shadow diagnostics; it does not change this gate,
+which remains bound to the KNN metric until the operator explicitly chooses a
+different rollout policy.
+
 The gate exists because **a near-constant label target is unlearnable**: if
 peer-quality labels are near single-class, the KNN predictor collapses to the
 majority class and is *worse than* (or at best equal to) the trivial

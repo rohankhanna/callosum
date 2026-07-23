@@ -12,12 +12,21 @@ def _report(
     beats: bool = False,
     label_distribution: dict[str, int] | None = None,
     knn_ready: bool = True,
+    shadow_candidate: dict | None = None,
 ) -> dict:
     if cells is None:
         # 13 cells, each >= 10 labels by default
         cells = [{"cell": f"c{i}", "labels": 30} for i in range(13)]
     if label_distribution is None:
         label_distribution = {"-1": 10, "0": 39, "1": 1}
+    if shadow_candidate is None:
+        shadow_candidate = {
+            "kind": "cell_majority_prior",
+            "selection": "configured",
+            "exact_rate": 0.78,
+            "lift_over_majority": lift,
+            "beats_majority_baseline": beats,
+        }
     return {
         "knn_shadow_ready": knn_ready,
         "peer_labeled_requests_with_embeddings": embedded,
@@ -30,6 +39,9 @@ def _report(
             "knn_lift_over_majority": lift,
             "beats_majority_baseline": beats,
             "label_distribution": label_distribution,
+            "shadow_comparators": {
+                "shadow_candidate_predictor": shadow_candidate,
+            },
         },
     }
 
@@ -133,3 +145,51 @@ def test_observed_block_reports_lift_and_rates() -> None:
 
 def test_default_sample_limit_uses_full_label_pool() -> None:
     assert DEFAULT_SAMPLE_LIMIT == 0
+
+
+def test_shadow_candidate_gate_is_diagnostic_only() -> None:
+    report = _report(
+        lift=-0.08,
+        beats=False,
+        shadow_candidate={
+            "kind": "cell_majority_prior",
+            "selection": "configured",
+            "exact_rate": 0.49,
+            "lift_over_majority": 0.073,
+            "beats_majority_baseline": True,
+        },
+    )
+    result = evaluate_gate(report)
+
+    assert result["all_met"] is False
+    assert result["blocking_on"] == ["metric"]
+    assert result["observed"]["shadow_candidate_gate"] == {
+        "candidate": "cell_majority_prior",
+        "available": True,
+        "met": True,
+        "exact_rate": 0.49,
+        "lift_over_majority": 0.073,
+        "beats_majority_baseline": True,
+        "threshold_lift": DEFAULT_MIN_LIFT,
+        "reason": None,
+    }
+
+
+def test_shadow_candidate_gate_can_fail_without_blocking_legacy_gate() -> None:
+    report = _report(
+        lift=-0.08,
+        beats=False,
+        shadow_candidate={
+            "kind": "cell_majority_prior",
+            "selection": "configured",
+            "exact_rate": 0.39,
+            "lift_over_majority": -0.01,
+            "beats_majority_baseline": False,
+        },
+    )
+    result = evaluate_gate(report)
+
+    assert result["all_met"] is False
+    assert result["blocking_on"] == ["metric"]
+    assert result["observed"]["shadow_candidate_gate"]["met"] is False
+    assert "does not beat" in result["observed"]["shadow_candidate_gate"]["reason"]

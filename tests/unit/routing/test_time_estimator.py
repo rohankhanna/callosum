@@ -3,8 +3,10 @@ from __future__ import annotations
 import sqlite3
 import time
 from pathlib import Path
+from typing import Any
 
 from callosum.cell_grid import Cell
+from callosum.routing.local_performance import build_local_performance_model
 from callosum.routing.time_estimator import (
     TimeModelProvider,
     TimeUsageEstimator,
@@ -27,7 +29,7 @@ CREATE TABLE requests (
 """
 
 
-def _make_db(path: Path, rows: list[dict]) -> None:
+def _make_db(path: Path, rows: list[dict[str, Any]]) -> None:
     conn = sqlite3.connect(path)
     conn.execute(_SCHEMA)
     conn.executemany(
@@ -50,7 +52,7 @@ def _row(
     latency: float,
     effort: str = "medium",
     status: int = 200,
-) -> dict:
+) -> dict[str, Any]:
     # Split total evenly across prompt/completion; since v1 fits a == b, only
     # the total matters for the slope (and predict(prompt, completion) reduces
     # to a·total + c).
@@ -68,7 +70,7 @@ def _row(
 
 def _linear_rows(
     model: str, *, now: float, m: float, c: float, totals: list[int], effort: str = "medium"
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Rows whose latency lies exactly on m·total + c (residuals ≈ 0)."""
     return [_row(model, now=now, total=t, latency=m * t + c, effort=effort) for t in totals]
 
@@ -233,6 +235,30 @@ def test_cold_start_estimate_is_still_verifiable(tmp_path: Path) -> None:
     assert out.point > 0.0
 
 
+def test_local_performance_model_overrides_generic_local_prior(tmp_path: Path) -> None:
+    est = TimeUsageEstimator(
+        TimeModelProvider(tmp_path / "missing.sqlite"),
+        local_performance_model=lambda cell: build_local_performance_model(
+            model_id=cell.model,
+            quantization="bf16",
+            pool_bytes=121 * 1024**3,
+            free_bytes=94 * 1024**3,
+            weight_bytes=40 * 1024**3,
+            kv_bytes_per_token=2 * 1024**2,
+            activation_bytes=2 * 1024**3,
+            estimated_tokens_per_second=20.0,
+            prefill_ms_per_token=1.5,
+        )
+        if cell.model == "model-a0b6"
+        else None,
+    )
+    inp = EstimateInput(cell=Cell("model-a0b6", "medium"), input_tokens=1000, output=_forecast(1000, 2000))
+    out = est.estimate(inp)
+    assert out.source.startswith("local-underutilized")
+    assert out.verifiable is True
+    assert out.point > 0.0
+
+
 # --------------------------------------------------------------------------- #
 # finalize (no unverifiable / local-zero case)                                #
 # --------------------------------------------------------------------------- #
@@ -275,7 +301,7 @@ def test_finalize_local_is_real_latency_not_zero() -> None:
 def test_aggregate_accuracy_in_sample_is_well_calibrated(tmp_path: Path) -> None:
     now = time.time()
     db = tmp_path / "u.sqlite"
-    rows: list[dict] = []
+    rows: list[dict[str, Any]] = []
     rows += _linear_rows("model-a0e8", now=now, m=2.0, c=100.0, totals=[1000, 2000, 3000] * 14)
     rows += _linear_rows("model-a0e7", now=now, m=1.0, c=500.0, totals=[1500, 2500] * 21)
     _make_db(db, rows)

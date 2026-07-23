@@ -18,7 +18,8 @@ def test_v1_models_returns_canonical_catalog() -> None:
     # Strategy selectors are always present.
     assert {"callosum:auto", "callosum:local-only", "callosum:remote-only"} <= ids
     # These fakes are remote (kind != litellm_gateway), so each model gets one
-    # concrete remote pin per reasoning level (REASONING_LEVELS fallback).
+    # concrete remote pin per reasoning level (compatibility fallback because
+    # these fakes do not supply dynamic provider metadata).
     assert "callosum:remote/model-a0e7:high" in ids
     assert "callosum:remote/model-a0e6:low" in ids
     assert "callosum:remote/model-a0c3:xhigh" in ids
@@ -75,6 +76,38 @@ def test_v1_models_advertises_local_effort_variants() -> None:
     with TestClient(create_app(backends=[effortful, default_only])) as client:
         r = client.get("/v1/models/callosum:local/model-a0d2:high")
     assert r.status_code == 200
+
+
+def test_v1_models_preserves_provider_defined_effort_names() -> None:
+    """Provider metadata, not a local vocabulary, defines selector lanes."""
+
+    class _DynamicEffortBackend(InMemoryFakeBackend):
+        @property
+        def model_metadata(self):  # type: ignore[override]
+            from callosum.cell_grid import ModelMetadata
+
+            return {
+                slug: ModelMetadata(
+                    slug=slug,
+                    supported_in_api=True,
+                    visibility="list",
+                    priority=1,
+                    supported_reasoning_levels=("max", "ultra", "adaptive-v2"),
+                )
+                for slug in self.advertised_models
+            }
+
+    remote = _DynamicEffortBackend(id="remote", advertised_models=frozenset({"model-a0d8"}))
+    local = _DynamicEffortBackend(id="local", advertised_models=frozenset({"local-future"}))
+    local.kind = "litellm_gateway"
+    with TestClient(create_app(backends=[remote, local])) as client:
+        ids = {m["id"] for m in client.get("/v1/models").json()["data"]}
+        assert "callosum:remote/model-a0d8:max" in ids
+        assert "callosum:remote/model-a0d8:ultra" in ids
+        assert "callosum:remote/model-a0d8:adaptive-v2" in ids
+        assert "callosum:local/local-future:adaptive-v2" in ids
+        assert client.get("/v1/models/callosum:remote/model-a0d8:adaptive-v2").status_code == 200
+        assert client.get("/v1/models/callosum:local/local-future:adaptive-v2").status_code == 200
 
 
 def test_v1_models_selector_lookup() -> None:

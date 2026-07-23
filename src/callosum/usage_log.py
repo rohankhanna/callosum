@@ -14,6 +14,40 @@ from typing import Any
 from callosum.codex_quota import CodexQuotaSnapshot
 from callosum.peer_quality import PeerQualityOpinion
 
+
+@dataclass(frozen=True, slots=True)
+class ModelFitProbe:
+    """Result of a one-shot full-context memory-fit probe for one local model.
+
+    content_hash identifies the exact model artifact that was probed so the
+    probe job can skip unchanged models and re-probe after a re-pull or version
+    change. fits_full_context is True iff the host could allocate KV cache
+    for at least one request at the model's full advertised context window
+    (vLLM's Maximum concurrency ... >= 1.0x at that window). Models that do
+    not fit at full context are streamed from remote sources rather than kept
+    local, so this row drives catalog admission.
+    """
+
+    model_id: str
+    content_hash: str
+    advertised_context_tokens: int
+    achievable_context_tokens: int | None
+    max_concurrency: float | None
+    fits_full_context: bool
+    probed_at: float
+
+
+def _model_fit_probe_from_row(row: tuple[Any, ...]) -> ModelFitProbe:
+    return ModelFitProbe(
+        model_id=str(row[0]),
+        content_hash=str(row[1]),
+        advertised_context_tokens=int(row[2]),
+        achievable_context_tokens=None if row[3] is None else int(row[3]),
+        max_concurrency=None if row[4] is None else float(row[4]),
+        fits_full_context=bool(row[5]),
+        probed_at=float(row[6]),
+    )
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -150,6 +184,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_peer_quality_sidecar_candidates_dedup
 CREATE INDEX IF NOT EXISTS idx_peer_quality_sidecar_candidates_pending
     ON peer_quality_sidecar_candidates(status, created_at);
 
+-- One row per local model: the latest full-context memory-fit probe result.
+-- Re-probing after an artifact change overwrites the prior row (PK = model_id);
+-- content_hash records which exact artifact was measured so the probe job
+-- can skip unchanged models and re-probe on re-pull/version change.
+CREATE TABLE IF NOT EXISTS model_fit_probes (
+    model_id TEXT PRIMARY KEY,
+    content_hash TEXT NOT NULL,
+    advertised_context_tokens INTEGER NOT NULL,
+    achievable_context_tokens INTEGER,
+    max_concurrency REAL,
+    fits_full_context INTEGER NOT NULL CHECK (fits_full_context IN (0, 1)),
+    probed_at REAL NOT NULL
+);
 """
 
 # Columns added after the initial v1 schema. ALTER TABLE on each one (guarded
@@ -275,7 +322,7 @@ END""",
     "ALTER TABLE peer_quality_sidecar_candidates ADD COLUMN claimed_by TEXT",
     # Forward-looking policy attribution axis. This records why a request
     # existed or was modified from Callosum's perspective: normal operator
-    # traffic, canary baseline, quota exploration, or peer-quality capture.
+    # traffic, canary baseline, quota-forced coverage, or peer-quality capture.
     # Pre-existing rows stay NULL and should be treated as legacy/unknown.
     "ALTER TABLE requests ADD COLUMN traffic_kind TEXT",
     "CREATE INDEX IF NOT EXISTS idx_requests_traffic_kind ON requests(traffic_kind)",
@@ -1171,6 +1218,111 @@ class UsageLog:
                 (status, candidate_id),
             )
 
+    def upsert_model_fit_probe(
+        self,
+        *,
+        model_id: str,
+        content_hash: str,
+        advertised_context_tokens: int,
+        achievable_context_tokens: int | None,
+        max_concurrency: float | None,
+        fits_full_context: bool,
+        probed_at: float,
+    ) -> None:
+        """Idempotently record the latest full-context fit probe for a model.
+
+        One row per model (PRIMARY KEY model_id); re-probing after an artifact
+        change overwrites the prior row with the new content hash + measurement.
+        """
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO model_fit_probes"
+                " (model_id, content_hash, advertised_context_tokens,"
+                "  achievable_context_tokens, max_concurrency, fits_full_context, probed_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT(model_id) DO UPDATE SET"
+                "  content_hash = excluded.content_hash,"
+                "  advertised_context_tokens = excluded.advertised_context_tokens,"
+                "  achievable_context_tokens = excluded.achievable_context_tokens,"
+                "  max_concurrency = excluded.max_concurrency,"
+                "  fits_full_context = excluded.fits_full_context,"
+                "  probed_at = excluded.probed_at",
+                (
+                    model_id,
+                    content_hash,
+                    int(advertised_context_tokens),
+                    None if achievable_context_tokens is None else int(achievable_context_tokens),
+                    None if max_concurrency is None else float(max_concurrency),
+                    1 if fits_full_context else 0,
+                    float(probed_at),
+                ),
+            )
+
+    def get_model_fit_probe_for_hash(
+        self,
+        *,
+        model_id: str,
+        content_hash: str,
+    ) -> ModelFitProbe | None:
+        """Return the stored probe only if it matches the queried content hash.
+
+        Used by the probe job for dedup: a None return means the artifact
+        changed since the last probe and the model must be re-probed.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT model_id, content_hash, advertised_context_tokens,"
+                " achievable_context_tokens, max_concurrency, fits_full_context, probed_at"
+                " FROM model_fit_probes WHERE model_id = ? AND content_hash = ?",
+                (model_id, content_hash),
+            ).fetchone()
+        return _model_fit_probe_from_row(row) if row is not None else None
+
+    def latest_model_fit_probe(self, *, model_id: str) -> ModelFitProbe | None:
+        """Return the most recent fit probe for a model (any content hash).
+
+        Used by the catalog admission path. A row whose content hash no longer
+        matches the on-disk artifact is stale until the next probe re-measures;
+        the catalog trusts it optimistically in the interim.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT model_id, content_hash, advertised_context_tokens,"
+                " achievable_context_tokens, max_concurrency, fits_full_context, probed_at"
+                " FROM model_fit_probes WHERE model_id = ?",
+                (model_id,),
+            ).fetchone()
+        return _model_fit_probe_from_row(row) if row is not None else None
+
+    def all_model_fit_probes(self) -> dict[str, ModelFitProbe]:
+        """Bulk-load every model's latest fit probe, keyed by model id.
+
+        The local backend caches this for the TTL of its hub refresh so the
+        per-request catalog admission path does not hit SQLite.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT model_id, content_hash, advertised_context_tokens,"
+                " achievable_context_tokens, max_concurrency, fits_full_context, probed_at"
+                " FROM model_fit_probes"
+            ).fetchall()
+        return {
+            probe.model_id: probe
+            for probe in (_model_fit_probe_from_row(r) for r in rows)
+            if probe is not None
+        }
+
+    def last_request_end_ts(self) -> float | None:
+        """Most recent request completion timestamp, or None if no requests.
+
+        Used by the model-probe spawner's idle gate: a probe run is only
+        launched when no request has completed in the configured quiet window.
+        """
+        with self._lock:
+            row = self._conn.execute("SELECT MAX(ts_end) FROM requests").fetchone()
+        if row is None or row[0] is None:
+            return None
+        return float(row[0])
 
     def per_mode_stats_since(self, *, since_ts: float) -> dict[str, dict[str, int]]:
         """Aggregate per-effective_routing_mode counts since `since_ts`.

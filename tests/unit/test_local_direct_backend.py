@@ -22,6 +22,7 @@ from callosum.backend import CallHandle
 from callosum.backends.local_direct import LocalModelRegistryBackend
 from callosum.errors import BackendError
 from callosum.local import ModelEntry
+from callosum.routing.local_performance import LocalPerformanceRegime
 
 pytestmark = pytest.mark.anyio
 
@@ -47,6 +48,31 @@ def _entry(model_id: str, surfaces: tuple[str, ...]) -> ModelEntry:
         context_window=128_000,
         api_surfaces=surfaces,
         enabled=True,
+    )
+
+
+def _catalog_entry(
+    model_id: str,
+    *,
+    quantization: str | None = "bf16",
+    runnable_on_host: bool | None = True,
+    status: str | None = "working",
+    throughput: float | None = 20.0,
+    surfaces: tuple[str, ...] = ("responses",),
+) -> ModelEntry:
+    return ModelEntry(
+        id=model_id,
+        endpoint="http://127.0.0.1:0",
+        runtime="ollama",
+        runtime_model=model_id,
+        family="test",
+        context_window=128_000,
+        api_surfaces=surfaces,
+        enabled=True,
+        local_quantization=quantization,
+        local_runnable_on_host=runnable_on_host,
+        local_status=status,
+        estimated_tokens_per_second=throughput,
     )
 
 
@@ -105,6 +131,84 @@ def test_model_metadata_filtered_same_as_advertised_models() -> None:
     meta = backend.model_metadata
     assert "responses-capable" in meta
     assert "chat-only" not in meta
+
+
+def test_curated_local_models_exposes_admitted_and_rejected_view() -> None:
+    src = _FakeSource(
+        [
+            _catalog_entry("good"),
+            _catalog_entry("quantized", quantization="q4_k_m"),
+            _catalog_entry("chat-only", surfaces=("chat",)),
+        ]
+    )
+    backend = LocalModelRegistryBackend(id="test", source=src)
+
+    curated = {item.id: item for item in backend.curated_local_models()}
+
+    assert curated["good"].admitted is True
+    assert curated["good"].reasons == ()
+    assert curated["quantized"].admitted is False
+    assert curated["quantized"].reasons == ("non-training-precision:q4_k_m",)
+    assert curated["chat-only"].admitted is False
+    assert curated["chat-only"].reasons == ("no-responses-surface",)
+
+
+def test_admitted_local_model_ids_and_reasons_honor_throughput_floor() -> None:
+    src = _FakeSource(
+        [
+            _catalog_entry("fast", throughput=22.0),
+            _catalog_entry("slow", throughput=4.0),
+        ]
+    )
+    backend = LocalModelRegistryBackend(id="test", source=src)
+
+    assert backend.admitted_local_model_ids(min_tokens_per_second=10.0) == frozenset({"fast"})
+    assert backend.local_model_admission_reasons("fast", min_tokens_per_second=10.0) == ()
+    assert backend.local_model_admission_reasons("slow", min_tokens_per_second=10.0) == (
+        "throughput-below-floor:4.000",
+    )
+    assert backend.local_model_admission_reasons("missing") == ("unknown-model",)
+
+
+def test_local_performance_model_uses_hub_evidence() -> None:
+    src = _FakeSource(
+        [
+            ModelEntry(
+                id="responses-capable",
+                endpoint="http://127.0.0.1:0",
+                runtime="ollama",
+                runtime_model="responses-capable",
+                family="test",
+                context_window=128_000,
+                api_surfaces=("responses",),
+                enabled=True,
+                local_quantization="bf16",
+                local_runnable_on_host=True,
+                local_status="working",
+                estimated_tokens_per_second=20.0,
+                local_pool_bytes=24 * 1024**3,
+                local_fit_limit_tokens=8192,
+                local_prefill_ms_per_token=2.0,
+                local_decode_bandwidth_kappa=1.25,
+            )
+        ]
+    )
+    backend = LocalModelRegistryBackend(id="test", source=src)
+    model = backend.local_performance_model("responses-capable")
+    assert model is not None
+    assert model.fit_limit_tokens() == 8192
+    assert model.regime_for(1_000) == LocalPerformanceRegime.UNDERUTILIZED
+    assert model.regime_for(8_150) == LocalPerformanceRegime.POOL_EDGE
+
+
+def test_cell_capabilities_expose_local_gpu_opportunity_cost() -> None:
+    src = _FakeSource([_catalog_entry("fast", throughput=25.0)])
+    backend = LocalModelRegistryBackend(id="test", source=src)
+
+    caps = backend.cell_capabilities("fast")
+
+    assert caps.local_throughput_tps == 25.0
+    assert caps.local_gpu_seconds_per_token == 0.04
 
 
 async def test_responses_stream_forwards_large_tool_request_no_size_cap() -> None:

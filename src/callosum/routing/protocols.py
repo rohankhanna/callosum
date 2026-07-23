@@ -56,6 +56,14 @@ class CellCapabilities:
     wins; bigger only wins when costs tie. Sourced from ollama's
     `general.parameter_count` for local cells; None for cells whose
     backend doesn't surface this.
+    Local-model metadata gives downstream routing stages and diagnostics one
+    stable place to read local runtime evidence. Local cells stay nearly-free
+    relative to remote quota cost, but `local_gpu_seconds_per_token` carries
+    the non-zero GPU opportunity cost inside the admitted local fleet.
+    `local_catalog_admitted` is the curated local-fleet routing signal:
+    True means the local model passed the repo-owned admission rules, False
+    means it is local but rejected, and None means the cell is not from that
+    catalog surface.
     """
 
     context_window: int
@@ -63,6 +71,13 @@ class CellCapabilities:
     supports_tools: bool
     cost_rank: int
     parameter_count: int | None = None
+    local_throughput_tps: float | None = None
+    local_gpu_seconds_per_token: float | None = None
+    local_quantization: str | None = None
+    local_runnable_on_host: bool | None = None
+    local_status: str | None = None
+    local_catalog_admitted: bool | None = None
+    local_admission_reasons: tuple[str, ...] = ()
 
 
 # ---------- learning-side facts (used by the predictor) --------------------

@@ -27,11 +27,18 @@ from callosum.selectors import (
             SelectorDecision(source="local", pinned_model="model-a0d4"),
         ),
         (
-            # Local pins accept an effort symmetric to remote ().
-            # The parser gates only on REASONING_LEVELS; per-model support is
-            # enforced downstream (catalog advertise + dispatch 503).
+            # Local pins accept an effort symmetric to remote ();
+            # per-model support is enforced downstream against live metadata.
             "callosum:local/model-a0d2:high",
             SelectorDecision(source="local", pinned_model="model-a0d2", pinned_effort="high"),
+        ),
+        (
+            "callosum:remote/model-a0d1:ultra",
+            SelectorDecision(source="remote", pinned_model="model-a0d1", pinned_effort="ultra"),
+        ),
+        (
+            "callosum:local/future-model:adaptive-v2",
+            SelectorDecision(source="local", pinned_model="future-model", pinned_effort="adaptive-v2"),
         ),
     ],
 )
@@ -67,16 +74,16 @@ def test_unknown_pin_source_rejected():
         parse_selector("callosum:cloud/model-a0e8")
 
 
-def test_remote_pin_invalid_effort_rejected():
-    with pytest.raises(SelectorError):
-        parse_selector("callosum:remote/model-a0e8:ultra")
-
-
-def test_local_pin_invalid_effort_rejected():
-    # Resolved (): local pins accept an effort, but it must be
-    # a syntactically valid reasoning level — same gate as remote.
-    with pytest.raises(SelectorError):
-        parse_selector("callosum:local/model-a0d4:ultra")
+@pytest.mark.parametrize(
+    "model",
+    [
+        "callosum:remote/model-a0d1:",
+        "callosum:local/future-model:",
+    ],
+)
+def test_empty_effort_rejected(model):
+    with pytest.raises(SelectorError, match="missing reasoning effort"):
+        parse_selector(model)
 
 
 def test_empty_and_missing_model_rejected():
