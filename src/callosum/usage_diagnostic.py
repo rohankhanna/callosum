@@ -1,12 +1,191 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from callosum.usage_log import _walk_text, decompress
+
+# --- Peer-quality (in-band) request stream segmentation ---------------------
+#
+# The retired in-band peer-quality path (`_inject_peer_quality_prompt` in
+# app.py) mutated the live upstream request in three additive ways before
+# dispatch: (a) wrapped each eligible prior assistant text in a provenance tag
+# `<model|effort|reqid>...original...</model|effort|reqid>`, (b) appended a
+# trailing `developer` message carrying the audit instruction, and (c) placed
+# one `<<qop ...>>` marker line per subject inside that instruction. The
+# persisted `request_bodies.req_payload` is the POST-injection body, so these
+# signatures are visible on rows captured while the in-band flag was on.
+#
+# The four segment kinds below decompose such a payload for the first-divergence
+# audit (work tracker ): stable_front (the byte-identical prefix
+# shared with the no-capture arm), provenance_mutated_history (the history block
+# carrying provenance tags), live_tail (the current turn's user/tool input),
+# and peer_opinion_suffix (the appended audit instruction). The sidecar-primary
+# path () does not mutate the user request, so these kinds
+# only appear on in-band rows; non-peer-quality turns keep the original
+# `instructions` / `input` / `message:<role>` taxonomy via `_extract_segments`.
+
+_AUDIT_SENTINEL = "Hidden Callosum quality audit"
+_QOP_MARKER_PREFIX = "<<qop "
+# A provenance tag wraps prior assistant text: `<label>text</label>` where label
+# is `{model}|{request_id}` or `{model}|{effort}|{request_id}`. The backreference
+# ties the closing tag to the opening label; DOTALL so content may span newlines.
+_PROVENANCE_TAG_RE = re.compile(
+    r"<([A-Za-z0-9_.\-]+(?:\|[\w.\-]+){1,2})>.*?</\1>",
+    re.DOTALL,
+)
+
+
+def has_peer_quality_signature(payload: dict[str, Any]) -> bool:
+    """True iff payload carries in-band peer-quality injection artifacts.
+
+    Detects either the audit instruction (by its sentinel phrase or a <<qop)
+    marker anywhere in the instructions or a developer message, or a provenance
+    tag wrapping assistant text. Pure and regex-only; safe on any payload shape.
+    """
+    instructions = _collapse_text(payload.get("instructions"))
+    if isinstance(instructions, str) and (
+        _AUDIT_SENTINEL in instructions or _QOP_MARKER_PREFIX in instructions
+    ):
+        return True
+    for role, text in _iter_message_items(payload):
+        if not text:
+            continue
+        if role == "developer" and _AUDIT_SENTINEL in text:
+            return True
+        if _QOP_MARKER_PREFIX in text or _PROVENANCE_TAG_RE.search(text):
+            return True
+    return False
+
+
+def extract_peer_quality_segments(payload: dict[str, Any]) -> list[tuple[str, str]]:
+    """Decompose an in-band peer-quality payload into the four audit segments.
+
+    Returns (kind, text) pairs in order: stable_front, then
+    provenance_mutated_history, then live_tail, then peer_opinion_suffix
+    (omitting any that are empty). Tag overhead is counted inside
+    provenance_mutated_history because those are the bytes actually sent upstream.
+    """
+    segments: list[tuple[str, str]] = []
+    instructions = _collapse_text(payload.get("instructions"))
+    if isinstance(instructions, str) and instructions:
+        # The audit is appended to `instructions` only in the fallback shape
+        # (no input/messages); otherwise it is a trailing developer message.
+        if _AUDIT_SENTINEL in instructions:
+            idx = instructions.index(_AUDIT_SENTINEL)
+            front = instructions[:idx].rstrip()
+            if front:
+                segments.append(("stable_front", front))
+            segments.append(("peer_opinion_suffix", instructions[idx:]))
+        else:
+            segments.append(("stable_front", instructions))
+
+    items = _iter_message_items(payload)
+    tagged_idxs = [
+        i
+        for i, (role, text) in enumerate(items)
+        if role == "assistant" and bool(_PROVENANCE_TAG_RE.search(text or ""))
+    ]
+    audit_idx = next(
+        (i for i, (role, text) in enumerate(items) if role == "developer" and _AUDIT_SENTINEL in (text or "")),
+        None,
+    )
+
+    if not tagged_idxs and audit_idx is None:
+        # Signature came from the instructions fallback alone; all message items
+        # are stable front.
+        for _, text in items:
+            if text:
+                segments.append(("stable_front", text))
+        return _coalesce_adjacent(segments)
+
+    front_end = tagged_idxs[0] if tagged_idxs else (audit_idx if audit_idx is not None else len(items))
+    for _, text in items[:front_end]:
+        if text:
+            segments.append(("stable_front", text))
+
+    if tagged_idxs:
+        for _, text in items[tagged_idxs[0] : tagged_idxs[-1] + 1]:
+            if text:
+                segments.append(("provenance_mutated_history", text))
+
+    tail_start = tagged_idxs[-1] + 1 if tagged_idxs else front_end
+    tail_end = audit_idx if audit_idx is not None else len(items)
+    for _, text in items[tail_start:tail_end]:
+        if text:
+            segments.append(("live_tail", text))
+
+    if audit_idx is not None:
+        text = items[audit_idx][1]
+        if text:
+            segments.append(("peer_opinion_suffix", text))
+
+    return _coalesce_adjacent(segments)
+
+
+def first_divergence_position(a: bytes, b: bytes) -> int:
+    """Index of the first differing byte between a and b.
+
+    Returns -1 when the byte streams are equal. When one stream is a prefix of
+    the other, returns the length of the shorter stream (the first extra byte).
+    Used to localize where in-band injection first perturbs the upstream stream
+    relative to the no-capture arm.
+    """
+    if a == b:
+        return -1
+    shortest = min(len(a), len(b))
+    for i in range(shortest):
+        if a[i] != b[i]:
+            return i
+    return shortest
+
+
+def provenance_tag_overhead_chars(text: str) -> int:
+    """Total chars of the <label> / </label> provenance wrappers in text.
+
+    The bytes inside these wrappers are pure injection overhead on the upstream
+    stream; the inner text is the original assistant content. Complements the
+    injected_tokens column (which is the token-level additive cost).
+    """
+    overhead = 0
+    for match in _PROVENANCE_TAG_RE.finditer(text or ""):
+        label = match.group(1)
+        overhead += 2 * len(label) + len("<></>")  # `<label>` + `</label>`
+    return overhead
+
+
+def _iter_message_items(payload: dict[str, Any]) -> list[tuple[str, str]]:
+    """Normalize Responses input / Chat messages into (role, text)."""
+    items = payload.get("input") if isinstance(payload.get("input"), list) else None
+    if items is None:
+        items = payload.get("messages") if isinstance(payload.get("messages"), list) else None
+    if items is None:
+        return []
+    out: list[tuple[str, str]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "unknown")
+        text = _collapse_text(item.get("content"))
+        out.append((role, text))
+    return out
+
+
+def _coalesce_adjacent(segments: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Merge runs of adjacent same-kind segments into one (newline-joined)."""
+    out: list[tuple[str, str]] = []
+    for kind, text in segments:
+        if not text:
+            continue
+        if out and out[-1][0] == kind:
+            out[-1] = (kind, out[-1][1] + "\n" + text)
+        else:
+            out.append((kind, text))
+    return out
 
 
 @dataclass(frozen=True, slots=True)
@@ -261,7 +440,10 @@ def _segment_summaries(
     payload = _decode_request_payload(req_payload_blob)
     if payload is None:
         return ()
-    segments = _extract_segments(payload)
+    if has_peer_quality_signature(payload):
+        segments = extract_peer_quality_segments(payload)
+    else:
+        segments = _extract_segments(payload)
     if not segments:
         return ()
     total_chars = sum(len(text) for _, text in segments)

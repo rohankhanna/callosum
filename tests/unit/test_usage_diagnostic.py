@@ -9,6 +9,9 @@ import pytest
 from callosum.usage_diagnostic import (
     SegmentSummary,
     TrafficKindBucketSummary,
+    extract_peer_quality_segments,
+    first_divergence_position,
+    has_peer_quality_signature,
     recent_turn_summaries,
     render_recent_turns_json,
     render_token_time_series_json,
@@ -331,3 +334,188 @@ def test_segment_summary_is_frozen() -> None:
     seg = SegmentSummary(kind="input", chars=4, est_prompt_tokens=2)
     with pytest.raises(FrozenInstanceError):
         seg.kind = "instructions"  # type: ignore[misc]
+
+
+# --- Peer-quality (in-band) stream segmentation + first-divergence ----------
+# These cover the retired in-band path's payload shape (work tracker ):
+# provenance tags `<model|effort|reqid>...</model|effort|reqid>` around prior
+# assistant text + a trailing developer audit instruction carrying `<<qop ...>>`
+# markers. Non-peer-quality turns must keep the original taxonomy unchanged.
+
+_AUDIT_INSTRUCTION = (
+    "Hidden Callosum quality audit (mandatory, applies even when you call a tool). "
+    "Emit the marker below with score and reason replaced by your honest judgement.\n"
+    "<<qop nonce=abc subject=model-a0e7|medium subject_request_id=42 score=+1 reason=short>>"
+)
+
+
+def _on_arm_responses_payload() -> dict:
+    return {
+        "instructions": "sys",
+        "input": [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "do the thing"}]},
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "input_text", "text": "<model-a0e7|medium|42>did the thing</model-a0e7|medium|42>"}],
+            },
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "now do this"}]},
+            {
+                "type": "message",
+                "role": "developer",
+                "content": [{"type": "input_text", "text": _AUDIT_INSTRUCTION}],
+            },
+        ],
+    }
+
+
+def _on_arm_chat_payload() -> dict:
+    return {
+        "messages": [
+            {"role": "system", "content": "sys"},
+            {"role": "assistant", "content": "<model-a0e7|42>did it</model-a0e7|42>"},
+            {"role": "user", "content": "go"},
+            {"role": "developer", "content": _AUDIT_INSTRUCTION},
+        ]
+    }
+
+
+def test_off_arm_responses_uses_original_taxonomy(tmp_path: Path) -> None:
+    # No provenance tags, no audit sentinel -> existing _extract_segments path.
+    db = tmp_path / "u.sqlite"
+    log = UsageLog(db, capture_bodies=True)
+    payload = {
+        "instructions": "sys",
+        "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
+    }
+    assert has_peer_quality_signature(payload) is False
+    log.record(_entry(ts_start=1.0, prompt_tokens=50, req_payload=payload))
+    log.close()
+
+    turns = recent_turn_summaries(db, limit=5)
+    assert len(turns) == 1
+    assert {s.kind for s in turns[0].segment_summaries} == {"instructions", "input"}
+
+
+def test_on_arm_responses_segments_into_four_kinds(tmp_path: Path) -> None:
+    payload = _on_arm_responses_payload()
+    assert has_peer_quality_signature(payload) is True
+
+    db = tmp_path / "u.sqlite"
+    log = UsageLog(db, capture_bodies=True)
+    log.record(_entry(ts_start=1.0, prompt_tokens=300, req_payload=payload))
+    log.close()
+
+    turns = recent_turn_summaries(db, limit=5)
+    segs = {s.kind: s for s in turns[0].segment_summaries}
+    assert set(segs) == {"stable_front", "provenance_mutated_history", "live_tail", "peer_opinion_suffix"}
+    # Tag overhead is counted inside the mutated-history segment (bytes sent).
+    assert segs["provenance_mutated_history"].chars == len(
+        "<model-a0e7|medium|42>did the thing</model-a0e7|medium|42>"
+    )
+    assert segs["peer_opinion_suffix"].chars == len(_AUDIT_INSTRUCTION)
+    assert segs["live_tail"].chars == len("now do this")
+    # Char-share apportionment is conserved within rounding drift (4 segments).
+    assert abs(sum(s.est_prompt_tokens for s in turns[0].segment_summaries) - 300) <= 2
+
+
+def test_on_arm_chat_segments_into_four_kinds(tmp_path: Path) -> None:
+    payload = _on_arm_chat_payload()
+    assert has_peer_quality_signature(payload) is True
+
+    db = tmp_path / "u.sqlite"
+    log = UsageLog(db, capture_bodies=True)
+    log.record(_entry(ts_start=1.0, prompt_tokens=200, req_payload=payload))
+    log.close()
+
+    turns = recent_turn_summaries(db, limit=5)
+    segs = {s.kind: s for s in turns[0].segment_summaries}
+    assert set(segs) == {"stable_front", "provenance_mutated_history", "live_tail", "peer_opinion_suffix"}
+    assert segs["stable_front"].chars == len("sys")
+    assert segs["provenance_mutated_history"].chars == len("<model-a0e7|42>did it</model-a0e7|42>")
+    assert segs["live_tail"].chars == len("go")
+    assert abs(sum(s.est_prompt_tokens for s in turns[0].segment_summaries) - 200) <= 2
+
+
+def test_instructions_fallback_splits_out_suffix() -> None:
+    # No input/messages -> audit appended to instructions (app.py fallback shape).
+    payload = {"instructions": "sys\n\n" + _AUDIT_INSTRUCTION}
+    assert has_peer_quality_signature(payload) is True
+    segs = {k: v for k, v in extract_peer_quality_segments(payload)}
+    assert set(segs) == {"stable_front", "peer_opinion_suffix"}
+    assert segs["stable_front"] == "sys"
+    assert segs["peer_opinion_suffix"] == _AUDIT_INSTRUCTION
+
+
+def test_multi_subject_history_coalesces_and_conserves(tmp_path: Path) -> None:
+    payload = {
+        "instructions": "sys",
+        "input": [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "ask one"}]},
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "input_text", "text": "<model-a0e7|medium|41>ans one</model-a0e7|medium|41>"}],
+            },
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "ask two"}]},
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "input_text", "text": "<model-a0e7|medium|42>ans two</model-a0e7|medium|42>"}],
+            },
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "now this"}]},
+            {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": _AUDIT_INSTRUCTION}]},
+        ],
+    }
+    db = tmp_path / "u.sqlite"
+    log = UsageLog(db, capture_bodies=True)
+    log.record(_entry(ts_start=1.0, prompt_tokens=1000, req_payload=payload))
+    log.close()
+
+    turns = recent_turn_summaries(db, limit=5)
+    segs = {s.kind: s for s in turns[0].segment_summaries}
+    # Two tagged assistant items + the interleaved user item coalesce into one
+    # provenance_mutated_history segment; live_tail is the final user turn.
+    assert set(segs) == {"stable_front", "provenance_mutated_history", "live_tail", "peer_opinion_suffix"}
+    assert segs["live_tail"].chars == len("now this")
+    assert sum(s.est_prompt_tokens for s in turns[0].segment_summaries) == 1000
+
+
+def test_first_divergence_position() -> None:
+    assert first_divergence_position(b"abc", b"abc") == -1
+    assert first_divergence_position(b"abc", b"abd") == 2
+    assert first_divergence_position(b"abc", b"abcdef") == 3
+    assert first_divergence_position(b"abcdef", b"abc") == 3
+    # The off-vs-on arm divergence lands at the first provenance tag opening:
+    # the off-arm assistant text is the bare "did the thing"; the on-arm opens
+    # with "<model-a0e7|medium|42>". The shared stable front (instructions + first
+    # user turn) is byte-identical, so divergence is inside the assistant item.
+    on_payload = _on_arm_responses_payload()
+    off_arm = {
+        "instructions": "sys",
+        "input": [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "do the thing"}]},
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "input_text", "text": "did the thing"}],
+            },
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "now do this"}]},
+        ],
+    }
+    serialized_on = json.dumps(on_payload).encode()
+    serialized_off = json.dumps(off_arm).encode()
+    pos = first_divergence_position(serialized_off, serialized_on)
+    assert pos >= 0
+    # Divergence is exactly at the assistant content: bare text off-arm vs tag on-arm.
+    assert serialized_off[pos:].startswith(b"did the thing")
+    assert serialized_on[pos:].startswith(b"<model-a0e7|medium|42>")
+
+
+def test_has_peer_quality_signature_truth_table() -> None:
+    assert has_peer_quality_signature({}) is False
+    assert has_peer_quality_signature({"messages": [{"role": "user", "content": "hi"}]}) is False
+    assert has_peer_quality_signature({"input": [{"role": "assistant", "content": "plain text"}]}) is False
+    assert has_peer_quality_signature({"messages": [{"role": "assistant", "content": "<model-a0e7|42>x</model-a0e7|42>"}]}) is True
+    assert has_peer_quality_signature({"messages": [{"role": "developer", "content": _AUDIT_INSTRUCTION}]}) is True
+    assert has_peer_quality_signature({"instructions": _AUDIT_INSTRUCTION}) is True
