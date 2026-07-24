@@ -1525,10 +1525,18 @@ def _compress(data: bytes | None) -> bytes | None:
 
 
 def decompress(blob: bytes | None) -> bytes | None:
-    """Inverse of `_compress`. Public so analysis tools can read bodies back."""
+    """Inverse of `_compress`. Public so analysis tools can read bodies back.
+
+    Returns None for a missing or corrupt blob rather than raising
+    zlib.error; a single bad row must not crash a whole read-only
+    diagnostic/report. Callers treat None as "no body captured".
+    """
     if blob is None:
         return None
-    return zlib.decompress(blob)
+    try:
+        return zlib.decompress(blob)
+    except zlib.error:
+        return None
 
 
 def _is_reset_crossover(before: CodexQuotaSnapshot | None, after: CodexQuotaSnapshot | None) -> bool:
