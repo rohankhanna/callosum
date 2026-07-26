@@ -18,11 +18,14 @@ Two CLI surfaces we consume:
     deployment profile). Phase 5 only consumes the basics (context
     window). Future phases can use the rest.
 
-Subprocess calls are cached with a TTL — the user changes their model
-garage on the order of minutes/hours, not seconds, so a 60s refresh
-window is plenty. Failures are logged and treated as "no models" —
-callosum continues operating with whatever Codex backends are
-configured.
+Subprocess calls are cached **load-once**: the garage changes on the
+order of minutes/hours (only when the operator adds/removes a model —
+a restart event, not steady state), so a healthy snapshot is served
+indefinitely after the first fetch and re-fetched only on an explicit
+`force=True` (startup pass, boot resync, operator reload). A *failed*
+snapshot (local-llm unreachable) still retries on read, throttled to
+once per `refresh_s`, so a cold boot recovers without a restart while a
+down local-llm isn't hammered on every lookup. Restart always reloads.
 """
 
 from __future__ import annotations
@@ -39,6 +42,10 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+#: Max age before a *failed* (unhealthy) cache retries. A healthy snapshot
+#: never auto-expires — it is re-fetched only via `force=True`. Kept as a
+#: throttle so a down local-llm isn't hammered on every read while a cold
+#: boot still recovers on the next refresh tick.
 DEFAULT_REFRESH_S = 60.0
 DEFAULT_CLI_TIMEOUT_S = 15.0
 
@@ -234,9 +241,14 @@ class _CacheState:
 class LocalModelRegistrySource:
     """Thin client over the local LLM gateway CLI.
 
-    Default behavior: subprocess-call `local-llm models local --json`
-    on a 60s TTL. Callers (the LocalModelRegistryBackend) consume the parsed
-    ModelEntry list for advertised_models and capability lookup.
+    Load-once cache: the first read shells out to `local-llm models local
+    --json` (and `local-llm capabilities --json`); subsequent reads return
+    the same healthy snapshot indefinitely. The garage changes on the
+    order of minutes/hours — a restart event, not steady state — so no
+    TTL-driven auto-refresh. `force=True` re-fetches (startup pass,
+    `_catalog_boot_resync`, operator reload); a *failed* fetch retries on
+    read at most once per `refresh_s` so a cold boot recovers without a
+    restart while a down local-llm isn't hammered.
 
     The CLI path is configurable for tests; default uses the
     `local-llm` executable on PATH.
@@ -255,6 +267,8 @@ class LocalModelRegistrySource:
         # `["uv", "run", "python", "-m", "local.cli"]` for
         # development installs).
         self._cli = cli_command if cli_command is not None else ["local-llm"]
+        # Throttle for retrying a *failed* (unhealthy) cache; a healthy
+        # snapshot never auto-expires.
         self._refresh_s = refresh_s
         self._timeout_s = timeout_s
         self._env = dict(env) if env is not None else None
@@ -279,27 +293,43 @@ class LocalModelRegistrySource:
         return proc.returncode == 0
 
     def models(self, *, force: bool = False) -> list[ModelEntry]:
-        """Return the parsed model list. Cached for `refresh_s`; pass
-        force=True to bypass the cache (used by tests + by the periodic
-        refresh hook)."""
+        """Return the parsed model list.
+
+        Load-once: once a healthy snapshot exists it is returned indefinitely
+        (no TTL auto-refresh — the garage changes on restart, not steady
+        state). `force=True` bypasses the cache and re-fetches (startup pass,
+        boot resync, operator reload). A *failed* (unhealthy) snapshot still
+        retries on read, throttled to once per `refresh_s`, so a cold boot
+        recovers without a restart while a down local-llm isn't hammered.
+        """
         with self._lock:
             now = time.time()
-            if not force and (now - self._cache.fetched_at) < self._refresh_s and self._cache.healthy:
-                return list(self._cache.models)
+            cache = self._cache
+            if not force:
+                if cache.healthy:
+                    return list(cache.models)
+                # Unhealthy: retry at most once per refresh_s.
+                if (now - cache.fetched_at) < self._refresh_s:
+                    return list(cache.models)
             self._cache = self._fetch_locked()
             return list(self._cache.models)
 
     def capabilities(self, *, force: bool = False) -> dict[str, CapabilityRow]:
         """Return the parsed capability-matrix rows keyed by model id.
 
-        Uses the same TTL and fetch path as `models()`, because the two CLI
-        surfaces describe the same local fleet and should stay coherent within
-        one cache cycle.
+        Same load-once semantics as `models()`: the two CLI surfaces describe
+        the same local fleet and share one cache cycle, so a healthy snapshot
+        is served indefinitely and only `force=True` or a failed-cache retry
+        re-fetches.
         """
         with self._lock:
             now = time.time()
-            if not force and (now - self._cache.fetched_at) < self._refresh_s and self._cache.healthy:
-                return dict(self._cache.capabilities)
+            cache = self._cache
+            if not force:
+                if cache.healthy:
+                    return dict(cache.capabilities)
+                if (now - cache.fetched_at) < self._refresh_s:
+                    return dict(cache.capabilities)
             self._cache = self._fetch_locked()
             return dict(self._cache.capabilities)
 

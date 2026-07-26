@@ -104,7 +104,10 @@ def test_models_handles_malformed_json(monkeypatch) -> None:
     assert models == []
 
 
-def test_models_caches_until_refresh_ttl(monkeypatch) -> None:
+def test_models_loads_once_then_never_expires(monkeypatch) -> None:
+    """A healthy snapshot is returned indefinitely: no TTL auto-refresh.
+    Reads far past `refresh_s` still serve the cached snapshot without a
+    re-fetch."""
     payload = _make_payload(
         [
             {
@@ -120,11 +123,38 @@ def test_models_caches_until_refresh_ttl(monkeypatch) -> None:
         ]
     )
     calls = _stub_subprocess(monkeypatch, payload)
+    clock = [0.0]
+
+    def fake_time():
+        return clock[0]
+
+    monkeypatch.setattr("callosum.local.time.time", fake_time)
     src = LocalModelRegistrySource(refresh_s=60.0)
-    src.models()  # first call: fetches
-    src.models()  # second call within TTL: cached
+    src.models()  # first call: fetches (models + capabilities)
+    clock[0] = 10_000.0  # far past refresh_s
+    src.models()  # healthy snapshot stays valid forever
     src.models()
-    assert len(calls) == 2
+    assert len(calls) == 2  # one fetch only
+
+
+def test_models_unhealthy_cache_retries_after_refresh_s(monkeypatch) -> None:
+    """A failed (unhealthy) snapshot retries on read, but throttled to once
+    per `refresh_s` so a down local-llm isn't hammered on every lookup."""
+    calls = _stub_subprocess(monkeypatch, "", returncode=1)
+    clock = [1_000.0]
+
+    def fake_time():
+        return clock[0]
+
+    monkeypatch.setattr("callosum.local.time.time", fake_time)
+    src = LocalModelRegistrySource(refresh_s=60.0)
+    assert src.models() == []  # first read: fetches, unhealthy
+    first_fetches = len(calls)
+    src.models()  # within refresh_s: throttled, no re-fetch
+    assert len(calls) == first_fetches
+    clock[0] = 1_100.0  # past refresh_s: retries
+    assert src.models() == []
+    assert len(calls) == 2 * first_fetches
 
 
 def test_models_force_bypasses_cache(monkeypatch) -> None:

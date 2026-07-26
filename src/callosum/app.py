@@ -29,6 +29,7 @@ from callosum.auth import (
 )
 from callosum.auth_db import ApiKey, Session
 from callosum.backend import Backend, CallHandle, HealthStatus
+from callosum.caches import TtlCache
 from callosum.cell_grid import (
     VIRTUAL_MODELS,
     Cell,
@@ -1569,6 +1570,99 @@ def create_app(
     async def health() -> dict[str, str]:
         return {"status": "ok", "version": __version__}
 
+    # /status observability: TTL-memoized expensive sub-reports ----------------
+    # peer_quality_shadow_report (a leave-one-out kNN eval over the requests
+    # DB), the min-coverage-quota report (7-day per-cell counts), and the
+    # rolling per-mode stats (1h/6h/24h windows) each scan the multi-GB
+    # requests DB on every /status call. The The Menubar Indicator menubar polls /status
+    # every ~30s, so a per-call recompute drives a recurring ~1-2s multi-core
+    # burst — the residual baseline burn. These are slow-drifting
+    # observability metrics, so memoize the lot for a short TTL: the first
+    # poll after the TTL recomputes, the rest reuse the last snapshot. Live
+    # fields (backend health/usage/quota, wiring config, pinned, sessions)
+    # are NOT cached and stay fresh; the routing-enforcement uses of
+    # cell_sample_counts (the xhigh/quota coverage checks further down) are
+    # also NOT cached and stay live. TTL is env-tunable.
+    _status_obs_cache = TtlCache(
+        float(os.environ.get("CALLOSUM_STATUS_OBS_TTL_S", "120"))
+    )
+
+    def _compute_status_obs(log: UsageLog) -> dict[str, Any]:
+        report: dict[str, Any] = {}
+        try:
+            from callosum.routing.labeler.peer_quality import peer_quality_shadow_report
+
+            report["peer_quality_shadow"] = peer_quality_shadow_report(log.path)
+        except Exception:
+            logger.exception("status: peer-quality shadow report failed")
+            report["peer_quality_shadow"] = {"available": False, "reason": "report_failed"}
+        # Per-cell minimum-coverage-quota coverage over the LIVE cell grid the
+        # router actually uses (upstream-advertised models, version-ranked),
+        # not the static DEFAULT_MODELS.
+        quota_block: dict[str, Any] = {"enabled": auto_cfg.min_coverage_quota_enabled}
+        try:
+            from callosum.routing.quota import min_coverage_quota_report
+
+            _grid = _live_cells()
+            _cov = cell_sample_counts(
+                log.path,
+                _grid,
+                window_seconds=auto_cfg.min_coverage_window_seconds,
+            )
+            quota_block["min_coverage_budget_pct"] = auto_cfg.min_coverage_budget_pct
+            quota_block.update(
+                min_coverage_quota_report(
+                    _grid,
+                    _cov,
+                    floor_pct=effective_floor_pct(
+                        len(_grid),
+                        budget_pct=auto_cfg.min_coverage_budget_pct,
+                        min_floor_pct=auto_cfg.min_coverage_floor_pct,
+                    ),
+                )
+            )
+        except Exception:
+            logger.exception("status: min-coverage-quota report failed")
+            quota_block["available"] = False
+        report["min_coverage_quota"] = quota_block
+        # Rolling per-mode failure rates (1h/6h/24h). `now_ts` is captured at
+        # compute time, so a cached snapshot serves windows anchored to the
+        # last recompute — acceptable for observability over windows this long.
+        windows: dict[str, dict[str, dict[str, Any]]] = {}
+        try:
+            now_ts = time.time()
+            for label, window_s in (
+                ("1h", 3600.0),
+                ("6h", 6 * 3600.0),
+                ("24h", 24 * 3600.0),
+            ):
+                stats = log.per_mode_stats_since(since_ts=now_ts - window_s)
+                annotated: dict[str, dict[str, Any]] = {}
+                for mode, counts in stats.items():
+                    total = counts["total"]
+                    failure_rate = counts["failure"] / total if total > 0 else None
+                    annotated[mode] = {
+                        **counts,
+                        "failure_rate": failure_rate,
+                    }
+                windows[label] = annotated
+        except Exception:
+            logger.exception("status: per-mode stats failed")
+        report["canary_windows"] = windows
+        return report
+
+    def _status_obs_report() -> dict[str, Any] | None:
+        # None when there is no usage log — callers skip the cached blocks,
+        # matching the prior `if usage_log is not None` guards.
+        if usage_log is None:
+            return None
+        cached = _status_obs_cache.get()
+        if cached is not None:
+            return cached  # type: ignore[no-any-return]
+        report = _compute_status_obs(usage_log)
+        _status_obs_cache.set(report)
+        return report
+
     @app.get("/status")
     async def status() -> dict[str, Any]:
         entries: list[dict[str, Any]] = []
@@ -1630,47 +1724,13 @@ def create_app(
                 "window_seconds": auto_cfg.xhigh_cap_window_seconds,
             },
         }
-        if usage_log is not None:
-            try:
-                from callosum.routing.labeler.peer_quality import peer_quality_shadow_report
-
-                router_block["peer_quality_shadow"] = peer_quality_shadow_report(usage_log.path)
-            except Exception:
-                logger.exception("status: peer-quality shadow report failed")
-                router_block["peer_quality_shadow"] = {
-                    "available": False,
-                    "reason": "report_failed",
-                }
-            # Per-cell minimum-coverage-quota coverage: how full each cell is vs
-            # its floor and bootstrap progress (). Always
-            # reported so an operator can see coverage even before enabling
-            # forcing.
-            quota_block: dict[str, Any] = {"enabled": auto_cfg.min_coverage_quota_enabled}
-            try:
-                from callosum.routing.quota import min_coverage_quota_report
-
-                # Report over the LIVE cell grid the router actually uses
-                # (upstream-advertised models, version-ranked), not the static
-                # DEFAULT_MODELS — so de-listed models (e.g. model-a0e6) drop out
-                # and current ones (model-a0e8) appear, matching what gets routed.
-                _grid = _live_cells()
-                _cov = cell_sample_counts(usage_log.path, _grid, window_seconds=auto_cfg.min_coverage_window_seconds)
-                quota_block["min_coverage_budget_pct"] = auto_cfg.min_coverage_budget_pct
-                quota_block.update(
-                    min_coverage_quota_report(
-                        _grid,
-                        _cov,
-                        floor_pct=effective_floor_pct(
-                            len(_grid),
-                            budget_pct=auto_cfg.min_coverage_budget_pct,
-                            min_floor_pct=auto_cfg.min_coverage_floor_pct,
-                        ),
-                    )
-                )
-            except Exception:
-                logger.exception("status: min-coverage-quota report failed")
-                quota_block["available"] = False
-            router_block["min_coverage_quota"] = quota_block
+        # Expensive observability aggregates (peer-quality shadow, min-coverage
+        # quota, per-mode windows) come from the TTL cache above so the The Menubar Indicator
+        # 30s poll doesn't re-scan the requests DB on every call.
+        obs = _status_obs_report()
+        if obs is not None:
+            router_block["peer_quality_shadow"] = obs["peer_quality_shadow"]
+            router_block["min_coverage_quota"] = obs["min_coverage_quota"]
         # Canary baseline block: current effective percent given live
         # quota state, plus rolling per-mode failure rates over 1h /
         # 6h / 24h windows. The dev loop polls this same data via SQL
@@ -1705,32 +1765,11 @@ def create_app(
                 _q_pct = _w
         canary_block["effective_percent"] = canary_scheduler.effective_percent(quota_used_percent=_q_pct)
         canary_block["quota_used_percent"] = _q_pct
-        # Rolling per-mode stats. Skipped when usage_log is absent —
-        # /status still returns a partial canary block, just without
-        # the windows.
-        if usage_log is not None:
-            now_ts = time.time()
-            canary_block["windows"] = {}
-            for label, window_s in (
-                ("1h", 3600.0),
-                ("6h", 6 * 3600.0),
-                ("24h", 24 * 3600.0),
-            ):
-                stats = usage_log.per_mode_stats_since(
-                    since_ts=now_ts - window_s,
-                )
-                # Compute failure_rate per mode for at-a-glance reading.
-                # rate is None when total = 0 so consumers can
-                # distinguish "0% failure" from "no data."
-                annotated: dict[str, dict[str, Any]] = {}
-                for mode, counts in stats.items():
-                    total = counts["total"]
-                    failure_rate = counts["failure"] / total if total > 0 else None
-                    annotated[mode] = {
-                        **counts,
-                        "failure_rate": failure_rate,
-                    }
-                canary_block["windows"][label] = annotated
+        # Rolling per-mode stats windows: served from the same TTL cache.
+        # Skipped when usage_log is absent — /status still returns a partial
+        # canary block, just without the windows.
+        if obs is not None:
+            canary_block["windows"] = obs["canary_windows"]
         return {
             "backends": entries,
             "pinned": pin_state.get(),
