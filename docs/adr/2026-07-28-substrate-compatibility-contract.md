@@ -6,10 +6,51 @@ Grounded by: P1 inventory (`docs/investigations/2026-07-28-shim-reduction-p1-inv
 
 ## Status
 
+**Accepted — operator sign-off 2026-07-31.** The operator reviewed the full ADR
+(primary decision, the seven contract rules + capability fields, the Class A/B
+split, the P3 priority-order rewrite, and callosum's permanent owned surface)
+and approved it. This lifts the per-node operator-approval gate for the program:
+P3 (auto-dev rewrite) is unblocked and ready to start; P4 (upstream handoff) and
+P5 (shim retirement) remain parked on their dependency/substrate conditions, not
+on approval. Still design-only — no behavior change ships with this ADR itself;
+it is the contract the P3/P4/P5 nodes execute against.
+
 Proposed — design only. No behavior change ships with this ADR. It defines the
 boundary the P3 auto-dev rewrite, P4 upstream handoff, and P5 shim retirement
 execute against. Implementation is gated on operator approval of P3/P4/P5
 per-node; this ADR is the contract those nodes satisfy.
+
+**Amended 2026-07-31:** Accuracy corrections after a read-only gap analysis of
+local LLM gateway's responses-proxy code (no behavior change — the ADR remains
+design-only). (1) §3 corrected the CLI-shape attribution: `api_surfaces` (and
+the new `verified_chat_translation`) live in `local-llm models local --json`
+(`cli.py:3103,3245`), **not** in `local-llm capabilities --json` (`{"rows":[...]}`);
+the capability-matrix shape carries `supports_tools`/`modalities`/`throughput`.
+(2) §2 invariant 2 (`output[]` non-empty) downgraded from ✅ to **partial**
+(both paths append conditionally; an empty turn yields `output: []`). (3) §2
+invariant 3 (ordering) downgraded from ✅ to **divergent across paths** — the
+stream and non-stream builders are independent reimplementations that order
+items differently. These match the gap analysis's evidence
+(`sse.py:468,505,690-753`; `capability_matrix.py:494,510`). (4) "What
+local LLM gateway already owns" corrected: the in-band reasoning splitter
+(`_InbandReasoningSplitter`) is **not in committed history** — it lives on the
+in-flight `the compatibility branch` branch (live via editable
+install, unmerged), so the "substrate already owns the in-band strip" claim is
+contingent on that branch merging; stale `sse.py:222` citation corrected to
+stream `sse.py:~414` / non-stream `sse.py:~704`.
+
+**Amended 2026-07-29:** §5 and Consequences updated to make the Class A (generic
+protocol — consume/retire, substrates own it) vs Class B (model-specific quirk —
+callosum authors as temporary debt with upstream owner + close condition)
+distinction explicit, add `author_temporary_adapter` as the Class-B default
+reflex, demote `file_upstream_gap` to metadata on that adapter, and fix the
+§5/Consequences action-set inconsistency. Additive clarification only; no
+behavior change. The amendment reconciles the ADR with the "No Consumer Shims
+For Controlled Libraries" hard rule (Class A = the controlled-library shim
+case → retire upstream; Class B = the temporary-exception case → allowed only
+with the expiry + upstream owner + removal plan the amendment requires) and
+preserves auto-dev's "adapt any chosen SOTA model" property, which the prior
+§5 "do not author a transform" stance would have silently removed.
 
 ## Context
 
@@ -22,8 +63,17 @@ surveys ground the contract in reality rather than aspiration:
 ### What local LLM gateway already owns (responses-proxy)
 - Serves `/v1/responses` natively (`responses_proxy/http_app.py:75`).
 - Strips in-band reasoning tags on **both** stream + non-stream paths
-  (`translation.py:119` `InbandReasoningSplitter`; `sse.py:222,693`) — the
-  original of callosum's ported copy, applied unconditionally.
+  (`translation.py:119` `_InbandReasoningSplitter`; stream `sse.py:~414`,
+  non-stream `sse.py:~704`) — the original of callosum's ported copy.
+  **Baseline dependency (flagged 2026-07-31 by a substrate gap analysis):**
+  this splitter is **not in local LLM gateway committed history** — it lives on the
+  in-flight `the compatibility branch` branch, live on this
+  host via editable install but unmerged. The "substrate already owns the
+  in-band strip" claim is therefore **contingent on that branch merging**; if it
+  is abandoned, callosum's `inband_reasoning` transform becomes the sole owner
+  (not a port of a substrate original) and that surface's Class A/B
+  classification must be rechecked. (The earlier `sse.py:222` citation was
+  stale; corrected here.)
 - Normalizes all three reasoning aliases `thinking`/`reasoning`/`reasoning_content`
   (`translation.py:24-47`).
 - Emits usage in `input_tokens`/`output_tokens` shape (`sse.py:754`).
@@ -107,9 +157,15 @@ guarantees, on every response:
    "missing field 'input_tokens'" otherwise). local LLM gateway: ✅ `sse.py:754`.
    LiteLLM `/responses`: ✅ native.
 2. `output[]` is never empty (emit an empty message item if there is no
-   content). local LLM gateway: ✅. LiteLLM: ✅.
+   content). local LLM gateway: **partial** — both paths append items conditionally
+   (`sse.py:468` stream, `sse.py:690-753` non-stream), so a turn with no text,
+   no reasoning, and no tool calls yields `output: []`. LiteLLM: ✅.
 3. Ordering: `reasoning` items first, then `function_call` items, then
-   `message` (o1/o3 convention). local LLM gateway: ✅. LiteLLM: ✅.
+   `message` (o1/o3 convention). local LLM gateway: **divergent across paths** —
+   stream re-sorts by `output_index` (`sse.py:505`); non-stream hardcodes
+   `reasoning → message → function_call` (`sse.py:714,723,744`). The two paths
+   are independent reimplementations of the same spec and must be pinned to one
+   order together. LiteLLM: ✅.
 4. Consecutive `function_call` Responses items collapse into one assistant
    chat message with parallel `tool_calls` on the chat bridge.
    local LLM gateway: ✅ `translation.py:182-271`. LiteLLM: ✅ (older than 1.82.6).
@@ -129,19 +185,30 @@ guarantees, on every response:
 
 ### 3. Capability advertisement contract (substrate-side gaps → P4 handoff)
 
-The substrate must expose, per model in `local-llm capabilities --json`
-(`local.capability_matrix.v1`):
+The substrate must expose these per model. They are **split across the two
+local LLM gateway CLI shapes** callosum already consumes (`local-llm models local
+--json` `{"entries":[{"model":{...}}]}` roster, and `local-llm capabilities
+--json` `{"rows":[...]}` capability matrix — merged by id in
+`src/callosum/local.py`):
 
-| Field | local LLM gateway today | Contract requires |
-|---|---|---|
-| `context_window` | ✅ | ✅ |
-| `quantization` | ✅ | ✅ |
-| `supported_reasoning_levels` | ✅ (model-a0d2 only honest) | ✅ — must be honest per runtime, not inferred |
-| `supports_tools` | ❌ | ✅ — so callosum stops probing |
-| `modalities` (text/vision/audio) | ❌ | ✅ |
-| `throughput` (tokens/s) | ❌ (only `graph_metrics.ceiling_search_completion_tokens_per_second`) | ✅ — first-class field |
-| `api_surfaces` | ✅ | ✅ — plus a `verified_chat_translation: bool` flag for responses lanes |
-| `verified_chat_translation` | ❌ (hard-coded responses-only) | ✅ — so callosum can route chat traffic to responses lanes when verified |
+- **In `local-llm capabilities --json` (`.rows[]`):** capability facts —
+  `context_window`, `quantization`, `supported_reasoning_levels`,
+  `supports_tools`, `modalities`, `throughput`.
+- **In `local-llm models local --json` (`.entries[].model`):** the
+  per-surface advertisements — `api_surfaces`, `verified_chat_translation`.
+  (`api_surfaces` already lives here today, at `cli.py:3103,3245`; it is **not**
+  in the capability matrix, despite the prior §3 text implying it was.)
+
+| Field | Shape | local LLM gateway today | Contract requires |
+|---|---|---|---|
+| `context_window` | capabilities | ✅ | ✅ |
+| `quantization` | capabilities | ✅ | ✅ |
+| `supported_reasoning_levels` | capabilities | ✅ (model-a0d2 only honest) | ✅ — must be honest per runtime, not inferred |
+| `supports_tools` | capabilities | ❌ | ✅ — so callosum stops probing |
+| `modalities` (text/vision/audio) | capabilities | ❌ | ✅ |
+| `throughput` (tokens/s) | capabilities | ❌ (only `graph_metrics.ceiling_search_completion_tokens_per_second`, which callosum already derives into `CapabilityRow.estimated_tokens_per_second`) | ✅ — first-class field, promoted out of `graph_metrics` |
+| `api_surfaces` | models local | ✅ | ✅ |
+| `verified_chat_translation` | models local | ❌ (hard-coded responses-only) | ✅ — so callosum can route chat traffic to responses lanes when verified |
 
 Closing these gaps is substrate work → **P4 upstream handoff** to local LLM gateway
 (handoff prompt only; no external edits from callosum). Until closed, callosum
@@ -161,28 +228,56 @@ defaults (`local_direct.py:238-271`) as TEMPORARY-DEBT.
 - **Fix the stale comment** at `litellm_gateway.py:977-981` (claims
   `drop_params:false`; actually `true`). Small drive-by, fold into P5.
 
-### 5. Downgrade / quarantine behavior when the contract is missing
+### 5. Capability-gap triage: the priority order (P3 rewrite target)
 
-When a cell's probed behavior **violates** the contract (a conformance invariant
-fails, or an advertised surface is missing), callosum does **not** author a
-transform (that is the P3 rewrite). Instead:
+When a capability gap is reported (an `adapter_hint` from a failing capability
+probe, a conformance-invariant failure, or a missing advertised surface), the
+dev loop applies a **priority order**, not a single "author a transform" reflex.
+Gaps split into two classes:
 
-- `quarantine_cell`: drop the cell from the routable pool for the violated
-  surface, record the contract violation as the reason, and surface it in
-  `/status` + the capability profile.
-- `file_upstream_gap`: emit a handoff artifact (P4) describing the violated
-  invariant + probe commands + acceptance criteria, targeted at the owning
-  substrate.
-- `route_native`: if a conformant alternative surface exists for the same cell,
-  route there instead.
-- `verify_fix`: re-probe after an upstream fix lands; flip quarantine off when
-  the invariant passes.
+- **Class A — generic protocol translation** (chat↔responses shape, reasoning-alias
+  normalization, usage shape, tool-call shape). Substrates already own this.
+  Callosum stops *duplicating* it.
+- **Class B — model-specific behavioral quirk** (e.g. in-band `<thought>` tag
+  stripping for a model no substrate fronts, text-as-JSON tool calls, a
+  model-specific prompt prefix). No substrate owns the quirk for this cell.
+
+The loop selects the first applicable action:
+
+1. `route_native` — a substrate already handles this cell's requested surface.
+   Route to it, write nothing. (Class A; autonomous.)
+2. `author_temporary_adapter` — the gap is Class B (no substrate covers it for
+   this cell). Callosum writes the fix, ships it, labels it **TEMPORARY-DEBT**,
+   and records the **upstream owner** + **close condition** ("which substrate
+   should own this + when the adapter can be deleted"). **This is the default
+   reflex** for Class B — it preserves auto-dev's "adapt any chosen SOTA model"
+   property: the loop must not be blocked on a substrate-side agent that does
+   not exist. (Autonomous.) `inband_reasoning` is the canonical Class-B adapter —
+   load-bearing, retained, marked temporary-debt with its close condition.
+3. `remove_shim` / `verify_fix` — once a substrate fronts the surface, delete the
+   callosum-side adapter (Class A duplication, or a retired Class-B adapter) and
+   re-probe. This is how shim-reduction actually happens: by **retirement**, not
+   by refusing to write. (Autonomous, opportunistic.)
+4. `quarantine_cell` — only when **no** adapter can make the cell work (the "no
+   feasible adapter" sentinel). Drop the cell from the routable pool for the
+   violated surface, record the contract violation as the reason, and surface it
+   in `/status` + the capability profile. Condition-based, not a fixed timer;
+   generalizes the existing `tool_call_at_scale` at-scale gate
+   (`routing/capability.py:77-91`).
+
+`file_upstream_gap` is **not a loop action**; it is **metadata** on the step-2
+adapter (the "upstream owner + close condition" above), emitted as a handoff
+artifact for the operator's backlog (P4). The loop does not wait on it.
 
 This replaces the current `adapter_hint` → "author a transform" path
-(`pre_filter.py:30-34`, `perception.py:337-353`) with `adapter_hint` →
-"quarantine / file upstream / route-native / verify." The `"no feasible adapter"`
+(`pre_filter.py:30-34`, `perception.py:337-353`). The `"no feasible adapter"`
 sentinel (`pre_filter.py:99-106`) generalizes: **every** `adapter_hint` becomes a
-gap report, not a transform-authoring instruction. (P3 implements this.)
+gap report feeding the priority order above. (P3 implements this.)
+
+**Quarantine re-admission** is sweep-driven (re-admit on the next probe-sweep
+pass), matching the existing `tool_call_at_scale` pattern. An anniversary
+re-probe safety net (e.g. every 7d) is an implementation knob deferred to P3,
+not an ADR-level decision; this ADR changes no runtime behavior.
 
 ### 6. Callosum's permanent owned surface (unchanged by this contract)
 
@@ -227,9 +322,12 @@ translator deletes.
   image bump to ≥1.83.14 for the explicit `use_chat_completions_api` opt-in.
   Until those land, callosum keeps its probes + residual translator
   (TEMPORARY-DEBT, no regression).
-- **P3 rewrite target unchanged** but now has a concrete action set
-  (route_native / file_upstream_gap / quarantine_cell / verify_fix / remove_shim)
-  and a contract to quarantine against.
+- **P3 rewrite target** is the priority order in §5
+  (`route_native` / `author_temporary_adapter` / `remove_shim`+`verify_fix` /
+  `quarantine_cell`, with `file_upstream_gap` as metadata on the step-2 adapter)
+  and a contract to quarantine against. The action set preserves Class-B
+  adapter authoring (auto-dev's adapt-any-model property) while retiring Class-A
+  duplication.
 - **Rollback:** feature-branch `--no-ff` merges; the residual translator is
   never deleted until the substrate fronting is verified, so any regression is
   a single revert. The contract is additive — `contract_conformant` returning
