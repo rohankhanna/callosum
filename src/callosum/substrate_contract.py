@@ -121,25 +121,47 @@ class CellContractProfile:
 
 
 class ContractAction(StrEnum):
-    """What callosum does for a (cell, requested-surface) pair."""
+    """What callosum does for a (cell, requested-surface) pair.
+
+    ADR section 5 priority order (the dev-loop applies the first applicable):
+    route_native -> author_temporary_adapter -> remove_shim /
+    verify_fix -> quarantine_cell. file_upstream_gap is metadata on
+    the step-2 adapter, not a loop action.
+
+    author_temporary_adapter is the Class-B default reflex: callosum writes
+    the fix, ships it, labels it TEMPORARY-DEBT, and records the upstream owner
+    + close condition. residual_translate is the steady-state where an
+    existing temporary adapter already covers the cell (no new authoring) —
+    distinct from authoring a new one.
+    """
 
     ROUTE_NATIVE = "route_native"
-    FILE_UPSTREAM_GAP = "file_upstream_gap"
-    QUARANTINE_CELL = "quarantine_cell"
-    VERIFY_FIX = "verify_fix"
-    RESIDUAL_TRANSLATE = "residual_translate"
+    AUTHOR_TEMPORARY_ADAPTER = "author_temporary_adapter"
     REMOVE_SHIM = "remove_shim"
+    VERIFY_FIX = "verify_fix"
+    QUARANTINE_CELL = "quarantine_cell"
+    FILE_UPSTREAM_GAP = "file_upstream_gap"
+    RESIDUAL_TRANSLATE = "residual_translate"
 
 
 @dataclass(frozen=True)
 class ContractClassification:
-    """The classifier's verdict for one (cell, requested-surface) pair."""
+    """The classifier's verdict for one (cell, requested-surface) pair.
+
+    surface is optional because a dimension-gap classification (from
+    callosum.gap_triage.classify_gap) is keyed by dimension, not by an
+    advertised surface. The conformance classifier (classify_contract)
+    always populates surface; the gap classifier populates dimension.
+    """
 
     action: ContractAction
-    surface: Surface
     reason: str
+    surface: Surface | None = None
     violated_invariants: tuple[ConformanceInvariant, ...] = ()
     missing_capability_fields: tuple[str, ...] = ()
+    dimension: str | None = None
+    upstream_owner: str | None = None
+    close_condition: str | None = None
 
 
 def classify_contract(

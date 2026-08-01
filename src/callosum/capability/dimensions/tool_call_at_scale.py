@@ -17,8 +17,16 @@ from typing import Any
 from callosum.capability.dimensions._shape_utils import classify_response
 from callosum.capability.profile import CapabilityProfile, DimensionFinding
 from callosum.capability.request_shapes import tool_call_with_context_body
+from callosum.substrate_contract import ContractAction
 
 DIMENSION_NAME = "tool_call_at_scale"
+
+# Class-B at-scale tool-call gaps share the tool-call-shape upstream owner;
+# the substrate owns generic tool-call shape translation for cells it fronts.
+_TOOL_CALL_UPSTREAM_OWNER = "local LLM gateway / LiteLLM tool-call shape translation"
+_TOOL_CALL_CLOSE_CONDITION = (
+    "substrate fronting this cell translates tool-call shape both directions"
+)
 
 # 80K chars ≈ 22K tokens. Substantial enough to expose context-
 # sensitive failures but well under the 200K-token real-Codex extremes
@@ -102,6 +110,10 @@ async def probe(
                 "context exceeds N tokens). (b) is simpler; (a) is "
                 "more general but requires careful escaping logic."
             ),
+            gap_class="B",
+            suggested_action=ContractAction.AUTHOR_TEMPORARY_ADAPTER,
+            upstream_owner=_TOOL_CALL_UPSTREAM_OWNER,
+            close_condition=_TOOL_CALL_CLOSE_CONDITION,
         )
     return DimensionFinding(
         dimension=DIMENSION_NAME,
@@ -120,4 +132,6 @@ async def probe(
             "as prompt grows. Restrict this cell to small-context "
             "routing only."
         ),
+        gap_class=None,
+        suggested_action=ContractAction.QUARANTINE_CELL,
     )

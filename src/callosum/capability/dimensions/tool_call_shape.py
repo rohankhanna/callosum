@@ -24,8 +24,18 @@ from typing import Any
 from callosum.capability.dimensions._shape_utils import classify_response
 from callosum.capability.profile import CapabilityProfile, DimensionFinding
 from callosum.capability.request_shapes import tool_call_simple_body
+from callosum.substrate_contract import ContractAction
 
 DIMENSION_NAME = "tool_call_shape"
+
+# Class-B tool-call-shape gaps are model quirks in how THIS cell emits tool
+# calls; the substrate owns generic tool-call shape translation for cells it
+# fronts. The temporary adapter (parse/lift/strip) retires once the substrate
+# fronting this cell translates tool-call shape both directions.
+_TOOL_CALL_UPSTREAM_OWNER = "local LLM gateway / LiteLLM tool-call shape translation"
+_TOOL_CALL_CLOSE_CONDITION = (
+    "substrate fronting this cell translates tool-call shape both directions"
+)
 
 
 async def probe(
@@ -84,6 +94,10 @@ async def probe(
                 "forwarding to the client. The structured tool_calls "
                 "are usable as-is."
             ),
+            gap_class="B",
+            suggested_action=ContractAction.AUTHOR_TEMPORARY_ADAPTER,
+            upstream_owner=_TOOL_CALL_UPSTREAM_OWNER,
+            close_condition=_TOOL_CALL_CLOSE_CONDITION,
         )
     if cls.text_json_leak_examples:
         return DimensionFinding(
@@ -104,6 +118,10 @@ async def probe(
                 "Strip the original text. Then deliver the rewritten "
                 "response to the client."
             ),
+            gap_class="B",
+            suggested_action=ContractAction.AUTHOR_TEMPORARY_ADAPTER,
+            upstream_owner=_TOOL_CALL_UPSTREAM_OWNER,
+            close_condition=_TOOL_CALL_CLOSE_CONDITION,
         )
     return DimensionFinding(
         dimension=DIMENSION_NAME,
@@ -123,4 +141,6 @@ async def probe(
             "prompt needs major rework (low confidence this would "
             "work) or the cell should be denied for tool-using traffic."
         ),
+        gap_class=None,
+        suggested_action=ContractAction.QUARANTINE_CELL,
     )

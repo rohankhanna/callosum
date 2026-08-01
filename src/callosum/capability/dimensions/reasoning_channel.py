@@ -37,8 +37,27 @@ from typing import Any
 
 from callosum.capability.profile import CapabilityProfile, DimensionFinding
 from callosum.capability.request_shapes import reasoning_channel_probe_body
+from callosum.substrate_contract import ContractAction
 
 DIMENSION_NAME = "reasoning_channel"
+
+# The in-band reasoning strip is the canonical Class-B temporary adapter
+# (callosum's `inband_reasoning` transform). It is TEMPORARY-DEBT: the
+# upstream owner is local LLM gateway's responses-proxy `_InbandReasoningSplitter`,
+# which is NOT in local LLM gateway committed history — it lives on the in-flight
+# `the compatibility branch` branch (live via editable
+# install, unmerged) per the ADR's 2026-07-31 accuracy amendment. If that
+# branch is abandoned, this surface's Class A/B classification must be
+# rechecked. The adapter retires once the substrate fronts this cell's
+# responses surface and strips in-band reasoning tags on both paths.
+_INBAND_UPSTREAM_OWNER = (
+    "local LLM gateway responses-proxy _InbandReasoningSplitter "
+    "(contingent on the compatibility branch branch merging)"
+)
+_INBAND_CLOSE_CONDITION = (
+    "substrate fronts this cell's responses surface and strips in-band "
+    "reasoning tags (stream + non-stream)"
+)
 
 # Candidate in-band tag pairs the probe looks for in message content.
 # Kept in sync with transforms.inband_reasoning.DEFAULT_REASONING_TAGS.
@@ -176,6 +195,10 @@ async def probe(
                 "a Responses reasoning item, and leave the visible answer "
                 "tag-free (streaming + non-streaming)."
             ),
+            gap_class="B",
+            suggested_action=ContractAction.AUTHOR_TEMPORARY_ADAPTER,
+            upstream_owner=_INBAND_UPSTREAM_OWNER,
+            close_condition=_INBAND_CLOSE_CONDITION,
         )
     if cls.channel == "native":
         return DimensionFinding(

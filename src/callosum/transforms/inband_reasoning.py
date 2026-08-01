@@ -42,6 +42,22 @@ already strips in-band tags upstream) probe as `native`/`none`, so both
 the non-stream transform's `applies_to` and the streaming gate return
 inert for them. callosum never parses a byte-passed Responses stream to
 run this.
+
+TEMPORARY-DEBT (ADR `docs/adr/2026-07-28-substrate-compatibility-contract.md`
+section 5, the canonical Class-B `author_temporary_adapter`):
+
+  * Upstream owner: local LLM gateway responses-proxy `_InbandReasoningSplitter`
+    (the original this was ported from). Per the ADR's 2026-07-31 accuracy
+    amendment, that splitter is NOT in local LLM gateway committed history —
+    it lives on the in-flight `the compatibility branch`
+    branch (live via editable install, unmerged). If that branch is
+    abandoned, this transform becomes the sole owner (not a port) and the
+    Class A/B classification of this surface must be rechecked.
+  * Close condition: a substrate fronts this cell's responses surface and
+    strips in-band reasoning tags on both the stream and non-stream
+    paths. When that fires, this transform (and its streaming gate) is
+    deleted via the `remove_shim` / `verify_fix` action and `build_default_registry`
+    shrinks back to empty — the P5 shim-retirement end-state.
 """
 
 from __future__ import annotations

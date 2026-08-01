@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from callosum.capability.weight_identity import WeightIdentity
+from callosum.substrate_contract import ContractAction
 
 # The repo root's logs directory. Profiles live alongside the prior-
 # art gate logs since both are durable operator state about what the
@@ -56,6 +57,19 @@ class DimensionFinding:
     it describes in concrete terms what an adapter would need to do
     to use this model reliably. This is what 
     admission flow (or a human writing an adapter) consumes.
+
+    `gap_class` / `suggested_action` / `upstream_owner` / `close_condition`
+    are the **structured gap report** the P3 dev-loop consumes (ADR
+    `docs/adr/2026-07-28-substrate-compatibility-contract.md` section 5).
+    A failing dimension populates them deterministically so the dev-loop
+    classifies the gap into the section-5 priority order instead of
+    automation agently authoring a transform off the free-prose `adapter_hint`.
+    `gap_class` is "A" (generic protocol the substrate owns) or "B"
+    (model-specific quirk no substrate owns); `suggested_action` is the
+    `ContractAction` the loop should take; `upstream_owner` +
+    `close_condition` are the TEMPORARY-DEBT metadata on a Class-B
+    adapter. All four default to None; older profiles and `pass`/`error`/
+    `skipped` findings leave them unset.
     """
 
     dimension: str
@@ -64,6 +78,12 @@ class DimensionFinding:
     evidence: dict[str, Any] = field(default_factory=dict)
     adapter_hint: str | None = None
     latency_ms: int | None = None
+    # Structured gap report (ADR section 5). Optional + additive; old
+    # profiles without these fields load with None defaults.
+    gap_class: Literal["A", "B"] | None = None
+    suggested_action: ContractAction | None = None
+    upstream_owner: str | None = None
+    close_condition: str | None = None
 
 
 @dataclass
@@ -122,6 +142,16 @@ class CapabilityProfile:
                         evidence=dict(payload.get("evidence", {})) if isinstance(payload.get("evidence"), dict) else {},
                         adapter_hint=payload.get("adapter_hint"),
                         latency_ms=payload.get("latency_ms"),
+                        gap_class=_parse_gap_class(payload.get("gap_class")),
+                        suggested_action=_parse_suggested_action(
+                            payload.get("suggested_action")
+                        ),
+                        upstream_owner=_parse_optional_str(
+                            payload.get("upstream_owner")
+                        ),
+                        close_condition=_parse_optional_str(
+                            payload.get("close_condition")
+                        ),
                     )
                 except (TypeError, ValueError):
                     continue
@@ -153,6 +183,32 @@ class CapabilityProfile:
             findings=findings,
             weight_identity=weight_identity,
         )
+
+
+def _parse_optional_str(value: Any) -> str | None:
+    """Coerce a JSON value to str | None for the optional gap fields.
+    Defensive: anything non-str becomes None so a corrupt field never
+    breaks profile loading."""
+    return value if isinstance(value, str) and value else None
+
+
+def _parse_gap_class(value: Any) -> Literal["A", "B"] | None:
+    """Coerce the persisted gap_class to its Literal or None. Unknown
+    values (including old profiles without the field) load as None."""
+    return value if value in ("A", "B") else None
+
+
+def _parse_suggested_action(value: Any) -> ContractAction | None:
+    """Coerce the persisted suggested_action string to a ContractAction.
+    Unknown/old values load as None rather than raising — the gap
+    classifier falls back to inferring from adapter_hint when this is
+    absent (the P3 backward-compat seam)."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return ContractAction(value)
+    except ValueError:
+        return None
 
 
 def profile_path(model_id: str, profile_dir: Path | None = None) -> Path:
