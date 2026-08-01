@@ -302,3 +302,47 @@ def tool_call_with_context_body(target_user_chars: int) -> dict[str, Any]:
         "tool_choice": "auto",
         "stream": False,
     }
+
+
+# --------------------------------------------------------------------
+# Parallel tool-call probe — a request that asks the model to emit TWO
+# tool calls in a single turn. Used by the PARALLEL_TOOL_CALL_COLLAPSE
+# conformance invariant to verify the substrate collapses parallel calls
+# into a single Responses `output[]` (multiple `function_call` items),
+# not splits them across separate assistant turns.
+# --------------------------------------------------------------------
+
+
+def parallel_tool_call_probe_body() -> dict[str, Any]:
+    """A small tool-using request that asks for two tool calls in one turn.
+    The substrate is conformant (PARALLEL_TOOL_CALL_COLLAPSE) when the model's
+    parallel calls arrive as >=2 `function_call` items in one `output[]`
+    (Responses) — i.e. the substrate collapsed them, not split them across
+    separate assistant messages. The check is model-dependent: a model may
+    choose to call one tool at a time, which is a model choice (not a
+    substrate violation) and maps to `None`, not `False`."""
+    return {
+        "model": "",  # caller sets via /admin/cell-call
+        "instructions": _CODEX_INSTRUCTIONS,
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": (
+                            "I need two things at once and I'm in a hurry: "
+                            "list the directory at /tmp AND read the file "
+                            "/tmp/notes.txt. Call both tools in parallel in "
+                            "a single response — do not wait for one to "
+                            "finish before starting the other."
+                        ),
+                    }
+                ],
+            }
+        ],
+        "tools": _CODEX_TOOLS,
+        "tool_choice": "auto",
+        "stream": False,
+    }

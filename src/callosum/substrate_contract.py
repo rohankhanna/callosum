@@ -23,6 +23,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
 __all__ = [
     "Surface",
@@ -81,6 +82,40 @@ class SurfaceConformance:
             if v is False
         )
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-safe dict. Surface and
+        ConformanceInvariant are StrEnum so they serialize as their
+        string values; the bool/None invariant outcomes are already JSON-safe.
+        Mirrors CapabilityProfile.to_dict (stdlib only — no routing imports,
+        so the module purity promise holds)."""
+        return {
+            "surface": self.surface.value,
+            "invariant_results": {
+                inv.value: val for inv, val in self.invariant_results.items()
+            },
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> SurfaceConformance:
+        """Inverse of to_dict. Defensive: a missing/empty
+        invariant_results yields an empty mapping (the surface is then
+        non-conformant via is_conformant and has no violations — the
+        caller decides what that means)."""
+        raw = data.get("invariant_results") or {}
+        results: dict[ConformanceInvariant, bool | None] = {}
+        for key, val in raw.items():
+            try:
+                inv = ConformanceInvariant(key)
+            except ValueError:
+                # Unknown invariant name from a newer schema — drop it rather
+                # than fail the whole profile (forward-compatible load).
+                continue
+            results[inv] = val if val is None or isinstance(val, bool) else None
+        return cls(
+            surface=Surface(data["surface"]),
+            invariant_results=results,
+        )
+
 
 # Capability fields the substrate must advertise per model
 # (ADR section 3). local LLM gateway emits context_window + quantization +
@@ -118,6 +153,47 @@ class CellContractProfile:
 
     def advertises(self, surface: Surface) -> bool:
         return surface in self.advertised_surfaces
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-safe dict. frozenset -> sorted list;
+        the conformance mapping is keyed by surface value. Mirrors
+        CapabilityProfile.to_dict (stdlib only — purity preserved)."""
+        return {
+            "cell_id": self.cell_id,
+            "advertised_surfaces": sorted(s.value for s in self.advertised_surfaces),
+            "conformance": {
+                s.value: sc.to_dict() for s, sc in self.conformance.items()
+            },
+            "capability_fields": sorted(self.capability_fields),
+            "residual_translation": self.residual_translation,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> CellContractProfile:
+        """Inverse of to_dict. Defensive on unknown surface names
+        (dropped) and unknown conformance entries (dropped) so a profile
+        written by a newer schema still loads forward-compatibly."""
+        advertised: frozenset[Surface] = frozenset()
+        for s in data.get("advertised_surfaces") or []:
+            try:
+                advertised = advertised | {Surface(s)}
+            except ValueError:
+                continue
+        conformance: dict[Surface, SurfaceConformance] = {}
+        for key, val in (data.get("conformance") or {}).items():
+            try:
+                surf = Surface(key)
+            except ValueError:
+                continue
+            if isinstance(val, Mapping):
+                conformance[surf] = SurfaceConformance.from_dict(val)
+        return cls(
+            cell_id=data["cell_id"],
+            advertised_surfaces=advertised,
+            conformance=conformance,
+            capability_fields=frozenset(data.get("capability_fields") or ()),
+            residual_translation=bool(data.get("residual_translation", False)),
+        )
 
 
 class ContractAction(StrEnum):
