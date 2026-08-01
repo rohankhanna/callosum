@@ -79,12 +79,15 @@ All paths are under `src/callosum/`.
   so either five-hourly or weekly exhaustion can block a route. Catalog `priority` is
   only the cold-start prior, and an operator override map wins
   outright (`CostRankProvider`, overlaid onto backend capabilities in
-  `app.py`). `exploration.py` makes SYNTHETIC auto-learning traffic
-  (`requested_model == "auto-learning-synthetic"`) target the
-  least-sampled compatible cell so coverage accumulates evenly across
-  the grid (the engine that feeds the quality predictor, the measured
-  cost model, and the future contextual bandit); organic traffic keeps
-  the cost/quality-optimal pick. `usage_estimate.py` +
+  `app.py`). `routing/quota.py` + `routing/coverage.py` implement the
+  per-cell **minimum-coverage quota** on *organic* traffic: when a
+  compatible `(model, reasoning_effort)` cell is below its even-split
+  floor of `min_coverage_budget_pct` over the rolling window, the
+  router steers one turn to the least-sampled eligible cell so coverage
+  accumulates evenly across the grid (the engine that feeds the quality
+  predictor, the measured cost model, and the future contextual bandit);
+  otherwise organic routing keeps the cost/quality-optimal pick. Gated
+   `usage_estimate.py` +
   `cost_estimator.py` are the FORWARD usage estimators (the twin of the
   backward-looking `cost_model.py`): `usage_estimate.py` holds the
   estimator-agnostic contract (`OutputTokenForecast`,

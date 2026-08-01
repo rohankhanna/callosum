@@ -591,66 +591,78 @@ The selector only routes a request when at least one backend advertises the requ
 
 **`/reasoning` works for free.** Codex CLI sends the chosen level as `reasoning.effort` in the request body. The proxy passes it through unchanged on `/v1/responses`. Picked levels show up in the usage log's `reasoning_effort` column for later analysis.
 
-**Auto-routing virtual models (`auto-learning`, `auto-learning-synthetic`, `auto`).** Three virtual model names short-circuit the picker. Any client that can name a model — Codex CLI's `/model`, Hermes' `model.default`, Aider's `--model`, a curl with `"model": "..."` — can opt in.
+**Auto-routing virtual models (`auto`, `auto-learning`).** Two virtual model names invoke the learning router instead of pinning a concrete model. Any client that can name a model — Codex CLI's `/model`, Hermes' `model.default`, Aider's `--model`, a curl with `"model": "..."` — can opt in. `auto` is the primary name; `auto-learning` is a backward-compat alias. Both route through the same recommender pipeline (`src/callosum/routing/`): extract prompt features → capability filter → quality predict → cost-weighted select. There is no longer an "explorer" vs "exploiter" split, and no background synthetic tier (the former `auto-learning-synthetic` worker was removed).
 
-- **`auto-learning`** — organic explorer. Each request is rewritten to the (model, reasoning_effort) cell with the fewest successful samples in the usage log so the corpus fills evenly across the 16-cell grid (4 models × 4 reasoning levels — see `src/callosum/cell_grid.py`). Round-robin v1; ties break in cell-grid order. Stateless: every call rereads coverage, so concurrent calls converge.
-- **`auto-learning-synthetic`** — synthetic background tier. Same round-robin algorithm, but uses an **independent coverage query** (only counts rows where `routing_mode='auto-learning-synthetic'`) so synthetics don't double-count organic samples and vice versa. Driven by a built-in worker (see `[auto_router]` config below) that fires bland prompts when the daily floor or pct-of-organic target hasn't been met. You can also send this name yourself for testing.
-- **`auto`** — cost-optimal exploiter. Reserved for the router that picks the cell with the lowest expected Δquota per request. Currently returns `503 NotTrained` with an explanatory message until the cost model is fit on the explorer's corpus.
+The learning router is **adaptive, not statically configured**:
+
+- Cold-start (no labeled corpus yet) uses a uniform predictor plus catalog-priority / measured-cost ordering — local-first, cost-ordered routing with no ML deps.
+- As prompt embeddings, labeled outcomes, and measured per-cell quota burn accumulate, the predictor and a dynamic per-model `cost_rank` (fit from measured `weekly_used_percent` deltas in the request log) take over. Catalog priority is the cold-start prior; measured overrides win; operator overrides win outright.
 
 The rewrite happens before the selector, so backends do **not** need to advertise these virtual names — they only need to advertise the real grid models. Each request's `requested_model`, `requested_reasoning_effort`, and `routing_mode` are recorded in the usage log alongside the served `model` / `reasoning_effort`, so post-hoc analysis can separate router-driven samples from user-driven ones.
 
-Inspect cell coverage (per tier):
+Inspect cell coverage:
 
 ```bash
 sqlite3 ~/.local/state/callosum/requests.sqlite \
   "SELECT routing_mode, model, reasoning_effort, COUNT(*) FROM requests
-   WHERE routing_mode IN ('auto-learning', 'auto-learning-synthetic') AND status = 200
+   WHERE routing_mode IN ('auto', 'auto-learning') AND status = 200
    GROUP BY routing_mode, model, reasoning_effort ORDER BY 1, 2, 3"
 ```
 
-Enable organic auto-learning on each client:
+Enable the learning router on each client:
 
 ```bash
 # Codex CLI: edit ~/.codex/config.toml top-level
-model = "auto-learning"
+model = "auto"
 
 # Hermes
-hermes config set model.default auto-learning
+hermes config set model.default auto
 ```
 
-The synthetic worker has two controllers:
-
-**Primary — weekly-exhaustion controller.** Per backend, every tick: read the latest `CodexQuotaSnapshot`, project human burn (last 7d organic rate × safety margin), and fire enough synthetics to land weekly at `weekly_target_pct` by reset. Honors the invariant that paid-monthly weekly capacity is never wasted. Pauses on an account when 5h is near-exhausted (would just 429-loop) or weekly is already past target.
-
-**Fallback — cold-start.** Per backend with no quota snapshot yet (fresh deploy), uses the simple floor + pct-of-organic + hard-ceiling target. Same hard ceiling caps the weekly controller as a safety net.
-
-Tune in the proxy's `config.toml`:
+Tune the learning router in the proxy's `config.toml` (selected knobs — see `AutoRouterConfig` in `src/callosum/config.py` for the full set):
 
 ```toml
 [auto_router]
-# Cold-start fallback bounds (used when no per-account quota snapshot exists yet).
-synthetic_floor_per_day = 50
-synthetic_pct_of_organic = 0.05
-synthetic_hard_ceiling_per_day = 200
-synthetic_check_interval_seconds = 300
+# Cooldown self-healing prober: re-probe backends whose persisted cooldown is
+# still in the future; clear the cooldown if the probe succeeds. 0 disables.
+cooldown_probe_interval_seconds = 3600
 
-# Weekly-exhaustion controller knobs.
-# Estimated cost of one synthetic, in weekly% points. Hand-set v1; learned
-# by the cost model in v2.
-pct_per_synthetic_estimate = 0.1
-# How far back to look when projecting human burn (hours). 168 = 7 days.
-prediction_window_hours = 168
-# Multiplier on projected human burn — errs toward leaving the human room.
-prediction_safety_margin = 1.20
-# Per-tick cap on synthetics fired (spreads connection load).
-max_synthetics_per_tick = 10
-# Stop firing on an account once weekly_used_percent crosses this.
-weekly_target_pct = 95.0
-# Pause firing on an account when 5h-used crosses this.
-five_hourly_pause_pct = 95.0
+# Per-cell minimum-coverage quota (deterministic, default off).
+min_coverage_quota_enabled = false
+min_coverage_budget_pct = 0.10          # even split across a lane's candidate cells
+min_coverage_floor_pct = 0.0            # optional absolute per-cell floor; 0 = pure even split
+min_coverage_window_seconds = 2592000   # 30 days
+min_coverage_feasibility_enabled = true # forced cell must fit the stall-guard budget
+min_coverage_cooldown_enabled = true     # skip a cell briefly after a forced-turn timeout
+
+# Dynamic per-model cost rank from MEASURED weekly-quota burn (replaces a flat
+# remote constant). Catalog priority is the cold-start prior; overrides win.
+cost_rank_dynamic_enabled = true
+cost_rank_min_nonzero_samples = 10
+cost_rank_window_seconds = 2592000       # 30 days
+cost_rank_base = 10                      # cheapest measured remote model starts here; local = 0
+cost_rank_overrides = {}                 # {model_slug: cost_rank}
+
+# Forward cost estimator: per-request predicted weekly_used_percent burn.
+cost_estimate_enabled = true
+cost_estimate_fallback_rate = 5e-6       # weekly-% points per token when no measured signal
+cost_estimate_overrides = {}             # {model_slug: pct_per_token}
+
+# Forward time estimator: per-request predicted wall-clock latency (ms), fit
+# per cell from the request log. Local is NOT zero — it is often the slow path.
+time_estimate_enabled = true
+time_estimate_fallback_ms_per_token = 12.0
+time_estimate_fallback_base_ms = 500.0
+time_estimate_local_slowdown = 4.0       # cold-start tilt when a remote prior is reused for a local cell
+time_estimate_overrides = {}             # {model_slug: [ms_per_token, base_ms]}
+
+# Temporary guardrail: keep auto-routing away from xhigh once it exceeds this
+# share of recent successful traffic (while non-xhigh alternatives exist).
+xhigh_cap_enabled = true
+xhigh_cap_pct = 0.01
+xhigh_cap_window_seconds = 604800        # 7 days, aligned to the weekly quota window
 ```
 
-All `synthetic_*` defaults are 0, which keeps the cold-start fallback off. The weekly controller activates automatically once a backend has served at least one request and produced a quota snapshot — so on a fresh deploy with all-zero config, no synthetics fire until organic traffic establishes a quota baseline, then the weekly controller takes over.
 
 ## Sticky session header (`X-Codex-Session-Id`)
 
