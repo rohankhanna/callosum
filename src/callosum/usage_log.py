@@ -326,6 +326,15 @@ END""",
     # Pre-existing rows stay NULL and should be treated as legacy/unknown.
     "ALTER TABLE requests ADD COLUMN traffic_kind TEXT",
     "CREATE INDEX IF NOT EXISTS idx_requests_traffic_kind ON requests(traffic_kind)",
+    # Time-to-first-byte in ms for streamed requests: wall-clock ms from
+    # request start to the first chunk received from upstream. NULL for
+    # non-stream rows (TTFB ~= total latency there and is unidentifiable
+    # from a single total-latency sample) and for streams that produced no
+    # chunks (empty stream, pre-first-chunk timeout/error). Feeds the
+    # per-cell time estimator's TTFB(~input_tokens) vs decode(~output_tokens)
+    # split () and data-driven stall-guard tuning
+    # (). Same clock (time.time()) as latency_ms.
+    "ALTER TABLE requests ADD COLUMN ttfb_ms INTEGER",
 ]
 
 
@@ -386,6 +395,9 @@ class UsageLogEntry:
     recommender_classifier_cell: str | None = None
     recommender_raw_output: str | None = None
     recommender_source: str | None = None
+    # Time-to-first-byte in ms (see _MIGRATIONS ttfb_ms column). NULL for
+    # non-stream rows and streams that produced no chunks.
+    ttfb_ms: int | None = None
     # Raw float32 bytes of the prompt embedding produced by the routing
     # EmbeddingProvider. NULL when the noop provider is active (cold-
     # start configuration) or when text extraction returned empty.
@@ -616,6 +628,7 @@ class UsageLog:
             entry.prompt_embedding,
             entry.effective_routing_mode,
             entry.traffic_kind,
+            entry.ttfb_ms,
         )
         with self._lock:
             cursor = self._conn.execute(
@@ -639,13 +652,13 @@ class UsageLog:
                     prompt_complexity_class, prompt_text, response_text,
                     recommender_classifier_cell, recommender_raw_output,
                     recommender_source, prompt_embedding,
-                    effective_routing_mode, traffic_kind
+                    effective_routing_mode, traffic_kind, ttfb_ms
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?
+                    ?, ?, ?
                 )
                 """,
                 row,

@@ -45,6 +45,15 @@ class CallHandle:
     quota_before: CodexQuotaSnapshot | None = None
     quota_after: CodexQuotaSnapshot | None = None
     stream_summary: ResponsesStreamSummary | None = None
+    # Wall-clock (time.time()) timestamp of the first streamed chunk received
+    # from upstream, set by the dispatch layer at the first-chunk probe. NULL
+    # for non-stream calls and for streams that produced no chunks (e.g.
+    # empty StopAsyncIteration, pre-first-chunk timeout/error). Persisted as
+    # `requests.ttfb_ms = (first_byte_at - ts_start) * 1000` to feed the
+    # per-cell time estimator's TTFB-vs-decode split () and
+    # data-driven stall-guard tuning (). Same clock as
+    # ts_start/ts_end so the subtraction is valid.
+    first_byte_at: float | None = None
 
 
 class Backend(Protocol):

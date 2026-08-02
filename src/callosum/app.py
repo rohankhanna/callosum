@@ -3387,6 +3387,11 @@ async def _dispatch_stream(
                 if remaining is not None
                 else await iterator.__anext__()
             )
+            # First upstream chunk received → TTFB. Same clock (time.time())
+            # as ts_start so the persisted ttfb_ms subtraction is valid.
+            # Stays None for non-stream calls and for streams that produced
+            # no chunks (StopAsyncIteration / pre-first-chunk timeout/error).
+            handle.first_byte_at = time.time()
         except StopAsyncIteration:
             ts_end = time.time()
             _log_attempt(
@@ -4474,6 +4479,14 @@ def _log_attempt(
     traffic_kind = _traffic_kind_context.get()
     if peer_quality_capture is not None and peer_quality_capture.injected_fired:
         traffic_kind = "peer_quality_capture"
+    # TTFB: only meaningful for streamed requests where the dispatch layer
+    # stamped handle.first_byte_at at the first-chunk probe. Clamp to the
+    # request's own wall-clock span to reject clock-skew / bad stamps
+    # (first_byte must fall within [ts_start, ts_end]); NULL otherwise
+    # (non-stream, empty stream, pre-first-chunk failure).
+    ttfb_ms: int | None = None
+    if stream and handle.first_byte_at is not None and ts_end >= handle.first_byte_at >= ts_start:
+        ttfb_ms = int(round((handle.first_byte_at - ts_start) * 1000))
     entry = UsageLogEntry(
         ts_start=ts_start,
         ts_end=ts_end,
@@ -4510,6 +4523,7 @@ def _log_attempt(
         prompt_embedding=prompt_embedding,
         effective_routing_mode=effective_routing_mode,
         traffic_kind=traffic_kind,
+        ttfb_ms=ttfb_ms,
     )
     request_id = usage_log.record(entry)
     if peer_quality_capture is not None and peer_quality_capture.nonce:

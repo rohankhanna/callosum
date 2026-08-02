@@ -69,6 +69,63 @@ def test_record_inserts_row_with_computed_latency(tmp_path: Path) -> None:
     log.close()
 
 
+def test_record_persists_ttfb_ms_when_set(tmp_path: Path) -> None:
+    log = UsageLog(tmp_path / "u.sqlite")
+    rowid = log.record(_entry(ttfb_ms=120))
+    conn = sqlite3.connect(tmp_path / "u.sqlite")
+    (ttfb,) = conn.execute("SELECT ttfb_ms FROM requests WHERE id = ?", (rowid,)).fetchone()
+    assert ttfb == 120
+    log.close()
+
+
+def test_record_ttfb_ms_defaults_null(tmp_path: Path) -> None:
+    log = UsageLog(tmp_path / "u.sqlite")
+    rowid = log.record(_entry())  # no ttfb_ms override -> defaults to None
+    conn = sqlite3.connect(tmp_path / "u.sqlite")
+    (ttfb,) = conn.execute("SELECT ttfb_ms FROM requests WHERE id = ?", (rowid,)).fetchone()
+    assert ttfb is None
+    log.close()
+
+
+def test_migrates_ttfb_ms_column_onto_existing_db(tmp_path: Path) -> None:
+    """A DB created before the ttfb_ms column must gain it via _MIGRATIONS."""
+    db = tmp_path / "u.sqlite"
+    # Build a v1-shape requests table (base columns only, no ttfb_ms),
+    # mirroring the pre-router DB used by test_migration_backfills_existing_rows.
+    conn = sqlite3.connect(db)
+    conn.execute(
+        """
+        CREATE TABLE requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts_start REAL NOT NULL, ts_end REAL NOT NULL, latency_ms INTEGER NOT NULL,
+            route TEXT NOT NULL, stream INTEGER NOT NULL, session_id TEXT,
+            backend_id TEXT NOT NULL, model TEXT, reasoning_effort TEXT,
+            status INTEGER NOT NULL, classification TEXT,
+            request_bytes INTEGER, response_bytes INTEGER,
+            prompt_tokens INTEGER, completion_tokens INTEGER, total_tokens INTEGER,
+            cached_tokens INTEGER, reasoning_tokens INTEGER,
+            plan_type TEXT, active_limit TEXT,
+            primary_used_percent_before INTEGER, primary_used_percent_after INTEGER,
+            secondary_used_percent_before INTEGER, secondary_used_percent_after INTEGER,
+            primary_reset_at INTEGER, secondary_reset_at INTEGER,
+            primary_over_secondary_limit_percent INTEGER,
+            credits_balance TEXT, credits_has_credits INTEGER, credits_unlimited INTEGER,
+            quota_reset_crossover INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+    # Opening with UsageLog runs the guarded ALTER TABLE migration chain,
+    # including the new ttfb_ms column.
+    log = UsageLog(db)
+    log.close()
+    conn = sqlite3.connect(db)
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(requests)").fetchall()}
+    assert "ttfb_ms" in cols
+    conn.close()
+
+
 def test_record_persists_quota_before_and_after(tmp_path: Path) -> None:
     log = UsageLog(tmp_path / "u.sqlite")
     rowid = log.record(

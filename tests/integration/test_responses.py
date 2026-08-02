@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import sqlite3
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from callosum.app import create_app
 from callosum.backend import UsageSnapshot
 from callosum.fakes import InMemoryFakeBackend
+from callosum.usage_log import UsageLog
 
 
 def _usage(remaining: float) -> UsageSnapshot:
@@ -75,6 +79,46 @@ def test_responses_streaming_passes_chunks_through() -> None:
         assert response.headers["content-type"].startswith("text/event-stream")
         body = b"".join(response.iter_bytes())
     assert body == b"".join(chunks)
+
+
+def test_responses_streaming_records_ttfb_ms(tmp_path: Path) -> None:
+    """Streaming dispatch stamps first_byte_at and persists a ttfb_ms that is
+    non-null, non-negative, and bounded by the request's total latency_ms."""
+    chunks = (
+        b'data: {"type":"response.created"}\n\n',
+        b'data: {"type":"response.output_text.delta","delta":"hi"}\n\n',
+        b"data: [DONE]\n\n",
+    )
+    fake = InMemoryFakeBackend(
+        id="fake",
+        advertised_models=frozenset({"model-a0d0"}),
+        canned_responses_stream_chunks=chunks,
+    )
+    log = UsageLog(tmp_path / "u.sqlite")
+    try:
+        with (
+            TestClient(create_app(backends=[fake], usage_log=log)) as client,
+            client.stream(
+                "POST",
+                "/v1/responses",
+                json={"model": "model-a0d0", "stream": True, "input": []},
+            ) as response,
+        ):
+            assert response.status_code == 200
+            _ = b"".join(response.iter_bytes())
+        conn = sqlite3.connect(tmp_path / "u.sqlite")
+        (ttfb, latency, stream) = conn.execute(
+            "SELECT ttfb_ms, latency_ms, stream FROM requests ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        conn.close()
+    finally:
+        log.close()
+    assert stream == 1
+    assert ttfb is not None
+    assert ttfb >= 0
+    # ttfb is mathematically <= latency (first byte precedes stream end); allow
+    # a 1ms rounding tolerance for sub-millisecond in-memory streams.
+    assert ttfb <= latency + 1
 
 
 def test_session_binding_is_shared_between_routes() -> None:
