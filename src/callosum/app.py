@@ -4487,6 +4487,12 @@ def _log_attempt(
     ttfb_ms: int | None = None
     if stream and handle.first_byte_at is not None and ts_end >= handle.first_byte_at >= ts_start:
         ttfb_ms = int(round((handle.first_byte_at - ts_start) * 1000))
+    # Largest inter-chunk idle gap, captured by the local-lane stall guard
+    # (monotonic seconds). NULL for non-stream, remote streams, and streams
+    # that ended before a second chunk. Feeds idle-timeout tuning.
+    idle_gap_ms: int | None = None
+    if stream and handle.max_idle_gap_s is not None and handle.max_idle_gap_s > 0:
+        idle_gap_ms = int(round(handle.max_idle_gap_s * 1000))
     entry = UsageLogEntry(
         ts_start=ts_start,
         ts_end=ts_end,
@@ -4524,6 +4530,7 @@ def _log_attempt(
         effective_routing_mode=effective_routing_mode,
         traffic_kind=traffic_kind,
         ttfb_ms=ttfb_ms,
+        idle_gap_ms=idle_gap_ms,
     )
     request_id = usage_log.record(entry)
     if peer_quality_capture is not None and peer_quality_capture.nonce:

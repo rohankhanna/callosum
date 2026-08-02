@@ -335,6 +335,13 @@ END""",
     # split () and data-driven stall-guard tuning
     # (). Same clock (time.time()) as latency_ms.
     "ALTER TABLE requests ADD COLUMN ttfb_ms INTEGER",
+    # Largest inter-chunk idle gap in ms for LOCAL streamed requests: the
+    # longest the local upstream made us wait between two consecutive chunks
+    # once data was flowing, as measured by stall_guarded. NULL for non-stream
+    # rows, remote streams (not stall-guarded), and streams that ended before
+    # a second chunk. Feeds data-driven tuning of
+    # CALLOSUM_LOCAL_STREAM_IDLE_TIMEOUT_S ().
+    "ALTER TABLE requests ADD COLUMN idle_gap_ms INTEGER",
 ]
 
 
@@ -398,6 +405,10 @@ class UsageLogEntry:
     # Time-to-first-byte in ms (see _MIGRATIONS ttfb_ms column). NULL for
     # non-stream rows and streams that produced no chunks.
     ttfb_ms: int | None = None
+    # Largest inter-chunk idle gap in ms for LOCAL streams (see _MIGRATIONS
+    # idle_gap_ms column). NULL for non-stream, remote, and single-chunk
+    # streams.
+    idle_gap_ms: int | None = None
     # Raw float32 bytes of the prompt embedding produced by the routing
     # EmbeddingProvider. NULL when the noop provider is active (cold-
     # start configuration) or when text extraction returned empty.
@@ -629,6 +640,7 @@ class UsageLog:
             entry.effective_routing_mode,
             entry.traffic_kind,
             entry.ttfb_ms,
+            entry.idle_gap_ms,
         )
         with self._lock:
             cursor = self._conn.execute(
@@ -652,13 +664,13 @@ class UsageLog:
                     prompt_complexity_class, prompt_text, response_text,
                     recommender_classifier_cell, recommender_raw_output,
                     recommender_source, prompt_embedding,
-                    effective_routing_mode, traffic_kind, ttfb_ms
+                    effective_routing_mode, traffic_kind, ttfb_ms, idle_gap_ms
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?
+                    ?, ?, ?, ?
                 )
                 """,
                 row,

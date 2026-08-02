@@ -54,6 +54,15 @@ class CallHandle:
     # data-driven stall-guard tuning (). Same clock as
     # ts_start/ts_end so the subtraction is valid.
     first_byte_at: float | None = None
+    # Largest inter-chunk idle gap (seconds) observed by the local-lane
+    # stall guard, i.e. the longest the upstream made us wait between two
+    # consecutive chunks once data was flowing. Set by stall_guarded on
+    # local streams only (remote lanes are not stall-guarded). NULL for
+    # non-stream calls, remote streams, and streams that ended before a
+    # second chunk. Persisted as requests.idle_gap_ms to tune
+    # CALLOSUM_LOCAL_STREAM_IDLE_TIMEOUT_S (). monotonic clock
+    # (a pure duration, not a wall-clock stamp).
+    max_idle_gap_s: float | None = None
 
 
 class Backend(Protocol):

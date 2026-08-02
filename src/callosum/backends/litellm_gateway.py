@@ -270,6 +270,7 @@ class LiteLLMGatewayBackend:
                     first_item_timeout_s=LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S,
                     idle_timeout_s=LOCAL_STREAM_IDLE_TIMEOUT_S,
                     what=f"local LLM gateway {out_body.get('model', '')}",
+                    handle=handle,
                 ):
                     yield chunk
         except httpx.HTTPError as exc:
@@ -528,6 +529,7 @@ class LiteLLMGatewayBackend:
                     first_item_timeout_s=LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S,
                     idle_timeout_s=LOCAL_STREAM_IDLE_TIMEOUT_S,
                     what=f"local LLM gateway {upstream_model}",
+                    handle=handle,
                 ):
                     if not line:
                         continue

@@ -87,6 +87,24 @@ def test_record_ttfb_ms_defaults_null(tmp_path: Path) -> None:
     log.close()
 
 
+def test_record_persists_idle_gap_ms(tmp_path: Path) -> None:
+    log = UsageLog(tmp_path / "u.sqlite")
+    rowid = log.record(_entry(idle_gap_ms=320))
+    conn = sqlite3.connect(tmp_path / "u.sqlite")
+    (gap,) = conn.execute("SELECT idle_gap_ms FROM requests WHERE id = ?", (rowid,)).fetchone()
+    assert gap == 320
+    log.close()
+
+
+def test_record_idle_gap_ms_defaults_null(tmp_path: Path) -> None:
+    log = UsageLog(tmp_path / "u.sqlite")
+    rowid = log.record(_entry())
+    conn = sqlite3.connect(tmp_path / "u.sqlite")
+    (gap,) = conn.execute("SELECT idle_gap_ms FROM requests WHERE id = ?", (rowid,)).fetchone()
+    assert gap is None
+    log.close()
+
+
 def test_migrates_ttfb_ms_column_onto_existing_db(tmp_path: Path) -> None:
     """A DB created before the ttfb_ms column must gain it via _MIGRATIONS."""
     db = tmp_path / "u.sqlite"
@@ -117,12 +135,13 @@ def test_migrates_ttfb_ms_column_onto_existing_db(tmp_path: Path) -> None:
     conn.commit()
     conn.close()
     # Opening with UsageLog runs the guarded ALTER TABLE migration chain,
-    # including the new ttfb_ms column.
+    # including the new ttfb_ms and idle_gap_ms columns.
     log = UsageLog(db)
     log.close()
     conn = sqlite3.connect(db)
     cols = {row[1] for row in conn.execute("PRAGMA table_info(requests)").fetchall()}
     assert "ttfb_ms" in cols
+    assert "idle_gap_ms" in cols
     conn.close()
 
 

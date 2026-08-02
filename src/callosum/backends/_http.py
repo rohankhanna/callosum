@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterator
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 import httpx
 
 from callosum.errors import BackendError, classify_http_status
+
+if TYPE_CHECKING:
+    from callosum.backend import CallHandle
 
 DEFAULT_COOLDOWN_S = 60.0
 
@@ -19,6 +23,7 @@ async def stall_guarded(
     first_item_timeout_s: float,
     idle_timeout_s: float,
     what: str = "local upstream",
+    handle: CallHandle | None = None,
 ) -> AsyncIterator[_T]:
     """Re-yield items from a streaming upstream, failing fast if it stalls.
 
@@ -42,16 +47,29 @@ async def stall_guarded(
     propagates out through the caller's async with client.stream(...)
     block, which closes the upstream socket — so the stalled runtime sees the
     disconnect and can stop generating.
+
+    When handle is given, the longest inter-chunk wait (the time spent
+    inside wait_for for a chunk AFTER the first) is recorded as
+    handle.max_idle_gap_s. That wait is the pure upstream idle — consumer
+    pull-time falls outside wait_for — so it is the right signal for
+    tuning idle_timeout_s. First-byte wait is excluded (that is the
+    TTFB signal, captured separately by the dispatch layer).
     """
     iterator = source.__aiter__()
     budget = first_item_timeout_s
     seen_first = False
+    max_gap_s = 0.0
     while True:
+        t0 = time.monotonic()
         try:
             item = await asyncio.wait_for(iterator.__anext__(), timeout=budget)
         except StopAsyncIteration:
+            if handle is not None and max_gap_s > 0.0:
+                handle.max_idle_gap_s = max_gap_s
             return
         except TimeoutError as exc:
+            if handle is not None and max_gap_s > 0.0:
+                handle.max_idle_gap_s = max_gap_s
             phase = "before first byte" if not seen_first else "mid-stream"
             raise BackendError(
                 classification="transient",
@@ -59,6 +77,10 @@ async def stall_guarded(
                     f"{what} stalled {phase}: no data for {budget:.0f}s — treating as a hang; routing will fall back"
                 ),
             ) from exc
+        if seen_first:
+            # Subsequent chunk: this wait IS the inter-chunk idle gap. Consumer
+            # processing time happens between yields, outside this wait_for.
+            max_gap_s = max(max_gap_s, time.monotonic() - t0)
         seen_first = True
         budget = idle_timeout_s
         yield item

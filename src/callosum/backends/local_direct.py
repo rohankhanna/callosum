@@ -493,6 +493,7 @@ class LocalModelRegistryBackend:
                     first_item_timeout_s=LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S,
                     idle_timeout_s=LOCAL_STREAM_IDLE_TIMEOUT_S,
                     what=f"local {entry.id}",
+                    handle=handle,
                 ):
                     chat_chunks.append(chunk)
                     yield chunk
@@ -575,6 +576,7 @@ class LocalModelRegistryBackend:
                             first_item_timeout_s=LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S,
                             idle_timeout_s=LOCAL_STREAM_IDLE_TIMEOUT_S,
                             what=f"local {entry.id}",
+                            handle=handle,
                         )
                     )
                     async for chunk in collector.iter_through():
