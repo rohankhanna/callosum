@@ -235,7 +235,7 @@ def cmd_gate(args: argparse.Namespace) -> int:
     report their own status but do not block a Tier-1-green merge. Exit 0
     when the gate is green-for-merge (Tier 1 green), 1 when merge-blocked."""
     from callosum.gate.harness import GateConfig, run_gate
-    from callosum.gate.tier1 import Tier1Config
+    from callosum.gate.tier1 import Tier1Config, resolve_gate_python
     from callosum.gate.types import Tier
 
     repo_root = Path(args.repo_root).expanduser() if args.repo_root else _repo_root_from_cwd()
@@ -246,7 +246,10 @@ def cmd_gate(args: argparse.Namespace) -> int:
     else:
         tiers = (Tier.TIER1, Tier.TIER2, Tier.TIER3)
     config = GateConfig(
-        tier1=Tier1Config(full_suite=not args.no_full_suite),
+        tier1=Tier1Config(
+            python=resolve_gate_python(str(repo_root)),
+            full_suite=not args.no_full_suite,
+        ),
         tier2=_tier2_config_from_args(args),
         repo_root=str(repo_root),
     )

@@ -105,67 +105,6 @@ def test_record_idle_gap_ms_defaults_null(tmp_path: Path) -> None:
     log.close()
 
 
-def test_record_extracts_previous_response_id_from_client_request(tmp_path: Path) -> None:
-    """Ingress signal (): a request carrying the handle is
-    logged with used=1 and the raw id, so one real session answers off the
-    log whether the codex CLI emits previous_response_id."""
-    log = UsageLog(tmp_path / "u.sqlite")
-    rowid = log.record(
-        _entry(client_request={"input": [], "previous_response_id": "resp_abc123"})
-    )
-    conn = sqlite3.connect(tmp_path / "u.sqlite")
-    used, prev = conn.execute(
-        "SELECT used_previous_response_id, previous_response_id FROM requests WHERE id = ?",
-        (rowid,),
-    ).fetchone()
-    assert used == 1
-    assert prev == "resp_abc123"
-    log.close()
-
-
-def test_record_previous_response_id_absent_yields_used_zero(tmp_path: Path) -> None:
-    log = UsageLog(tmp_path / "u.sqlite")
-    rowid = log.record(_entry(client_request={"input": []}))
-    conn = sqlite3.connect(tmp_path / "u.sqlite")
-    used, prev = conn.execute(
-        "SELECT used_previous_response_id, previous_response_id FROM requests WHERE id = ?",
-        (rowid,),
-    ).fetchone()
-    assert used == 0
-    assert prev is None
-    log.close()
-
-
-def test_record_previous_response_id_caller_override(tmp_path: Path) -> None:
-    """A caller-provided previous_response_id overrides client_request extraction."""
-    log = UsageLog(tmp_path / "u.sqlite")
-    rowid = log.record(
-        _entry(
-            client_request={"previous_response_id": "from_request"},
-            previous_response_id="from_caller",
-        )
-    )
-    conn = sqlite3.connect(tmp_path / "u.sqlite")
-    used, prev = conn.execute(
-        "SELECT used_previous_response_id, previous_response_id FROM requests WHERE id = ?",
-        (rowid,),
-    ).fetchone()
-    assert used == 1
-    assert prev == "from_caller"
-    log.close()
-
-
-def test_record_persists_cache_creation_tokens(tmp_path: Path) -> None:
-    log = UsageLog(tmp_path / "u.sqlite")
-    rowid = log.record(_entry(cache_creation_tokens=42))
-    conn = sqlite3.connect(tmp_path / "u.sqlite")
-    (cct,) = conn.execute(
-        "SELECT cache_creation_tokens FROM requests WHERE id = ?", (rowid,)
-    ).fetchone()
-    assert cct == 42
-    log.close()
-
-
 def test_migrates_ttfb_ms_column_onto_existing_db(tmp_path: Path) -> None:
     """A DB created before the ttfb_ms column must gain it via _MIGRATIONS."""
     db = tmp_path / "u.sqlite"
@@ -203,24 +142,6 @@ def test_migrates_ttfb_ms_column_onto_existing_db(tmp_path: Path) -> None:
     cols = {row[1] for row in conn.execute("PRAGMA table_info(requests)").fetchall()}
     assert "ttfb_ms" in cols
     assert "idle_gap_ms" in cols
-    # Token-economy observability columns ().
-    assert "cache_creation_tokens" in cols
-    assert "used_previous_response_id" in cols
-    assert "previous_response_id" in cols
-    conn.close()
-
-
-def test_migration_is_idempotent_for_new_columns(tmp_path: Path) -> None:
-    """Re-opening an already-migrated DB must not error on the new ALTERs."""
-    db = tmp_path / "u.sqlite"
-    log = UsageLog(db)
-    log.close()
-    # Second open re-runs _MIGRATIONS; the guarded ALTERs are no-ops here.
-    log2 = UsageLog(db)
-    log2.close()
-    conn = sqlite3.connect(db)
-    cols = {row[1] for row in conn.execute("PRAGMA table_info(requests)").fetchall()}
-    assert "previous_response_id" in cols
     conn.close()
 
 

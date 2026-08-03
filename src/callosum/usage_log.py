@@ -342,29 +342,6 @@ END""",
     # a second chunk. Feeds data-driven tuning of
     # CALLOSUM_LOCAL_STREAM_IDLE_TIMEOUT_S ().
     "ALTER TABLE requests ADD COLUMN idle_gap_ms INTEGER",
-    # Token-economy observability (). These three columns
-    # unblock the held previous_response_id linearization transform
-    # (O(K^2)->O(K) conversation compression) by making the ingress signal
-    # queryable:
-    #  - cache_creation_tokens: the Anthropic-style cache-WRITE token count
-    #    (the portion of the prompt written to the prefix cache this turn),
-    #    split from cached_tokens which keeps its cache-READ meaning. NULL
-    #    until an upstream usage shape exposing cache-creation is wired in;
-    #    safe metadata-only ADD like the token columns above it.
-    #  - used_previous_response_id (1/0) + previous_response_id (raw id):
-    #    ingress-derived in record() from the client request, answering the
-    #    residual unknown of whether the codex CLI actually emits
-    #    previous_response_id in real traffic. Read off the log after one
-    #    real session instead of chasing the codex source. Pre-existing rows
-    #    stay NULL.
-    # NOTE: the companion idx_requests_session_ts (session_id, ts_start)
-    # index that accelerates batched-vs-serial turn clustering is NOT in
-    # this auto-migration list: over the live ~115M-row DB it is a heavy
-    # one-time build that must be operator-gated. Its DDL is recorded on
-    #  as an explicit operator one-off.
-    "ALTER TABLE requests ADD COLUMN cache_creation_tokens INTEGER",
-    "ALTER TABLE requests ADD COLUMN used_previous_response_id INTEGER",
-    "ALTER TABLE requests ADD COLUMN previous_response_id TEXT",
 ]
 
 
@@ -432,16 +409,6 @@ class UsageLogEntry:
     # idle_gap_ms column). NULL for non-stream, remote, and single-chunk
     # streams.
     idle_gap_ms: int | None = None
-    # Token-economy observability (). cache_creation_tokens
-    # is the cache-WRITE split of cached_tokens (caller-set from upstream
-    # usage; NULL until a cache-creation usage shape is wired in).
-    cache_creation_tokens: int | None = None
-    # used_previous_response_id (1/0) + previous_response_id are
-    # ingress-derived in record() from the client request; the fields exist
-    # so a caller can override the extraction (e.g. a translated request
-    # carrying the id out-of-band). See _MIGRATIONS for column docs.
-    used_previous_response_id: int | None = None
-    previous_response_id: str | None = None
     # Raw float32 bytes of the prompt embedding produced by the routing
     # EmbeddingProvider. NULL when the noop provider is active (cold-
     # start configuration) or when text extraction returned empty.
@@ -626,14 +593,6 @@ class UsageLog:
         qa = entry.quota_after
         prompt_text = _extract_prompt_text(entry.client_request)
         response_text = _extract_response_text(entry.resp_payload)
-        # Ingress signal for the previous_response_id linearization
-        # (): record whether the client carried the handle
-        # so one real session answers, off the log, whether the codex CLI
-        # emits it. A caller-provided value overrides extraction.
-        previous_response_id = entry.previous_response_id
-        if previous_response_id is None:
-            previous_response_id = _extract_previous_response_id(entry.client_request)
-        used_previous_response_id = 1 if previous_response_id else 0
         row = (
             entry.ts_start,
             entry.ts_end,
@@ -682,9 +641,6 @@ class UsageLog:
             entry.traffic_kind,
             entry.ttfb_ms,
             entry.idle_gap_ms,
-            entry.cache_creation_tokens,
-            used_previous_response_id,
-            previous_response_id,
         )
         with self._lock:
             cursor = self._conn.execute(
@@ -708,15 +664,13 @@ class UsageLog:
                     prompt_complexity_class, prompt_text, response_text,
                     recommender_classifier_cell, recommender_raw_output,
                     recommender_source, prompt_embedding,
-                    effective_routing_mode, traffic_kind, ttfb_ms, idle_gap_ms,
-                    cache_creation_tokens, used_previous_response_id,
-                    previous_response_id
+                    effective_routing_mode, traffic_kind, ttfb_ms, idle_gap_ms
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?
                 )
                 """,
                 row,
@@ -1460,23 +1414,6 @@ def _walk_text(node: Any) -> list[str]:
             dict_out.extend(_walk_text(v))
         return dict_out
     return []
-
-
-def _extract_previous_response_id(client_request: dict[str, Any] | None) -> str | None:
-    """Pull the previous_response_id handle off an OpenAI/Codex request.
-
-    The Responses API carries it as a top-level string. Its presence is the
-    ingress signal for the O(K^2)->O(K) conversation linearization
-    (): one real session, read off the log, answers whether
-    the codex CLI actually emits it. Returns None for any non-string/empty
-    value so the 1/0 used_previous_response_id flag stays accurate.
-    """
-    if not isinstance(client_request, dict):
-        return None
-    value = client_request.get("previous_response_id")
-    if isinstance(value, str) and value:
-        return value
-    return None
 
 
 def _extract_prompt_text(client_request: dict[str, Any] | None) -> str | None:

@@ -65,6 +65,31 @@ def _detail(runner: CommandRunner, max_tail: int = 800) -> str:
     return blob.strip()[-max_tail:]
 
 
+def resolve_gate_python(repo_root: str | None = None) -> str:
+    """Pick the interpreter the gate's Tier-1 subprocesses should use.
+
+    The gate invokes pytest/ruff/mypy as python -m ...
+    subprocesses, so the interpreter must carry callosum's
+    [dependency-groups] dev deps. The pipx-installed callosum
+    entry point runs under the pipx venv python, which has callosum
+    (editable) but NOT the dev group — so the gate reports Tier-1 red
+    (subprocesses fail instantly, rc=1) when launched via pipx. The repo
+    .venv (created by uv sync --group dev) is the deterministic
+    interpreter that has the dev group.
+
+    Prefer <repo_root>/.venv/bin/python when it exists and is
+    executable; otherwise fall back to sys.executable so behavior is
+    unchanged where no repo venv is present (e.g. CI without a checked-in
+    venv, or an explicit non-venv run). The default Tier1Config.python
+    factory remains sys.executable so unit tests that construct a
+    Tier1Config and inject a fake runner are unaffected.
+    """
+    candidate = os.path.join(repo_root or "", ".venv", "bin", "python")
+    if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+        return candidate
+    return sys.executable
+
+
 @dataclass(frozen=True, slots=True)
 class Tier1Config:
     inaugural_cases: tuple[str, ...] = INAUGURAL_CASES

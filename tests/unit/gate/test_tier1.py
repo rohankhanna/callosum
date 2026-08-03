@@ -8,9 +8,10 @@ pytest/ruff/mypy processes. A separate end-to-end test runs the real Tier 1.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
-from callosum.gate.tier1 import INAUGURAL_CASES, SubprocessOutput, Tier1Config, run_tier1
+from callosum.gate.tier1 import INAUGURAL_CASES, SubprocessOutput, Tier1Config, resolve_gate_python, run_tier1
 from callosum.gate.types import TierStatus
 
 REPO_ROOT = str(Path(__file__).resolve().parents[3])
@@ -114,3 +115,31 @@ def test_inaugural_cases_pass_through_to_pytest() -> None:
     assert "-m" in inaugural_argv and inaugural_argv[2] == "pytest"
     assert INAUGURAL_CASES[0] in inaugural_argv
     assert INAUGURAL_CASES[1] in inaugural_argv
+
+
+def test_resolve_gate_python_prefers_repo_venv_when_present(tmp_path: Path) -> None:
+    # The pipx entry point runs under a venv that lacks the dev group; the
+    # repo .venv is the deterministic interpreter that has pytest/ruff/mypy.
+    venv_bin = tmp_path / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    venv_python = venv_bin / "python"
+    venv_python.write_text("#!/usr/bin/env python3\n")
+    venv_python.chmod(0o755)
+    assert resolve_gate_python(str(tmp_path)) == str(venv_python)
+
+
+def test_resolve_gate_python_falls_back_to_sys_executable_without_venv(tmp_path: Path) -> None:
+    # No repo .venv present (e.g. CI without a checked-in venv): behavior is
+    # unchanged — fall back to sys.executable so the gate still runs.
+    assert resolve_gate_python(str(tmp_path)) == sys.executable
+
+
+def test_resolve_gate_python_ignores_non_executable_venv_python(tmp_path: Path) -> None:
+    # A .venv/bin/python that exists but is not executable should not be
+    # selected (e.g. a stale/broken venv); fall back to sys.executable.
+    venv_bin = tmp_path / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    venv_python = venv_bin / "python"
+    venv_python.write_text("")
+    venv_python.chmod(0o644)  # not executable
+    assert resolve_gate_python(str(tmp_path)) == sys.executable
