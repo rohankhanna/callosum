@@ -2,8 +2,7 @@
 
 Everything the Router orchestrator depends on flows through these
 interfaces. Concrete implementations are chosen at startup from config —
-swap an embedding model, predictor, or selector without touching the
-orchestrator.
+swap a predictor or selector without touching the orchestrator.
 """
 
 from __future__ import annotations
@@ -25,16 +24,13 @@ class PromptFeatures:
     (system + user + tool messages). `tokens` is an estimate; `modalities`
     enumerates what kinds of content the body contains (`{"text"}`
     minimally; add `"image"`, `"audio"`, `"video"` when those parts
-    appear). `needs_tools` flags a non-empty `tools` field. `embedding`
-    is the serialized vector from whichever EmbeddingProvider is wired
-    in — None when the no-op provider is active or no provider was set.
+    appear). `needs_tools` flags a non-empty `tools` field.
     """
 
     text: str
     tokens: int
     modalities: frozenset[str]
     needs_tools: bool
-    embedding: bytes | None = None
 
 
 # ---------- cell-side facts (looked up from Cell + backend metadata) -------
@@ -87,14 +83,12 @@ class CellCapabilities:
 class LabeledRow:
     """One training row for the QualityPredictor.
 
-    `prompt_embedding` is the serialized vector for the prompt. `cell_used`
-    is the canonical "model effort" string for the cell that handled it.
-    `outcome` is in [-1, 1]: -1 bad, 0 neutral / unknown, 1 good. The
-    predictor decides how to interpret intermediate values.
+    `cell_used` is the canonical "model effort" string for the cell that
+    handled it. `outcome` is in [-1, 1]: -1 bad, 0 neutral / unknown, 1
+    good. The predictor decides how to interpret intermediate values.
     """
 
     request_id: int
-    prompt_embedding: bytes
     cell_used: str
     outcome: float
 
@@ -122,39 +116,13 @@ class RoutingDecision:
     # wired and used as a conservative selector tie-break.
     time_estimates_ms: dict[str, float] = field(default_factory=dict)
     # Provenance: which predictor produced the decision. Lets the request
-    # log distinguish "uniform-prior cold-start" from "k-NN with N labels"
-    # etc., so downstream consumers know how to weight a given decision.
+    # log distinguish "uniform-prior cold-start" from "cell-majority-prior
+    # with N labels" etc., so downstream consumers know how to weight a
+    # given decision.
     predictor_id: str = ""
 
 
 # ---------- Protocols ------------------------------------------------------
-
-
-class EmbeddingProvider(Protocol):
-    """Encodes prompt text into a serialized embedding vector.
-
-    Async because real providers run on GPU (BGE, etc.) and a no-op
-    implementation can satisfy the contract by returning None. Returning
-    None is a valid "no embedding available" signal — predictors that
-    require an embedding fall back to their prior when they see one.
-    """
-
-    @property
-    def dim(self) -> int:
-        """Vector dimensionality. 0 for the no-op provider."""
-        ...
-
-    @property
-    def id(self) -> str:
-        """Stable identifier (e.g. 'bge-large-en-v1.5', 'noop'). Used for
-        provenance logging so future analysis knows what produced an
-        embedding."""
-        ...
-
-    async def embed(self, text: str) -> bytes | None:
-        """Return the serialized embedding for one prompt. None means
-        no embedding is available for this provider (no-op)."""
-        ...
 
 
 class QualityPredictor(Protocol):
@@ -163,22 +131,23 @@ class QualityPredictor(Protocol):
     Operates on PromptFeatures plus the surviving candidate set after the
     capability filter. Returns probabilities in [0, 1] keyed by cell. A
     well-calibrated predictor returns 0.5 when it has no opinion (cold
-    start, no neighbors, etc.) so the cost-weighted selector falls back
-    to cost ordering automatically.
+    start, no learned signal, etc.) so the cost-weighted selector falls
+    back to cost ordering automatically.
     """
 
     @property
     def id(self) -> str:
-        """Stable identifier (e.g. 'uniform', 'knn', 'gbm-v1')."""
+        """Stable identifier (e.g. 'uniform', 'cell_majority_prior')."""
         ...
 
     def predict(self, features: PromptFeatures, candidates: list[Cell]) -> dict[Cell, float]: ...
 
     def reload(self, labeled: Iterable[LabeledRow]) -> None:
-        """Refresh internal state from a labeled-row iterable. For k-NN
-        this rebuilds the index; for a trained classifier this is a no-op
-        between training runs. Called by callosum startup and after the
-        training Dispatch job emits a new checkpoint."""
+        """Refresh internal state from a labeled-row iterable. For the
+        cell-majority-prior predictor this rebuilds the per-cell priors;
+        for a trained classifier this is a no-op between training runs.
+        Called by callosum startup and after the training Dispatch job
+        emits a new checkpoint."""
         ...
 
 

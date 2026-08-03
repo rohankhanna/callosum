@@ -1383,7 +1383,7 @@ def create_app(
             )
         # Data-backed predictor reload from the request log's labeled rows.
         # Uniform is data-independent, so avoid the SQLite scan there. The
-        # kNN and cell-majority-prior predictors both implement the same
+        # cell-majority-prior predictor implements the same
         # QualityPredictor.reload contract.
         if (
             router is not None
@@ -1571,8 +1571,8 @@ def create_app(
         return {"status": "ok", "version": __version__}
 
     # /status observability: TTL-memoized expensive sub-reports ----------------
-    # peer_quality_shadow_report (a leave-one-out kNN eval over the requests
-    # DB), the min-coverage-quota report (7-day per-cell counts), and the
+    # peer_quality_shadow_report (peer-quality capture/labeling observability
+    # over the requests DB), the min-coverage-quota report (7-day per-cell counts), and the
     # rolling per-mode stats (1h/6h/24h windows) each scan the multi-GB
     # requests DB on every /status call. The The Menubar Indicator menubar polls /status
     # every ~30s, so a per-call recompute drives a recurring ~1-2s multi-core
@@ -1697,7 +1697,6 @@ def create_app(
         # /status is for "what's currently configured" introspection.
         router_block: dict[str, Any] = {
             "enabled": router is not None,
-            "embedding_provider": auto_cfg.routing.embedding_provider,
             "quality_predictor": auto_cfg.routing.quality_predictor,
             "cell_selector": auto_cfg.routing.cell_selector,
             "peer_quality_capture": {
@@ -2363,10 +2362,6 @@ async def _dispatch_internal(
     recommender_classifier_cell: str | None = None
     recommender_raw_output: str | None = None
     recommender_source: str | None = None
-    # Embedding for the prompt — populated by the EmbeddingProvider, lands
-    # in the prompt_embedding BLOB column. Stays None when noop provider
-    # is configured. Feeds the kNN predictor at training time.
-    prompt_embedding: bytes | None = None
     cell_candidates: tuple[Cell, ...] = ()
 
     # `session_prompt_tokens` lookup used to feed the now-removed hard
@@ -2754,9 +2749,6 @@ async def _dispatch_internal(
                 json.dumps(decision.predictions, separators=(",", ":"))[:500] if decision.predictions else None
             )
         recommender_source = "router"
-        # Persist the prompt embedding for the kNN predictor's training
-        # corpus. None when the noop embedding provider is selected.
-        prompt_embedding = decision.features.embedding
         # Candidate cells the dispatch layer walks if the primary's
         # backend pool 5xxs. Capped at MAX_CELL_ATTEMPTS so retry
         # latency stays bounded.
@@ -2820,7 +2812,6 @@ async def _dispatch_internal(
             recommender_classifier_cell=recommender_classifier_cell,
             recommender_raw_output=recommender_raw_output,
             recommender_source=recommender_source,
-            prompt_embedding=prompt_embedding,
             peer_quality_capture=peer_quality_capture,
         )
     result = await _dispatch_nonstream_with_cell_retry(
@@ -2843,7 +2834,6 @@ async def _dispatch_internal(
         recommender_classifier_cell=recommender_classifier_cell,
         recommender_raw_output=recommender_raw_output,
         recommender_source=recommender_source,
-        prompt_embedding=prompt_embedding,
     )
     # Response-side transforms (non-stream only — see comment above on
     # the request transform for why streaming is deferred). Empty
@@ -3154,7 +3144,6 @@ async def _dispatch_nonstream(
     recommender_classifier_cell: str | None = None,
     recommender_raw_output: str | None = None,
     recommender_source: str | None = None,
-    prompt_embedding: bytes | None = None,
     dispatch_budget: _DispatchRetryBudget | None = None,
 ) -> dict[str, Any]:
     excluded: set[str] = set()
@@ -3219,7 +3208,6 @@ async def _dispatch_nonstream(
                 recommender_classifier_cell=recommender_classifier_cell,
                 recommender_raw_output=recommender_raw_output,
                 recommender_source=recommender_source,
-                prompt_embedding=prompt_embedding,
             )
             raise _retry_budget_http("wall-clock budget exhausted") from exc
         except BackendError as exc:
@@ -3246,7 +3234,6 @@ async def _dispatch_nonstream(
                 recommender_classifier_cell=recommender_classifier_cell,
                 recommender_raw_output=recommender_raw_output,
                 recommender_source=recommender_source,
-                prompt_embedding=prompt_embedding,
             )
             last_error = exc
             if exc.classification not in RETRYABLE:
@@ -3284,7 +3271,6 @@ async def _dispatch_nonstream(
             recommender_classifier_cell=recommender_classifier_cell,
             recommender_raw_output=recommender_raw_output,
             recommender_source=recommender_source,
-            prompt_embedding=prompt_embedding,
         )
         return result
 
@@ -3349,7 +3335,6 @@ async def _dispatch_stream(
     recommender_classifier_cell: str | None = None,
     recommender_raw_output: str | None = None,
     recommender_source: str | None = None,
-    prompt_embedding: bytes | None = None,
     peer_quality_capture: _PeerQualityCapture | None = None,
     dispatch_budget: _DispatchRetryBudget | None = None,
 ) -> StreamingResponse:
@@ -3416,7 +3401,6 @@ async def _dispatch_stream(
                 recommender_classifier_cell=recommender_classifier_cell,
                 recommender_raw_output=recommender_raw_output,
                 recommender_source=recommender_source,
-                prompt_embedding=prompt_embedding,
             )
             _remember_binding(session_registry, session_id, backend.id)
             return StreamingResponse(_empty_iter(), media_type="text/event-stream")
@@ -3449,7 +3433,6 @@ async def _dispatch_stream(
                 recommender_classifier_cell=recommender_classifier_cell,
                 recommender_raw_output=recommender_raw_output,
                 recommender_source=recommender_source,
-                prompt_embedding=prompt_embedding,
             )
             raise _retry_budget_http("wall-clock budget exhausted") from exc
         except BackendError as exc:
@@ -3476,7 +3459,6 @@ async def _dispatch_stream(
                 recommender_classifier_cell=recommender_classifier_cell,
                 recommender_raw_output=recommender_raw_output,
                 recommender_source=recommender_source,
-                prompt_embedding=prompt_embedding,
             )
             last_error = exc
             if exc.classification not in RETRYABLE:
@@ -3522,7 +3504,6 @@ async def _dispatch_stream(
                 recommender_classifier_cell=recommender_classifier_cell,
                 recommender_raw_output=recommender_raw_output,
                 recommender_source=recommender_source,
-                prompt_embedding=prompt_embedding,
                 peer_quality_capture=peer_quality_capture,
             ),
             media_type="text/event-stream",
@@ -4315,7 +4296,6 @@ async def _log_on_complete(
     recommender_classifier_cell: str | None = None,
     recommender_raw_output: str | None = None,
     recommender_source: str | None = None,
-    prompt_embedding: bytes | None = None,
     peer_quality_capture: _PeerQualityCapture | None = None,
 ) -> AsyncIterator[bytes]:
     """Pass-through wrapper that writes the usage log row when the stream ends.
@@ -4348,7 +4328,6 @@ async def _log_on_complete(
         recommender_classifier_cell=recommender_classifier_cell,
         recommender_raw_output=recommender_raw_output,
         recommender_source=recommender_source,
-        prompt_embedding=prompt_embedding,
         peer_quality_capture=peer_quality_capture,
     )
 
@@ -4447,7 +4426,6 @@ def _log_attempt(
     recommender_classifier_cell: str | None = None,
     recommender_raw_output: str | None = None,
     recommender_source: str | None = None,
-    prompt_embedding: bytes | None = None,
     peer_quality_capture: _PeerQualityCapture | None = None,
 ) -> None:
     if usage_log is None:
@@ -4526,7 +4504,6 @@ def _log_attempt(
         recommender_classifier_cell=recommender_classifier_cell,
         recommender_raw_output=recommender_raw_output,
         recommender_source=recommender_source,
-        prompt_embedding=prompt_embedding,
         effective_routing_mode=effective_routing_mode,
         traffic_kind=traffic_kind,
         ttfb_ms=ttfb_ms,

@@ -11,11 +11,11 @@ Runs as a Dispatch job:
 
 For each unlabeled row with captured req/resp payloads, the labeler
 runs the failure rules; if any fires, quality_score is set to -1.
-Rows where no rule fires stay unlabeled — the kNN predictor treats
+Rows where no rule fires stay unlabeled — the predictor treats
 unlabeled rows as "no opinion."
 
-Checkpointable (SIGTERM safe) and resumable, same pattern as
-`embed_backfill`.
+Checkpointable (SIGTERM safe) and resumable, same pattern as the other
+Dispatch jobs.
 """
 
 from __future__ import annotations

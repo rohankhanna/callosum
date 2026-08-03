@@ -3,9 +3,8 @@
     request → features → capability filter → predict → select → RoutingDecision
 
 Depends only on the Protocols defined in routing/protocols.py and the
-existing Cell type. No knowledge of how embeddings are computed, how
-predictions are made, or how cost is ranked — each is injected at
-construction.
+existing Cell type. No knowledge of how predictions are made or how cost
+is ranked — each is injected at construction.
 """
 
 from __future__ import annotations
@@ -19,7 +18,6 @@ from callosum.routing.feasibility import feasibility_eligible
 from callosum.routing.features import extract_features
 from callosum.routing.protocols import (
     CellSelector,
-    EmbeddingProvider,
     QualityPredictor,
     RoutingDecision,
 )
@@ -100,7 +98,6 @@ class Router:
     def __init__(
         self,
         *,
-        embedding: EmbeddingProvider,
         predictor: QualityPredictor,
         selector: CellSelector,
         capability_filter: CapabilityFilter,
@@ -109,7 +106,6 @@ class Router:
         feasibility_enabled: bool = True,
         feasibility_budget_s: float = _DEFAULT_FEASIBILITY_BUDGET_S,
     ) -> None:
-        self._embedding = embedding
         self._predictor = predictor
         self._selector = selector
         self._filter = capability_filter
@@ -126,7 +122,7 @@ class Router:
         / offline). The capability filter further drops cells whose
         physical capabilities don't match the request.
         """
-        features = await extract_features(body, self._embedding)
+        features = await extract_features(body)
         compatible = self._filter.filter(cells, features)
         if not compatible:
             raise NoCompatibleCellError(
@@ -145,8 +141,8 @@ class Router:
             # cell so coverage accrues unbiased. Restrict to cells that fully
             # fit the context window so we don't 4xx on overflow; fall back to
             # the whole compatible pool when nothing fully fits. Once enough
-            # peer-quality data exists, the KNN predictor returns differentiated
-            # scores and the exploit branch below takes over per-prompt.
+            # peer-quality data exists, the cell-majority-prior predictor returns
+            # differentiated scores and the exploit branch below takes over.
             fitting = [
                 c for c in compatible if _window_fit_factor(capabilities_map[c].context_window, features.tokens) >= 1.0
             ]

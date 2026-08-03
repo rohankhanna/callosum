@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import asyncio
 
-from callosum.routing.embedding.noop import NoopEmbeddingProvider
 from callosum.routing.features import extract_features
 
 
 def _features(body: dict):
-    return asyncio.run(extract_features(body, NoopEmbeddingProvider()))
+    return asyncio.run(extract_features(body))
 
 
 def test_extract_text_from_chat_messages() -> None:
@@ -114,12 +113,6 @@ def test_needs_tools_accepts_legacy_functions_field() -> None:
 def test_needs_tools_false_when_field_empty_or_missing() -> None:
     assert _features({"messages": [{"role": "user", "content": "x"}]}).needs_tools is False
     assert _features({"messages": [{"role": "user", "content": "x"}], "tools": []}).needs_tools is False
-
-
-def test_embedding_none_with_noop_provider() -> None:
-    body = {"messages": [{"role": "user", "content": "x"}]}
-    f = _features(body)
-    assert f.embedding is None
 
 
 def test_tokens_estimate_scales_with_text_length() -> None:

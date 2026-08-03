@@ -1,16 +1,15 @@
 """Extract a PromptFeatures record from an incoming request body.
 
-Pure (synchronous) for the deterministic facts (tokens, modalities,
-needs_tools); the optional embedding step is async because real providers
-run on GPU. Both OpenAI Chat Completions shape and Codex Responses shape
-are handled.
+Pure and synchronous: deterministic facts (tokens, modalities,
+needs_tools). Both OpenAI Chat Completions shape and Codex Responses
+shape are handled.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from callosum.routing.protocols import EmbeddingProvider, PromptFeatures
+from callosum.routing.protocols import PromptFeatures
 
 # Conversion factor for the rough token estimate. Matches the existing
 # `_approx_input_tokens` in the legacy recommender — ~3 chars/token gives
@@ -107,26 +106,20 @@ def _detect_tools(body: dict[str, Any]) -> bool:
     return bool(isinstance(functions, list) and functions)
 
 
-async def extract_features(
-    body: dict[str, Any],
-    embedding_provider: EmbeddingProvider,
-) -> PromptFeatures:
+async def extract_features(body: dict[str, Any]) -> PromptFeatures:
     """Build a PromptFeatures record from a request body.
 
-    The embedding step is the only async part; deterministic facts are
-    extracted synchronously. When the embedding provider returns None
-    (no-op or cold-start), `features.embedding` is None and downstream
-    predictors fall back to their priors.
+    Extracts the deterministic routing facts (text, token estimate,
+    modalities, tool-use flag) synchronously. Downstream predictors
+    fall back to their priors when they have no learned signal.
     """
     text = _extract_text(body)
     tokens = _approx_tokens(text)
     modalities = _detect_modalities(body)
     needs_tools = _detect_tools(body)
-    embedding = await embedding_provider.embed(text) if text else None
     return PromptFeatures(
         text=text,
         tokens=tokens,
         modalities=modalities,
         needs_tools=needs_tools,
-        embedding=embedding,
     )

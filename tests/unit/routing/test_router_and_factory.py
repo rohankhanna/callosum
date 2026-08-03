@@ -8,7 +8,6 @@ import pytest
 
 from callosum.cell_grid import Cell
 from callosum.routing.capability import CapabilityFilter
-from callosum.routing.embedding.noop import NoopEmbeddingProvider
 from callosum.routing.factory import RoutingConfig, build_router
 from callosum.routing.protocols import CellCapabilities, LabeledRow, PromptFeatures
 from callosum.routing.router import NoCompatibleCellError, Router
@@ -86,7 +85,7 @@ class _FixedTimeEstimator:
 
 
 def test_factory_defaults_yield_a_working_cold_start_router() -> None:
-    """RoutingConfig() with no overrides → no-op embedding + uniform
+    """RoutingConfig() with no overrides → uniform
     predictor + cost-weighted selector → a working pipeline. With no quality
     signal, cold start EXPLORES: a random capable cell is chosen."""
     router = _build()
@@ -191,11 +190,6 @@ def test_router_raises_when_nothing_compatible() -> None:
 def test_factory_rejects_unknown_impl_names() -> None:
     """Mistyped config key surfaces immediately at startup, not later
     when a request fires."""
-    with pytest.raises(ValueError, match="embedding_provider"):
-        build_router(
-            RoutingConfig(embedding_provider="does-not-exist"),
-            capabilities_of=CAPS.__getitem__,
-        )
     with pytest.raises(ValueError, match="quality_predictor"):
         build_router(
             RoutingConfig(quality_predictor="does-not-exist"),
@@ -248,7 +242,6 @@ def test_router_wires_time_estimates_into_bounded_selector_preference() -> None:
         ),
     }
     router = Router(
-        embedding=NoopEmbeddingProvider(),
         predictor=_FixedPredictor({slow: 0.82, fast: 0.80}),
         selector=CostWeightedSelector(),
         capability_filter=CapabilityFilter(capabilities_of=caps.__getitem__),

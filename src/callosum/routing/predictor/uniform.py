@@ -18,9 +18,9 @@ from callosum.routing.protocols import LabeledRow, PromptFeatures
 class UniformPriorPredictor:
     """QualityPredictor impl that returns 0.5 for every candidate.
 
-    Always callable — never raises on missing embeddings, missing labels,
-    or unknown cells. Phase 1's default predictor; later phases swap in
-    KNNPredictor or a trained classifier without touching the Router
+    Always callable — never raises on missing labels or unknown cells.
+    Phase 1's default predictor; later phases swap in the cell-majority-
+    prior predictor (or a trained classifier) without touching the Router
     that consumes this output.
     """
 
