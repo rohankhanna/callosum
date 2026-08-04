@@ -596,7 +596,7 @@ The selector only routes a request when at least one backend advertises the requ
 The learning router is **adaptive, not statically configured**:
 
 - Cold-start (no labeled corpus yet) uses a uniform predictor plus catalog-priority / measured-cost ordering — local-first, cost-ordered routing with no ML deps.
-- As prompt embeddings, labeled outcomes, and measured per-cell quota burn accumulate, the predictor and a dynamic per-model `cost_rank` (fit from measured `weekly_used_percent` deltas in the request log) take over. Catalog priority is the cold-start prior; measured overrides win; operator overrides win outright.
+- As labeled outcomes (peer-quality labels and failure labels) and measured per-cell quota burn accumulate, the predictor and a dynamic per-model `cost_rank` (fit from measured `weekly_used_percent` deltas in the request log) take over. The learned predictor is `cell_majority_prior` (a per-cell majority-baseline prior that ignores prompt embeddings — the BGE prompt-embedding + KNN predictor was evaluated and removed). Catalog priority is the cold-start prior; measured overrides win; operator overrides win outright.
 
 The rewrite happens before the selector, so backends do **not** need to advertise these virtual names — they only need to advertise the real grid models. Each request's `requested_model`, `requested_reasoning_effort`, and `routing_mode` are recorded in the usage log alongside the served `model` / `reasoning_effort`, so post-hoc analysis can separate router-driven samples from user-driven ones.
 
@@ -775,9 +775,9 @@ Nonce-validated `<<qop ...>>` opinions are persisted in
 when the judging model returns it, while older rows fall back to the
 latest prior same-session subject-cell match. The shadow label job can
 write conservative `quality_score` candidates with
-`quality_label_method='peer_quality_v1'`. This produces KNN-ready
-training rows only when embeddings also exist; it does not switch live
-routing to KNN by itself.
+`quality_label_method='peer_quality_v1'`. These labels feed the
+configured quality predictor (currently `cell_majority_prior`); the
+job does not switch live routing by itself.
 
 Capture is opt-in. Set `CALLOSUM_PEER_QUALITY_CAPTURE_RATE` to a value
 above `0` before expecting new peer opinions or capture metrics. `/status`
@@ -799,7 +799,7 @@ Drop `--dry-run` only after the preview shows candidate labels worth
 writing. Dry-run mode resolves candidates through the same operator path
 but does not update request rows or checkpoint state.
 
-Inspect readiness without changing routing:
+Inspect the shadow report without changing routing:
 
 ```bash
 curl -s http://127.0.0.1:8765/status \
@@ -807,7 +807,7 @@ curl -s http://127.0.0.1:8765/status \
   | jq .router.peer_quality_shadow
 ```
 
-If the service is stopped, inspect the same shadow-readiness report
+If the service is stopped, inspect the same shadow report
 directly from the usage log:
 
 ```bash
@@ -815,15 +815,13 @@ python -m callosum.jobs.peer_quality_shadow_report \
   --db-path /home/<user>/.local/state/callosum/requests.sqlite
 ```
 
-`peer_quality_shadow` reports captured opinion counts,
-`peer_quality_v1` label counts, embedded label coverage, per-cell
-coverage, and a read-only `knn_shadow_eval` over held-out embedded
-peer-derived labeled rows. `knn_shadow_readiness` also reports the
-minimum evidence expected before P3 canary discussion: embedded
-peer-derived labels, coverage across at least two cells, and enough
-held-out shadow-eval samples. Treat that block as diagnostic only; live
-routing stays on the configured predictor until a later canary
-explicitly changes it.
+`peer_quality_shadow` reports captured opinion counts, the capture
+funnel (sampled → injected → opinion, via `peer_quality_capture`), the
+sidecar judging-cost breakdown, whether the label job has pending
+candidates, `peer_quality_v1` label counts, and per-cell label
+coverage. Treat that block as diagnostic only; live routing stays on
+the configured predictor (`cell_majority_prior`) until the operator
+approves a rollout.
 
 `requests` (one row per backend attempt — successes AND rotated-from failures):
 

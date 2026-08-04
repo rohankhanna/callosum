@@ -13,12 +13,16 @@ callosum build
 
 The helper creates a single runtime venv under
 `~/.local/share/callosum/runtime/venv` and installs the wheel there **with
-the `[embeddings]` extra**. The extra pulls in `sentence-transformers`, so the
-installed artifact is self-sufficient: a host whose config selects the `bge`
-embedding provider can start the installed binary directly, with no follow-up
-`pip install`. This mirrors `uv`'s `default-groups` (`["dev", "embeddings"]`)
-that source-mode serving (`uv run callosum serve`) already installs, so the
-runtime artifact and the source checkout carry the same dependency surface.
+the `[embeddings]` extra** (which pulls in `sentence-transformers`). The extra
+is currently dormant dead weight — no live config selects an embedding
+provider (the BGE prompt-embedding + KNN predictor subsystem was removed; the
+quality predictor is now `cell_majority_prior`, which ignores prompt
+embeddings) — but it is carried for parity with `uv`'s `default-groups`
+(`["dev", "embeddings"]`) that source-mode serving (`uv run callosum serve`)
+installs, so the runtime artifact and the source checkout carry the same
+dependency surface. Removing the extra (and `sentence-transformers`) from
+`pyproject.toml` is a deferred cleanup item that changes the dependency
+surface and belongs in a maintenance window.
 
 The canonical deployed CLI is:
 

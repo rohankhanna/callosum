@@ -1,8 +1,9 @@
 """Failure-detection labelers.
 
-Phase 6 of the learning-router refactor. The kNN predictor learns
-which cells fail on which prompt shapes by reading quality_score
-labels from the request log. These rules produce ONLY negative
+Phase 6 of the learning-router refactor. The quality predictor (currently
+cell_majority_prior, a per-cell majority-baseline prior) learns which
+cells fail on which prompt shapes by reading quality_score labels from the
+request log. These rules produce ONLY negative
 labels (-1) from objective response-shape signals; absence of
 failure is unlabeled, and the predictor treats unlabeled as
 "no opinion" via its uniform prior.

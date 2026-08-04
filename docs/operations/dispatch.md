@@ -2,19 +2,21 @@
 
 **Dispatch status:** Yes
 
-callosum runs two Dispatch-shaped workloads as of the peer-quality
+callosum runs one Dispatch-shaped workload as of the peer-quality
 learning-router work:
 
-- **`callosum.jobs.embed_backfill`** — backfill prompt embeddings for
-  request-log rows that have `prompt_text` populated but
-  `prompt_embedding IS NULL`. Seeds the kNN predictor's training
-  corpus from historical request data after switching the
-  EmbeddingProvider config from `noop` to `bge-large-en-v1.5` (or
-  any other real provider).
 - **`callosum.jobs.apply_peer_quality_labels`** — derive conservative
   request-level `quality_score` candidates from captured
   `peer_quality_opinions`. This is shadow-mode only: it writes label
-  provenance for future KNN training but does not change live routing.
+  provenance feeding the configured quality predictor (currently
+  `cell_majority_prior`, a per-cell majority-baseline prior that
+  ignores prompt embeddings) but does not change live routing.
+
+> **Removed.** The former `callosum.jobs.embed_backfill` workload
+> (backfill prompt embeddings for kNN predictor training) was deleted
+> with the embedding/KNN subsystem rip-out — no live config selects an
+> embedding provider. See
+> [`../architecture/routing_pipeline.md`](../architecture/routing_pipeline.md).
 
 ## Install
 
@@ -58,31 +60,8 @@ not from `uv run` against the repo checkout. See
 
 Dispatch execution is disabled by default. Set
 `SCHED_ORCH_ENABLE_SCHEDULER_EXEC=1` and pass `DISPATCH_API_KEY` when
-submitting jobs from callosum (a future commit may add a "submit
-backfill" admin endpoint to /status; today, submit manually).
-
-## Submit embedding backfill manually
-
-```
-EXAMPLE_ONLY python -m callosum.jobs.embed_backfill \
-    --db-path /home/<user>/.local/state/callosum/requests.sqlite \
-    --batch-size 64
-```
-
-The job:
-
-- Reads rows where `prompt_text IS NOT NULL AND prompt_embedding IS NULL`
-  in ascending id order.
-- Computes embeddings in batches, writes them back in single transactions.
-- Persists the cursor to a checkpoint file after each batch (atomic
-  write — survives SIGKILL mid-write).
-- Honors SIGTERM: finishes the in-flight batch, saves the checkpoint,
-  exits 0. Dispatch can preempt freely.
-- On restart, resumes from the checkpoint — no work re-done.
-
-Resource hint when submitting through Dispatch: `device_preference=gpu`,
-`priority=low`. The job should run only when GPU is idle so it doesn't
-contend with live routing-path embedding requests.
+submitting jobs from callosum (today, submit peer-quality label jobs
+manually; no admin submit endpoint is exposed on /status yet).
 
 ## Submit peer-quality labels manually
 
@@ -111,10 +90,9 @@ The job:
 - Persists the cursor checkpoint after each batch and honors SIGTERM
   between batches.
 - Leaves live routing untouched. Inspect `/status` at
-  `router.peer_quality_shadow` for counts, embedded-label readiness,
-  and held-out KNN shadow-eval metrics over `peer_quality_v1` rows only.
-  `knn_shadow_readiness.missing` is the operator-facing list of evidence
-  still needed before a P3 canary can be considered.
+  `router.peer_quality_shadow` for captured opinion counts, the capture
+  funnel (`peer_quality_capture`), the sidecar judging-cost breakdown,
+  and per-cell label coverage over `peer_quality_v1` rows.
 
 When the service is stopped, inspect the same report directly from the
 usage log:
@@ -164,17 +142,20 @@ python -m callosum.jobs.apply_peer_quality_labels \
   cooldown prober, capability discovery) stay in-process. They are
   tightly coupled to in-memory backend state and gain nothing from
   Dispatch's queue / DAG / restart-safety guarantees.
-- Per-request embedding generation runs inline in the routing pipeline
-  (via the EmbeddingProvider Protocol). Historical embedding backfill
-  and peer-quality label application are Dispatch-shaped jobs.
+- The proxy's per-request work (routing decision, capability filter,
+  quality predict, cost-weighted select) runs inline in the request
+  path. Only peer-quality label application is a Dispatch-shaped job —
+  a resumable, batch-shaped cursor over the request log.
 
 ## History
 
 Earlier versions of this doc declared `N/A: no long-running automation`
 because the model-based router was abandoned for sparse-data reasons
 and the upstream-classifier-driven recommender that replaced it ran
-inline per request. Phase 5 of the learning-router refactor (2026)
-puts the embedding-backfill workload back into Dispatch territory.
+inline per request. Phase 5 of the learning-router refactor (2026) put
+the peer-quality label-application workload into Dispatch territory.
+(An embedding-backfill workload was later added and then removed with
+the embedding/KNN subsystem rip-out.)
 
 ## control plane reference
 
