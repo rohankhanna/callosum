@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict
 
 from callosum.cell_grid import Cell
 from callosum.routing.capability import CapabilityFilter
-from callosum.routing.predictor.cell_prior import CellMajorityPriorPredictor
+from callosum.routing.predictor.cell_prior import CellMajorityPriorPredictor, CellMeanPriorPredictor
 from callosum.routing.predictor.uniform import UniformPriorPredictor
 from callosum.routing.protocols import (
     CellCapabilities,
@@ -43,11 +43,28 @@ class RoutingConfig(BaseModel):
 _PREDICTOR_IMPLS: dict[str, Callable[[], QualityPredictor]] = {
     "uniform": UniformPriorPredictor,
     "cell_majority_prior": CellMajorityPriorPredictor,
+    "cell_mean_prior": CellMeanPriorPredictor,
 }
 
 _SELECTOR_IMPLS: dict[str, Callable[[], CellSelector]] = {
     "cost-weighted": CostWeightedSelector,
 }
+
+
+def build_predictor(predictor_id: str) -> QualityPredictor:
+    """Resolve a predictor id to a fresh, untrained instance.
+
+    Lets offline tools (shadow-eval probe, training jobs) build a single
+    predictor by id without constructing a whole Router. Raises ValueError
+    on an unknown id, mirroring build_router.
+    """
+    try:
+        predictor_cls = _PREDICTOR_IMPLS[predictor_id]
+    except KeyError as e:
+        raise ValueError(
+            f"unknown quality_predictor {predictor_id!r}; available: {sorted(_PREDICTOR_IMPLS)}"
+        ) from e
+    return predictor_cls()
 
 
 def build_router(
