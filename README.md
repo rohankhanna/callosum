@@ -3,8 +3,9 @@
 A local, adaptive HTTP routing layer that decides which underlying model
 should handle each prompt and forwards it there, behind one
 OpenAI-compatible endpoint on `127.0.0.1`. Multiple upstream backends
-(today: Codex Plus/Pro credential-proxy backends and local models via
-local LLM gateway / LiteLLM-compatible OpenAI surfaces) sit behind one URL.
+(today: Codex Plus/Pro credential-proxy backends, local models via
+local LLM gateway / LiteLLM-compatible OpenAI surfaces, and Ollama Cloud
+models served by the local ollama daemon) sit behind one URL.
 Routing decisions are made per request by an in-process pipeline:
 extract prompt features, filter cells that cannot serve the request,
 predict each compatible cell's chance of satisfying it, then select the
@@ -42,6 +43,7 @@ knowing anything else is going on.
   - [`[usage_log]`](#usage_log)
   - [`[auth]`](#auth)
   - [`[[backends]]`](#backends)
+  - [Backends registered outside `[[backends]]`](#backends-registered-outside-backends)
 - [Endpoints](#endpoints)
 - [How rotation works](#how-rotation-works)
 - [Switching models and reasoning levels](#switching-models-and-reasoning-levels-model-reasoning)
@@ -512,6 +514,13 @@ models = ["model-a0e7", "model-a0c3"]
 - `models` — required as a **cold-start fallback**. The proxy fetches the live model list from the service at startup (and refreshes hourly), and uses *that* dynamic list in preference to whatever's in the TOML. The TOML value is what's served until the first successful upstream refresh — so it must be non-empty, but it doesn't need to be exhaustive or up to date. Model listings change frequently, so this design means operators don't have to manually chase updates.
 
 To distribute load across multiple backends, declare multiple `[[backends]]` entries pointing to the same or different credential services. The `models` values can be the same across them — each backend pulls its actual catalog at startup based on what the service provides.
+
+### Backends registered outside `[[backends]]`
+
+Not every backend is a `[[backends]]` TOML entry. Two local-process backends and one remote-band backend are registered programmatically in `__main__.build_runtime_backends` and are NOT configured via `[[backends]]`:
+
+- **Local lane** (`LocalModelRegistryBackend`, preferred; `LiteLLMGatewayBackend`, fallback) — local models served by local LLM gateway / a LiteLLM gateway. The two are mutually exclusive; the preferred one is registered whenever the `local-llm` CLI is on PATH. See `ARCHITECTURE.md`.
+- **Ollama Cloud** (`OllamaCloudBackend`, `BackendKind="ollama_cloud"`) — cloud models served by the local ollama daemon under `ollama signin`. Callosum holds NO credential; the daemon does. It is registered only when `CALLOSUM_OLLAMA_CLOUD_ENABLED=1` (default off), catalogs `/api/tags` filtered to `:cloud`-suffixed models, and dispatches via the daemon's OpenAI-compatible `/v1/chat/completions` with no `Authorization` header. It sits in the remote band (`CLOUD_PRIORITY_OFFSET=1_000`). Because it is a distinct `BackendKind` (not a `litellm_gateway` model-name predicate), cloud cells land in remote lanes and stay out of local-only/probing paths by omission. Enable it durably via a systemd drop-in — see `docs/operations/runtime_deploy.md`.
 
 ## Endpoints
 

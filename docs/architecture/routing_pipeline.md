@@ -26,7 +26,13 @@ strategies, not multiple competing routers.
    pin → denylist. Hidden cells never enter free routing; an explicit pin may
    target them and then either dispatch normally or return a specific 503 if no
    backend serves the requested model/effort. Empty pool → 503 (specific
-   reason).
+   reason). The backend-kind filter's remote set is two distinct kinds:
+   `codex_auth_vault` (Codex Plus/Pro) and `ollama_cloud` (cloud models via the
+   local ollama daemon under `ollama signin`; `BackendKind="ollama_cloud"`,
+   env-gated via `CALLOSUM_OLLAMA_CLOUD_ENABLED`, `CLOUD_PRIORITY_OFFSET=1_000`).
+   Every `=="litellm_gateway"` (local-affirmative) site excludes `ollama_cloud`
+   by omission, so cloud cells land in remote lanes and stay out of
+   local-only/probing paths without a per-site predicate.
 7. **`router.route(body, cells_now)`** — the one decision (`routing/router.py`):
    `extract_features` → `CapabilityFilter` (empty → 400) →
    `QualityPredictor.predict` (`cell_majority_prior` = learned per-cell

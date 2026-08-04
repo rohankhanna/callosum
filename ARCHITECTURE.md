@@ -20,19 +20,20 @@ For the product's purpose and intended outcome, see `The Project Documentation`.
                    │    proxy     │  systemd --user managed
                    └──────┬───────┘
                           │
-        ┌─────────────────┼─────────────────────────┐
-        ▼                 ▼                         ▼
-  codex_auth_vault  LocalModelRegistryBackend       LiteLLMGatewayBackend
-   (remote: Codex)    (local, PREFERRED:        (local, FALLBACK:
-    Plus/Pro vaults     per-model endpoints       LiteLLM gateway —
-    rotated by health,  via local-llm CLI         registered only when
-    quota, cooldown)     discovery)               LocalModelRegistryBackend
-                                                  is NOT available)
-        │                 │                         │
-        ▼                 ▼                         ▼
-   chatgpt.com       ollama / vllm / etc       LiteLLM proxy
-   /backend-api      per-model endpoints       /v1/chat/completions
-   /codex/responses
+   ┌──────────────────┬───┴───────────────┬──────────────────┐
+   ▼                  ▼                   ▼                  ▼
+ codex_auth_vault  LocalModelRegistryBackend  LiteLLMGatewayBackend  OllamaCloudBackend
+  (remote: Codex)   (local, PREFERRED:   (local, FALLBACK:    (remote, ENV-GATED:
+   Plus/Pro vaults   per-model endpoints  LiteLLM gateway —    cloud models served
+   rotated by health, via local-llm CLI    registered only     by the LOCAL ollama
+   quota, cooldown)  discovery)            when LocalModelRegistry    daemon under
+                                         Backend is NOT       `ollama signin`; callosum
+                                         available)           holds NO credential)
+   │                  │                   │                    │
+   ▼                  ▼                   ▼                    ▼
+ chatgpt.com      ollama / vllm / etc  LiteLLM proxy       local ollama daemon
+ /backend-api     per-model endpoints  /v1/chat/completions /v1/chat/completions
+ /codex/responses                                            (daemon injects cloud auth)
 ```
 
 The two local-cell backends (`LocalModelRegistryBackend`,
@@ -44,6 +45,21 @@ fallback only when the CLI isn't installed. See
 `src/callosum/__main__.py` for the gating and
 `docs/decisions/...-keep-litellmgatewaybackend-as-fallback...`
 for the historical rationale.
+
+`OllamaCloudBackend` is a fourth, INDEPENDENT backend — not
+mutually exclusive with the local pair. It is registered only when
+`CALLOSUM_OLLAMA_CLOUD_ENABLED=1` (default off). Callosum holds NO
+credential: the local ollama daemon (`localhost:11434`) authenticates
+to the cloud under `ollama signin` and callosum dispatches to the
+daemon's OpenAI-compatible `/v1/chat/completions` with no
+`Authorization` header. Catalog is `/api/tags` filtered to
+`:cloud`-suffixed models (so cloud and local models partition
+cleanly); capabilities come from `/api/show`. It sits in the remote
+band (`CLOUD_PRIORITY_OFFSET=1_000`, after Codex but before the local
+`10_000` floor) and is classified `BackendKind="ollama_cloud"`, which
+every `=="litellm_gateway"` (local-affirmative) site excludes by
+omission — cloud cells land in remote lanes and stay out of
+local-only/probing paths.
 
 callosum runs loopback-only on a single operator's machine. It is
 not multi-tenant. Each request enters the proxy on
@@ -134,7 +150,17 @@ All paths are under `src/callosum/`.
   is the FALLBACK local backend, used only when the `local-llm` CLI
   isn't on PATH; it talks to a LiteLLM gateway as an intermediate
   hop. The two local backends are mutually exclusive at registration
-  time (see `__main__.py`). `credential_proxy.py` is a thin adapter
+  time (see `__main__.py`). `ollama_cloud.py` (`OllamaCloudBackend`,
+  `BackendKind="ollama_cloud"`) is an independent env-gated remote
+  backend (`CALLOSUM_OLLAMA_CLOUD_ENABLED`, default off) for cloud
+  models served by the local ollama daemon under `ollama signin`;
+  callosum holds NO credential. It catalogs `/api/tags` filtered to
+  `:cloud`-suffixed models, reads capabilities from `/api/show`, and
+  dispatches via the daemon's `/v1/chat/completions`. Its Responses↔Chat
+  translators and chat→Responses streaming generator live in the shared
+  `backends/_responses_chat.py` (imported by both `litellm_gateway` and
+  `ollama_cloud`; litellm re-exports the `_`-prefixed names for backward
+  compatibility). `credential_proxy.py` is a thin adapter
   for the legacy credential-proxy shape.
 - `cell_grid.py` — the (model, reasoning_effort) cell taxonomy and
   the merger that produces the live cell pool from backend

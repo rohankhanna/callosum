@@ -77,6 +77,58 @@ To serve directly from the checkout for development, use:
 callosum serve --source
 ```
 
+## Durable environment variables (systemd drop-ins)
+
+Some runtime behavior is toggled by environment variables read once at
+process start. `systemctl --user set-environment` sets them transiently
+(scoped to the user manager; lost on `daemon-reload`/reboot), which is
+fine for a bounded capture window (see `dispatch.md`). For a flag that
+must survive restarts and reboots, use a durable systemd drop-in under
+the unit's `service.d/` directory instead:
+
+```
+~/.config/systemd/user/system-dependency-callosum.service.d/<name>.conf
+```
+
+```ini
+[Service]
+Environment=CALLOSUM_SOME_FLAG=1
+```
+
+Then `systemctl --user daemon-reload` and
+`systemctl --user restart system-dependency-callosum.service`. Verify
+with `systemctl --user show system-dependency-callosum.service -p
+Environment`. To disable: remove the file (or set the value to `0`),
+`daemon-reload`, and restart.
+
+### Ollama Cloud enable (live example)
+
+`CALLOSUM_OLLAMA_CLOUD_ENABLED=1` registers the `OllamaCloudBackend`
+(`BackendKind="ollama_cloud"`) — cloud models served by the local
+ollama daemon under `ollama signin`. Callosum holds NO credential; the
+daemon does. The durable drop-in is
+`~/.config/systemd/user/system-dependency-callosum.service.d/ollama-cloud.conf`:
+
+```ini
+[Service]
+Environment=CALLOSUM_OLLAMA_CLOUD_ENABLED=1
+```
+
+After `daemon-reload` + restart, smoke-test that the backend is live:
+
+```bash
+curl -s http://127.0.0.1:8765/status | jq '.backends[] | select(.id=="ollama-cloud")'
+curl -s http://127.0.0.1:8765/models | jq '.data[] | select(.id|test(":cloud")) | .id'
+```
+
+`:cloud`-suffixed models catalog from the daemon's `/api/tags` and are
+classified `callosum:remote/...` (e.g.
+`callosum:remote/glm-5.1:cloud:default`). The local lane catalogs from
+local LLM gateway's `/v1/models` serving endpoint, which excludes unmanaged
+`:cloud` models, so there is no double-list. Cloud cells enter the
+per-cell minimum-coverage grid, so the quota may route some real
+traffic to `glm-5.X:cloud` to satisfy the per-cell floor.
+
 ## Host-side change
 
 The systemd user unit lives in the dotfiles repo and must be updated
