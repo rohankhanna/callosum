@@ -28,9 +28,9 @@ strategies, not multiple competing routers.
    backend serves the requested model/effort. Empty pool → 503 (specific
    reason).
 7. **`router.route(body, cells_now)`** — the one decision (`routing/router.py`):
-   `extract_features` (+ embedding) → `CapabilityFilter` (empty → 400) →
-   `QualityPredictor.predict` (uniform=0.5 / knn=learned / explicit
-   cell-majority-prior shadow candidate) →
+   `extract_features` → `CapabilityFilter` (empty → 400) →
+   `QualityPredictor.predict` (`cell_majority_prior` = learned per-cell
+   majority-baseline prior; `uniform` 0.5 is the cold-start fallback) →
    `CostWeightedSelector.select` → `RoutingDecision`. Cold-start (no
    differentiated prediction) explores randomly among capability-filtered,
    window-fitting, **feasibility-eligible** cells (predicted p95 latency under
@@ -70,7 +70,7 @@ strategies, not multiple competing routers.
    re-target it — the doom-loop fix ().
 9. Rewrite body (`model`, effort) → per-cell transforms
    (`_TRANSFORM_REGISTRY.apply_request`) → stamp provenance (predictor id,
-   predictions, embedding, candidate cells capped at `MAX_CELL_ATTEMPTS=3`).
+   predictions, candidate cells capped at `MAX_CELL_ATTEMPTS=3`).
 
 ### Backend selection + execution
 10. `_active_pool` (+ selector source / `forced_backend_id` narrowing) →
@@ -92,7 +92,9 @@ strategies, not multiple competing routers.
 ## Background systems (no request involved)
 
 **Startup one-shot (`lifespan`):** cold-boot catalog refresh; catalog
-boot-resync task; kNN predictor reload (knn only); startup smoke test;
+boot-resync task; data-backed predictor reload (`cell_majority_prior`
+from the request log; stays cold-start `uniform` on reload failure);
+startup smoke test;
 capability harness + light probe one-shot; reset-aware quota/cooldown pass.
 
 **Periodic loops:** `smoke_tester` (liveness/model probing), `cooldown_prober`

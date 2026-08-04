@@ -153,9 +153,11 @@ class AutoRouterConfig(BaseModel):
     # Learning router. Pluggable pipeline:
     #   features → capability filter → quality predict → cost-weighted select
     # Each stage is a Protocol with swappable implementations. Cold-start
-    # defaults (noop embedding + uniform predictor + cost-weighted selector)
-    # produce local-first cost-ordered routing without any ML deps. Phases
-    # 4+ swap in BGE embeddings, a k-NN predictor, and the labeler.
+    # defaults (uniform predictor + cost-weighted selector) produce
+    # local-first cost-ordered routing without any ML deps. The learned
+    # predictor is `cell_majority_prior` (a per-cell majority-baseline
+    # prior that ignores prompt embeddings); an embedding/KNN predictor
+    # was evaluated and removed.
     routing: RoutingConfig = Field(default_factory=lambda: RoutingConfig())
 
     # Per-cell minimum-coverage quota (): a deterministic

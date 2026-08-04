@@ -2729,7 +2729,7 @@ async def _dispatch_internal(
             )
             body = _tr.apply_request(body, _transform_ctx)
         # Provenance for the request log — predictor_id distinguishes
-        # cold-start (uniform) from learned (knn / gbm / ...) decisions
+        # cold-start (uniform) from learned (cell_majority_prior) decisions
         # so downstream analysis can weight them differently. The
         # predictions map is the predictor's per-cell P(satisfy) over
         # the post-filter candidate set. When time estimates are present,

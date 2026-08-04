@@ -34,21 +34,22 @@ App -> R : route(body, cells_after_mode_filter)
 R -> R : extract_features(body)\n(tokens, modalities, needs_tools)
 R -> CF : filter(cells, features)
 CF --> R : compatible cells
-R -> R : predict(features, compatible)\n(uniform | knn)
+R -> R : predict(features, compatible)\n(uniform | cell_majority_prior)
 R -> S : select(scaled_predictions, capabilities)\n(cost_rank compatibility rank;\nbackend routing uses composite\n5h + weekly quota pressure)
 S --> R : chosen cell + ranked candidates
 R --> App : RoutingDecision
 
 note right of App
-  Synthetic explorer:
-  if requested_model ==
-  "auto-learning-synthetic",
-  override chosen with the
-  LEAST-sampled candidate
-  (coverage_from_db) so the
-  whole cell grid is sampled.
+  Minimum-coverage quota:
+  on a non-hard text turn,
+  if a compatible cell is
+  below its even-split floor,
+  steer to the least-sampled
+  eligible cell (feasibility-
+  filtered). Gated by
+  min_coverage_quota_enabled.
   Organic traffic keeps the
-  cost-optimal pick.
+  cost/quality-optimal pick.
 end note
 
 note right of App

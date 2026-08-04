@@ -40,13 +40,14 @@ The script expects PlantUML's single-file jar at
 yet, the script prints a clear message and exits non-zero. The jar is
 a single-file download from `https://plantuml.com/download`; it is
 kept under the user's local share rather than committed to this repo.
-Java is the only other requirement and is already standard on this
-workstation.
+Java is the only other requirement. It is NOT currently on `PATH` on
+this workstation (the dotfiles repo owns Java install state); install it
+(or restore it to `PATH`) before rendering, or the script exits non-zero.
 
 ## Why PlantUML and not Structurizr / Mermaid / diagrams-as-code
 
-- **PlantUML + Java** runs with what is already on the workstation;
-  no language runtime install, no `npm`/Chromium dependency.
+- **PlantUML + Java** needs no language runtime install and no
+  `npm`/Chromium dependency (note: Java must be on `PATH` — see above).
 - Pure-text source is diff-friendly. Source review catches drift
   between intent and what gets rendered.
 - SVG output is the control plane's preferred public format for

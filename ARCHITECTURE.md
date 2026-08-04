@@ -62,8 +62,10 @@ All paths are under `src/callosum/`.
 - `routing/` — the per-request routing pipeline. `features.py`
   extracts prompt-shape facts from the request body. `capability.py`
   filters cells against modality and tool-support requirements.
-  `predictor/` predicts quality per cell (uniform prior today; k-NN
-  on embeddings is the next-generation predictor). `selector/`
+  `predictor/` predicts quality per cell (`cell_majority_prior` — a
+  per-cell majority-baseline prior that deliberately ignores prompt
+  embeddings; the embedding/KNN predictor was evaluated and removed.
+  `uniform` returns 0.5 and is the cold-start fallback). `selector/`
   picks one cell from the predicted-and-scored candidate set
   (cost-weighted today). `router.py` orchestrates the pipeline.
   `cost_model.py` derives each remote model's compatibility `cost_rank`
@@ -85,8 +87,9 @@ All paths are under `src/callosum/`.
   floor of `min_coverage_budget_pct` over the rolling window, the
   router steers one turn to the least-sampled eligible cell so coverage
   accumulates evenly across the grid (the engine that feeds the quality
-  predictor, the measured cost model, and the future contextual bandit);
-  otherwise organic routing keeps the cost/quality-optimal pick. Gated
+  predictor and the measured cost model); the contextual-bandit plan was
+  superseded — selection is cost-weighted, not a bandit. Otherwise,
+  organic routing keeps the cost/quality-optimal pick. Gated
    `usage_estimate.py` +
   `cost_estimator.py` are the FORWARD usage estimators (the twin of the
   backward-looking `cost_model.py`): `usage_estimate.py` holds the
@@ -242,7 +245,9 @@ All paths are under `src/callosum/`.
 - `~/.local/state/callosum/operator_state.sqlite` — operator state.
 - `~/.local/state/callosum/auth.sqlite` — API keys.
 - `~/.config/callosum/admin_token` — admin-surface token.
-- `~/.cache/callosum/` — embedding model cache.
+- `~/.cache/callosum/` — (the embedding model cache that lived here was
+  removed with the embedding/KNN subsystem; the dir may still exist
+  empty).
 
 State is preserved across restarts; recovery means restarting the
 service.
