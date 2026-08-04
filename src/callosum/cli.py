@@ -31,6 +31,7 @@ from urllib import error, request
 
 from callosum.config import load_config
 from callosum.usage_diagnostic import (
+    render_compounding_cost_json,
     render_recent_turns_json,
     render_token_time_series_json,
 )
@@ -375,6 +376,24 @@ def cmd_usage_series(args: argparse.Namespace) -> int:
         bucket=args.bucket,
         limit=args.limit,
         group_by=args.group_by,
+    )
+    _print(payload, pretty=not args.compact)
+    return 0
+
+
+def cmd_usage_compounding(args: argparse.Namespace) -> int:
+    config_path = args.config if args.config is not None else _default_config_path()
+    if not config_path.exists():
+        sys.exit(f"callosum CLI: config not found: {config_path}")
+    cfg = load_config(config_path)
+    usage_path = cfg.usage_log.path
+    if usage_path is None:
+        sys.exit("callosum CLI: usage_log.path is not configured.")
+    payload = render_compounding_cost_json(
+        usage_path,
+        session_id=args.session_id,
+        limit_sessions=args.limit_sessions,
+        min_turns=args.min_turns,
     )
     _print(payload, pretty=not args.compact)
     return 0
@@ -851,6 +870,43 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit one-line JSON instead of pretty-printed JSON.",
     )
     series.set_defaults(func=cmd_usage_series)
+    compounding = pu.add_parser(
+        "compounding",
+        help=(
+            "Show per-session compounding input-token cost — the O(K^2) "
+            "re-send tax across a multi-turn session, with per-turn marginal "
+            "growth and tool-turn attribution."
+        ),
+    )
+    compounding.add_argument(
+        "--session-id",
+        default=None,
+        help="Restrict to one session_id (default: all sessions).",
+    )
+    compounding.add_argument(
+        "--limit-sessions",
+        type=int,
+        default=10,
+        help="Number of sessions to show (default: 10, most recently active first).",
+    )
+    compounding.add_argument(
+        "--min-turns",
+        type=int,
+        default=2,
+        help="Minimum turns for a session to be included (default: 2).",
+    )
+    compounding.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Path to config.toml (default: ~/.config/callosum/config.toml).",
+    )
+    compounding.add_argument(
+        "--compact",
+        action="store_true",
+        help="Emit one-line JSON instead of pretty-printed JSON.",
+    )
+    compounding.set_defaults(func=cmd_usage_compounding)
 
     p_params = sub.add_parser("params", help="Per-cell inference parameter overrides.")
     pp = p_params.add_subparsers(dest="subcommand", required=True)

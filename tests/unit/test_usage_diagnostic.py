@@ -7,12 +7,17 @@ from pathlib import Path
 import pytest
 
 from callosum.usage_diagnostic import (
+    CompoundingTurnSummary,
     SegmentSummary,
+    SessionCompoundingSummary,
     TrafficKindBucketSummary,
+    compounding_cost_summaries,
     extract_peer_quality_segments,
     first_divergence_position,
     has_peer_quality_signature,
+    is_tool_turn,
     recent_turn_summaries,
+    render_compounding_cost_json,
     render_recent_turns_json,
     render_token_time_series_json,
     token_time_series,
@@ -29,21 +34,25 @@ def _entry(
     requested_model: str | None = "callosum:remote-only",
     served_model: str | None = "model-a0e7",
     traffic_kind: str | None = None,
+    session_id: str | None = "sess-A",
+    cached_tokens: int | None = None,
+    completion_tokens: int = 12,
 ) -> UsageLogEntry:
     return UsageLogEntry(
         ts_start=ts_start,
         ts_end=ts_start + 0.5,
         route="responses",
         stream=False,
-        session_id="sess-A",
+        session_id=session_id,
         backend_id="primary",
         model=served_model,
         reasoning_effort="medium",
         status=200,
         classification=None,
         prompt_tokens=prompt_tokens,
-        completion_tokens=12,
+        completion_tokens=completion_tokens,
         total_tokens=None,
+        cached_tokens=cached_tokens,
         # `req_payload` is what the diagnostic json-loads + segment-walks; it
         # is stored zlib-compressed by UsageLog and round-trips via decompress().
         req_payload=json.dumps(req_payload).encode() if req_payload is not None else None,
@@ -519,3 +528,273 @@ def test_has_peer_quality_signature_truth_table() -> None:
     assert has_peer_quality_signature({"messages": [{"role": "assistant", "content": "<model-a0e7|42>x</model-a0e7|42>"}]}) is True
     assert has_peer_quality_signature({"messages": [{"role": "developer", "content": _AUDIT_INSTRUCTION}]}) is True
     assert has_peer_quality_signature({"instructions": _AUDIT_INSTRUCTION}) is True
+
+
+# --- Per-session compounding input-token cost () ------------
+# Each turn of a multi-turn session re-sends the growing transcript, so the
+# cumulative input across a session grows O(K^2) while per-turn input grows
+# O(K). These tests cover the decomposition (cache_read/new/output mirroring
+# the OTel GenAI convention), the running cumulative + per-turn marginal, the
+# compounding_ratio, tool-turn attribution, and session filtering/ordering.
+
+
+def test_is_tool_turn_truth_table() -> None:
+    # No payload shape -> False.
+    assert is_tool_turn({}) is False
+    # Plain user turn -> False.
+    assert is_tool_turn({"messages": [{"role": "user", "content": "hi"}]}) is False
+    assert is_tool_turn({"input": [{"type": "message", "role": "user", "content": "hi"}]}) is False
+    # Chat Completions: a tool-result message -> True.
+    assert is_tool_turn({"messages": [{"role": "tool", "content": "42"}]}) is True
+    # Chat Completions: an assistant turn carrying tool_calls -> True.
+    assert (
+        is_tool_turn(
+            {"messages": [{"role": "assistant", "content": "", "tool_calls": [{"id": "call_1"}]}]}
+        )
+        is True
+    )
+    # Responses API: function_call_output -> True.
+    assert is_tool_turn({"input": [{"type": "function_call_output", "output": "42"}]}) is True
+    # Responses API: function_call -> True.
+    assert is_tool_turn({"input": [{"type": "function_call", "name": "run"}]}) is True
+    # Any item carrying tool_call_id -> True (covers unnamed tool-result shapes).
+    assert is_tool_turn({"input": [{"tool_call_id": "call_1", "output": "42"}]}) is True
+
+
+def test_compounding_cost_basic_session_growth(tmp_path: Path) -> None:
+    db = tmp_path / "u.sqlite"
+    log = UsageLog(db, capture_bodies=True)
+    # Three-turn session: per-turn input grows 100 -> 150 -> 200; cache hit
+    # grows 0 -> 50 -> 100, so the uncached `new_tokens` is a constant 100.
+    for i, (prompt, cached) in enumerate([(100, 0), (150, 50), (200, 100)]):
+        log.record(
+            _entry(
+                ts_start=float(i),
+                prompt_tokens=prompt,
+                cached_tokens=cached,
+                req_payload={"input": f"turn {i}"},
+                session_id="sess-A",
+            )
+        )
+    log.close()
+
+    sessions = compounding_cost_summaries(db, limit_sessions=10)
+    assert len(sessions) == 1
+    s = sessions[0]
+    assert s.session_id == "sess-A"
+    assert s.turn_count == 3
+    assert s.tool_turn_count == 0  # plain input turns only
+    turns = s.turns
+    assert [t.turn_index for t in turns] == [0, 1, 2]
+    # OTel-mirrored decomposition: cache_read = cached_tokens, new = prompt - cached.
+    assert [t.cache_read_tokens for t in turns] == [0, 50, 100]
+    assert [t.new_tokens for t in turns] == [100, 100, 100]
+    assert [t.output_tokens for t in turns] == [12, 12, 12]
+    # Running cumulative input: 100, 100+150=250, 250+200=450.
+    assert [t.cumulative_input for t in turns] == [100, 250, 450]
+    # Marginal vs prior turn: first turn = its own input; later = delta.
+    assert [t.marginal_input for t in turns] == [100, 50, 50]
+    # Session-level rollup: cumulative = 450, final = 200, ratio = 2.25.
+    assert s.cumulative_input_tokens == 450
+    assert s.final_turn_input_tokens == 200
+    assert s.compounding_ratio == 2.25
+    assert s.total_output_tokens == 36
+
+
+def test_compounding_cost_tool_turn_attribution(tmp_path: Path) -> None:
+    db = tmp_path / "u.sqlite"
+    log = UsageLog(db, capture_bodies=True)
+    # Turn 1 re-sends a tool result back to the model.
+    tool_payload = {"messages": [{"role": "user", "content": "run it"}, {"role": "tool", "content": "result=42"}]}
+    log.record(_entry(ts_start=0.0, prompt_tokens=100, req_payload={"input": "ask"}, session_id="sess-T"))
+    log.record(_entry(ts_start=1.0, prompt_tokens=180, req_payload=tool_payload, session_id="sess-T"))
+    log.close()
+
+    sessions = compounding_cost_summaries(db, limit_sessions=10)
+    assert len(sessions) == 1
+    s = sessions[0]
+    assert s.tool_turn_count == 1
+    assert [t.is_tool_turn for t in s.turns] == [False, True]
+
+
+def test_compounding_cost_min_turns_filters_single_turn_sessions(tmp_path: Path) -> None:
+    db = tmp_path / "u.sqlite"
+    log = UsageLog(db, capture_bodies=True)
+    log.record(_entry(ts_start=0.0, prompt_tokens=100, req_payload={"input": "only"}, session_id="solo"))
+    log.record(_entry(ts_start=1.0, prompt_tokens=120, req_payload={"input": "a"}, session_id="pair"))
+    log.record(_entry(ts_start=2.0, prompt_tokens=140, req_payload={"input": "b"}, session_id="pair"))
+    log.close()
+
+    # Default min_turns=2 drops the single-turn session.
+    sessions = compounding_cost_summaries(db, limit_sessions=10)
+    assert [s.session_id for s in sessions] == ["pair"]
+    # min_turns=1 includes it (solo has no compounding, but is not hidden).
+    sessions_all = compounding_cost_summaries(db, limit_sessions=10, min_turns=1)
+    assert {s.session_id for s in sessions_all} == {"solo", "pair"}
+    # The solo session has ratio == 1.0 (cumulative == final == 100).
+    solo = next(s for s in sessions_all if s.session_id == "solo")
+    assert solo.compounding_ratio == 1.0
+
+
+def test_compounding_cost_session_filter_and_limit(tmp_path: Path) -> None:
+    db = tmp_path / "u.sqlite"
+    log = UsageLog(db, capture_bodies=True)
+    for i in range(3):
+        log.record(_entry(ts_start=float(i), prompt_tokens=100 + i, req_payload={"input": "x"}, session_id="alpha"))
+    for i in range(3):
+        log.record(_entry(ts_start=float(i), prompt_tokens=200 + i, req_payload={"input": "y"}, session_id="beta"))
+    log.close()
+
+    # --session-id restricts to one session.
+    alpha = compounding_cost_summaries(db, session_id="alpha", limit_sessions=10)
+    assert len(alpha) == 1
+    assert alpha[0].session_id == "alpha"
+    assert alpha[0].turn_count == 3
+    # --limit-sessions=1 picks the most-recently-active session (beta has the
+    # larger max request id).
+    limited = compounding_cost_summaries(db, limit_sessions=1)
+    assert len(limited) == 1
+    assert limited[0].session_id == "beta"
+
+
+def test_compounding_cost_handles_null_prompt_tokens(tmp_path: Path) -> None:
+    db = tmp_path / "u.sqlite"
+    log = UsageLog(db, capture_bodies=True)
+    log.record(_entry(ts_start=0.0, prompt_tokens=100, req_payload={"input": "a"}, session_id="sess-N"))
+    # A legacy/errored row with NULL prompt_tokens must not break the metric.
+    log.record(_entry(ts_start=1.0, prompt_tokens=None, req_payload={"input": "b"}, session_id="sess-N"))
+    log.record(_entry(ts_start=2.0, prompt_tokens=300, req_payload={"input": "c"}, session_id="sess-N"))
+    log.close()
+
+    sessions = compounding_cost_summaries(db, limit_sessions=10)
+    assert len(sessions) == 1
+    s = sessions[0]
+    turns = s.turns
+    # The middle turn has None prompt -> None new/cumulative/marginal; the
+    # running cumulative carries forward (treats the gap as 0).
+    assert turns[1].prompt_tokens is None
+    assert turns[1].new_tokens is None
+    assert turns[1].cumulative_input is None
+    assert turns[1].marginal_input is None
+    # Cumulative resumes: 100 (turn 0) + 0 (turn 1) + 300 (turn 2) = 400.
+    assert turns[2].cumulative_input == 400
+    # final_turn_input is the last non-None? No — it is the last turn's
+    # prompt_tokens literally (300 here), so ratio = 400/300.
+    assert s.final_turn_input_tokens == 300
+    assert s.compounding_ratio == 400 / 300
+
+
+def test_compounding_cost_orders_sessions_by_most_recent_activity(tmp_path: Path) -> None:
+    db = tmp_path / "u.sqlite"
+    log = UsageLog(db, capture_bodies=True)
+    # alpha starts first but has the smaller max id; beta is more recent.
+    for i in range(2):
+        log.record(_entry(ts_start=float(i), prompt_tokens=100, req_payload={"input": "x"}, session_id="alpha"))
+    for i in range(2):
+        log.record(_entry(ts_start=float(i), prompt_tokens=100, req_payload={"input": "y"}, session_id="beta"))
+    log.close()
+
+    sessions = compounding_cost_summaries(db, limit_sessions=10)
+    assert [s.session_id for s in sessions] == ["beta", "alpha"]
+
+
+def test_compounding_cost_bounds_and_missing_db(tmp_path: Path) -> None:
+    db = tmp_path / "u.sqlite"
+    log = UsageLog(db, capture_bodies=True)
+    log.record(_entry(ts_start=0.0, prompt_tokens=100, req_payload={"input": "x"}, session_id="a"))
+    log.record(_entry(ts_start=1.0, prompt_tokens=120, req_payload={"input": "y"}, session_id="a"))
+    log.close()
+
+    assert compounding_cost_summaries(db, limit_sessions=0) == []
+    with pytest.raises(FileNotFoundError):
+        compounding_cost_summaries(tmp_path / "nope.sqlite", limit_sessions=5)
+
+
+def test_compounding_cost_ignores_null_session_id(tmp_path: Path) -> None:
+    db = tmp_path / "u.sqlite"
+    log = UsageLog(db, capture_bodies=True)
+    # Rows with no session_id cannot be attributed and must be skipped.
+    log.record(_entry(ts_start=0.0, prompt_tokens=100, req_payload={"input": "x"}, session_id=None))
+    log.record(_entry(ts_start=1.0, prompt_tokens=120, req_payload={"input": "y"}, session_id="a"))
+    log.record(_entry(ts_start=2.0, prompt_tokens=140, req_payload={"input": "z"}, session_id="a"))
+    log.close()
+
+    sessions = compounding_cost_summaries(db, limit_sessions=10)
+    assert [s.session_id for s in sessions] == ["a"]
+
+
+def test_render_compounding_cost_json_shape(tmp_path: Path) -> None:
+    db = tmp_path / "u.sqlite"
+    log = UsageLog(db, capture_bodies=True)
+    log.record(_entry(ts_start=0.0, prompt_tokens=100, cached_tokens=0, req_payload={"input": "a"}, session_id="s"))
+    log.record(_entry(ts_start=1.0, prompt_tokens=150, cached_tokens=50, req_payload={"input": "b"}, session_id="s"))
+    log.close()
+
+    doc = render_compounding_cost_json(db, limit_sessions=5)
+    assert doc["db_path"] == str(db)
+    assert doc["session_count"] == 1
+    session = doc["sessions"][0]
+    assert set(session.keys()) >= {
+        "session_id",
+        "turn_count",
+        "tool_turn_count",
+        "cumulative_input_tokens",
+        "total_output_tokens",
+        "final_turn_input_tokens",
+        "compounding_ratio",
+        "turns",
+    }
+    turn = session["turns"][0]
+    assert set(turn.keys()) >= {
+        "request_id",
+        "session_id",
+        "turn_index",
+        "ts_start",
+        "prompt_tokens",
+        "completion_tokens",
+        "cached_tokens",
+        "cache_read_tokens",
+        "new_tokens",
+        "output_tokens",
+        "cumulative_input",
+        "marginal_input",
+        "is_tool_turn",
+    }
+    assert turn["cache_read_tokens"] == 0
+    assert turn["new_tokens"] == 100
+    assert session["compounding_ratio"] == pytest.approx(250 / 150)  # (100+150)/150
+
+
+def test_compounding_turn_summary_is_frozen() -> None:
+    t = CompoundingTurnSummary(
+        request_id=1,
+        session_id="s",
+        turn_index=0,
+        ts_start=0.0,
+        prompt_tokens=10,
+        completion_tokens=2,
+        cached_tokens=0,
+        cache_read_tokens=0,
+        new_tokens=10,
+        output_tokens=2,
+        cumulative_input=10,
+        marginal_input=10,
+        is_tool_turn=False,
+    )
+    with pytest.raises(FrozenInstanceError):
+        t.is_tool_turn = True  # type: ignore[misc]
+
+
+def test_session_compounding_summary_is_frozen() -> None:
+    s = SessionCompoundingSummary(
+        session_id="s",
+        turn_count=1,
+        tool_turn_count=0,
+        cumulative_input_tokens=10,
+        total_output_tokens=2,
+        final_turn_input_tokens=10,
+        compounding_ratio=1.0,
+        turns=(),
+    )
+    with pytest.raises(FrozenInstanceError):
+        s.turn_count = 2  # type: ignore[misc]

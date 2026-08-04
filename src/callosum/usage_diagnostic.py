@@ -243,6 +243,74 @@ class TimeBucketSummary:
     traffic_kind_summaries: tuple[TrafficKindBucketSummary, ...] | None = None
 
 
+# --- Per-session compounding input-token cost (work tracker ) ------
+#
+# In a multi-turn tool-using session every turn re-sends the entire growing
+# transcript to the upstream model, so the cumulative input-token cost across
+# a session grows as O(K^2) in the turn count even though the per-turn input
+# only grows O(K). callosum sits on both legs of every turn (client->callosum
+# and callosum->upstream) and tags tool turns from its own decoded request
+# payloads — a vantage no external observability platform has — so the
+# compounding-cost metric, per-turn marginal, and tool-turn attribution are
+# irreducibly local to this routing layer (see logs/2026-08-04.md).
+#
+# Field names mirror the OpenTelemetry GenAI semantic conventions
+# (gen_ai.usage.cache_read.input_tokens / new input / output_tokens, PR #3163)
+# rather than inventing callosum-specific names: `cache_read_tokens` is the
+# cache-hit prefix (the `cached_tokens` column), `new_tokens` is the uncached
+# remainder (prompt_tokens - cache_read_tokens, matching the peer-quality
+# sidecar cost report's `_uncached_input` formula), `output_tokens` is the
+# completion. cache_creation is not separately tracked by the log today, so
+# new_tokens folds it into the uncached remainder.
+
+
+@dataclass(frozen=True, slots=True)
+class CompoundingTurnSummary:
+    request_id: int
+    session_id: str
+    # 0-based ordinal within the session, by ascending request id.
+    turn_index: int
+    ts_start: float
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    cached_tokens: int | None
+    # OTel GenAI mirror: cache-hit prefix served from cache (= cached_tokens).
+    cache_read_tokens: int | None
+    # OTel GenAI mirror: uncached input = max(0, prompt_tokens - cache_read).
+    new_tokens: int | None
+    # OTel GenAI mirror: completion tokens (= completion_tokens).
+    output_tokens: int | None
+    # Running sum of prompt_tokens through this turn (the O(K^2) growth curve).
+    cumulative_input: int | None
+    # prompt_tokens[k] - prompt_tokens[k-1]; for the first turn, the input
+    # itself (growth from an empty transcript). None when prompt_tokens is
+    # None or the prior turn was None.
+    marginal_input: int | None
+    # True iff this turn's payload carries tool I/O (role "tool", a
+    # function_call / function_call_output item, or an assistant tool_calls
+    # block) — i.e. the transcript being re-sent includes tool results.
+    is_tool_turn: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SessionCompoundingSummary:
+    session_id: str
+    turn_count: int
+    tool_turn_count: int
+    # Sum of prompt_tokens across all turns — the total input re-sent over
+    # the session, i.e. the quadratic re-send tax. The per-turn `cumulative_input`
+    # on the last turn equals this value.
+    cumulative_input_tokens: int
+    total_output_tokens: int
+    # prompt_tokens of the final turn (the session's terminal context size).
+    final_turn_input_tokens: int | None
+    # cumulative_input_tokens / final_turn_input_tokens — how many times the
+    # terminal context was effectively re-sent. ~K/2 for linear per-turn growth.
+    # None when the final turn has no/zero input.
+    compounding_ratio: float | None
+    turns: tuple[CompoundingTurnSummary, ...]
+
+
 def recent_turn_summaries(
     db_path: Path,
     *,
@@ -430,6 +498,215 @@ def render_token_time_series_json(
         "group_by": group_by,
         "bucket_count": len(series),
         "series": rendered,
+    }
+
+
+def is_tool_turn(payload: dict[str, Any]) -> bool:
+    """True iff payload carries tool I/O being re-sent to the model.
+
+    Detects tool-result content across both request shapes callosum proxies:
+    Chat Completions (a role: "tool" message, or an assistant message
+    carrying a non-empty tool_calls block) and the Responses API (an
+    input item of type function_call / function_call_output or
+    carrying a tool_call_id). A turn flagged here is one whose
+    transcript includes tool results, so its (growing) input is part of the
+    quadratic re-send cost the compounding metric measures. Pure and
+    shape-safe; returns False on an empty or unrecognized payload.
+    """
+    items = payload.get("input") if isinstance(payload.get("input"), list) else None
+    if items is None:
+        items = payload.get("messages") if isinstance(payload.get("messages"), list) else None
+    if not items:
+        return False
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        role = item.get("role")
+        item_type = item.get("type")
+        if role == "tool":
+            return True
+        if item_type in ("function_call", "function_call_output", "tool_call"):
+            return True
+        if "tool_call_id" in item:
+            return True
+        if role == "assistant" and isinstance(item.get("tool_calls"), list) and item["tool_calls"]:
+            return True
+    return False
+
+
+def compounding_cost_summaries(
+    db_path: Path,
+    *,
+    session_id: str | None = None,
+    limit_sessions: int = 10,
+    min_turns: int = 2,
+) -> list[SessionCompoundingSummary]:
+    """Group turns by session_id and measure per-session compounding cost.
+
+    Turns are ordered by ascending request id within each session (id
+    increases with ts_start, so this is chronological). Sessions with fewer
+    than min_turns turns are dropped (a single turn has no compounding).
+    When session_id is None all sessions are considered, ordered
+    most-recently-active first (by max request id); otherwise only the named
+    session is returned. Read-only; raises FileNotFoundError if db_path
+    is absent. Rows with NULL session_id are ignored — they cannot be
+    attributed to a session.
+    """
+    if limit_sessions <= 0:
+        return []
+    if not db_path.exists():
+        raise FileNotFoundError(f"usage log not found: {db_path}")
+    conn = sqlite3.connect(str(db_path))
+    try:
+        if session_id is not None:
+            rows = conn.execute(
+                """
+                SELECT r.id, r.session_id, r.ts_start,
+                       r.prompt_tokens, r.completion_tokens, r.cached_tokens,
+                       b.req_payload
+                FROM requests AS r
+                LEFT JOIN request_bodies AS b ON b.request_id = r.id
+                WHERE r.session_id IS NOT NULL AND r.session_id = ?
+                ORDER BY r.id ASC
+                """,
+                (session_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT r.id, r.session_id, r.ts_start,
+                       r.prompt_tokens, r.completion_tokens, r.cached_tokens,
+                       b.req_payload
+                FROM requests AS r
+                LEFT JOIN request_bodies AS b ON b.request_id = r.id
+                WHERE r.session_id IS NOT NULL
+                ORDER BY r.session_id, r.id ASC
+                """,
+            ).fetchall()
+    finally:
+        conn.close()
+    # Group rows by session preserving the ascending-id order from the query.
+    sessions: dict[str, list[tuple[Any, ...]]] = {}
+    for row in rows:
+        sid = str(row[1])
+        sessions.setdefault(sid, []).append(row)
+    # Most-recently-active session first: the session whose latest turn has
+    # the largest request id comes first.
+    ordered = sorted(sessions.values(), key=lambda rs: rs[-1][0], reverse=True)
+    result: list[SessionCompoundingSummary] = []
+    for rs in ordered:
+        if len(rs) < min_turns:
+            continue
+        result.append(_build_session_summary(sid=str(rs[0][1]), rows=rs))
+        if len(result) >= limit_sessions:
+            break
+    return result
+
+
+def _build_session_summary(
+    *,
+    sid: str,
+    rows: list[tuple[Any, ...]],
+) -> SessionCompoundingSummary:
+    turns: list[CompoundingTurnSummary] = []
+    cumulative = 0
+    prev_prompt: int | None = None
+    tool_count = 0
+    for index, row in enumerate(rows):
+        prompt = row[3]
+        completion = row[4]
+        cached = row[5]
+        cache_read = cached
+        new = max(0, int(prompt) - (cached or 0)) if prompt is not None else None
+        if prompt is not None:
+            cumulative += int(prompt)
+            cumulative_input: int | None = cumulative
+            marginal = (int(prompt) - prev_prompt) if prev_prompt is not None else int(prompt)
+            prev_prompt = int(prompt)
+        else:
+            cumulative_input = None
+            marginal = None
+        payload = _decode_request_payload(row[6])
+        is_tool = is_tool_turn(payload) if payload is not None else False
+        if is_tool:
+            tool_count += 1
+        turns.append(
+            CompoundingTurnSummary(
+                request_id=int(row[0]),
+                session_id=sid,
+                turn_index=index,
+                ts_start=float(row[2]),
+                prompt_tokens=prompt,
+                completion_tokens=completion,
+                cached_tokens=cached,
+                cache_read_tokens=cache_read,
+                new_tokens=new,
+                output_tokens=completion,
+                cumulative_input=cumulative_input,
+                marginal_input=marginal,
+                is_tool_turn=is_tool,
+            )
+        )
+    final_input = turns[-1].prompt_tokens
+    ratio = (cumulative / final_input) if final_input and final_input > 0 else None
+    return SessionCompoundingSummary(
+        session_id=sid,
+        turn_count=len(turns),
+        tool_turn_count=tool_count,
+        cumulative_input_tokens=cumulative,
+        total_output_tokens=sum(t.output_tokens or 0 for t in turns),
+        final_turn_input_tokens=final_input,
+        compounding_ratio=ratio,
+        turns=tuple(turns),
+    )
+
+
+def render_compounding_cost_json(
+    db_path: Path,
+    *,
+    session_id: str | None = None,
+    limit_sessions: int = 10,
+    min_turns: int = 2,
+) -> dict[str, Any]:
+    sessions = compounding_cost_summaries(
+        db_path,
+        session_id=session_id,
+        limit_sessions=limit_sessions,
+        min_turns=min_turns,
+    )
+    return {
+        "db_path": str(db_path),
+        "session_count": len(sessions),
+        "sessions": [
+            {
+                "session_id": s.session_id,
+                "turn_count": s.turn_count,
+                "tool_turn_count": s.tool_turn_count,
+                "cumulative_input_tokens": s.cumulative_input_tokens,
+                "total_output_tokens": s.total_output_tokens,
+                "final_turn_input_tokens": s.final_turn_input_tokens,
+                "compounding_ratio": s.compounding_ratio,
+                "turns": [
+                    {
+                        "request_id": t.request_id,
+                        "session_id": t.session_id,
+                        "turn_index": t.turn_index,
+                        "ts_start": t.ts_start,
+                        "prompt_tokens": t.prompt_tokens,
+                        "completion_tokens": t.completion_tokens,
+                        "cached_tokens": t.cached_tokens,
+                        "cache_read_tokens": t.cache_read_tokens,
+                        "new_tokens": t.new_tokens,
+                        "output_tokens": t.output_tokens,
+                        "cumulative_input": t.cumulative_input,
+                        "marginal_input": t.marginal_input,
+                        "is_tool_turn": t.is_tool_turn,
+                    }
+                    for t in s.turns
+                ],
+            }
+            for s in sessions
+        ],
     }
 
 
