@@ -458,8 +458,20 @@ class LocalModelRegistryBackend:
                         await response.aread()
                         raise error_from_response(response)
                     chunks: list[bytes] = []
+                    # Wrap the raw upstream line iterator in stall_guarded so
+                    # this local responses-native chat-stream path gets the same
+                    # first-byte/idle timeouts + max_idle_gap_s capture as the
+                    # chat-native branch below (L491) and responses_stream (L574).
+                    # Without this, idle_gap_ms stays NULL for this local
+                    # sub-path even though LOCAL_STREAM_IDLE_TIMEOUT_S applies.
                     async for chunk in _responses_sse_to_chat_sse(
-                        response.aiter_lines(),
+                        stall_guarded(
+                            response.aiter_lines(),
+                            first_item_timeout_s=LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S,
+                            idle_timeout_s=LOCAL_STREAM_IDLE_TIMEOUT_S,
+                            what=f"local {entry.id}",
+                            handle=handle,
+                        ),
                         model=str(body.get("model", entry.runtime_model)),
                     ):
                         chunks.append(chunk)
