@@ -520,7 +520,7 @@ class LocalModelRegistryBackend:
         "responses" natively, POST there; otherwise translate to
         chat-completions and translate back (same path as the legacy
         LiteLLM gateway, but routed directly to the model endpoint)."""
-        from callosum.backends.litellm_gateway import (
+        from callosum.backends._responses_chat import (
             _chat_to_responses_response,
             _responses_to_chat_request,
         )

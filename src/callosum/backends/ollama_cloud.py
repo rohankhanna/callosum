@@ -20,18 +20,23 @@ Why a distinct `BackendKind` (not a model-name predicate):
 Metering is **honest-advisory**, not header-parsed: Ollama Cloud exposes no
 quota/usage response headers (ollama/ollama #15663, wontfix), so this backend
 cannot read remaining-quota the way the Codex backends read `x-codex-*`
-headers. Slice 1 ships only the scaffold: `usage_snapshot()` reports
-"remote, full, eligible, no signal yet" and `quota_snapshot()` returns None.
-Accumulation from response usage counters (`prompt_eval_count` / `eval_count`)
-is wired in sub-slice 2 alongside chat dispatch.
+headers. `usage_snapshot()` reports "remote, full, eligible, no signal yet" and
+`quota_snapshot()` returns None — both are advisory state, SEPARATE from
+per-request accounting. Per-request usage accumulates automatically through
+the dispatch layer's `CallHandle`: the OpenAI-compatible `/v1/chat/completions`
+endpoint returns `usage` in already-parsed shape (`prompt_tokens` /
+`completion_tokens` / `total_tokens`), which `_extract_tokens` accepts
+alongside the Responses-API shape. No separate metering wiring is needed.
 
 This backend is OPTIONAL and **env-gated OFF by default**: it is not
 constructed unless `CALLOSUM_OLLAMA_CLOUD_ENABLED=1`, so enabling it is a
-no-op for live routing until the operator turns it on. Sub-slice 1 covers
+no-op for live routing until the operator turns it on. Sub-slice 1 covered
 catalog enumeration, per-model capabilities, classification, registration, and
-health. Chat dispatch is deferred to sub-slice 2; the dispatch methods below
-raise `NotImplementedError` so a misconfigured early enable fails loudly rather
-than silently dropping traffic.
+health. Sub-slice 2 wires chat dispatch: the four methods below hit the local
+ollama daemon's OpenAI-compatible `/v1/chat/completions` endpoint (Approach A —
+same path litellm_gateway uses, so the shared Responses↔Chat translators in
+`callosum.backends._responses_chat` apply verbatim). The live-routing flip
+(config enable + restart) is sub-slice 3, still operator-gated.
 """
 
 from __future__ import annotations
@@ -39,13 +44,23 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
 from callosum.backend import BackendKind, CallHandle, HealthStatus, UsageSnapshot
+from callosum.backends._http import error_from_response, stall_guarded
+from callosum.backends._responses_chat import (
+    _chat_to_responses_response,
+    _responses_to_chat_request,
+    _strip_codex_only_fields,
+    chat_to_responses_stream,
+)
 from callosum.cell_grid import ModelMetadata
+from callosum.config import LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S, LOCAL_STREAM_IDLE_TIMEOUT_S
+from callosum.errors import BackendError
 from callosum.routing.protocols import CellCapabilities
+from callosum.sse_tee import ResponsesStreamCollector
 
 logger = logging.getLogger(__name__)
 
@@ -184,32 +199,142 @@ class OllamaCloudBackend:
         )
 
     async def quota_snapshot(self) -> None:
-        # No Codex-style quota headers from ollama; honest-advisory
-        # accumulation from response usage counters is wired in sub-slice 2.
+        # No Codex-style quota headers from ollama; honest-advisory state lives
+        # in usage_snapshot() (remaining_fraction=1.0, no cooldown when
+        # healthy). Per-request usage accumulates through CallHandle.
         return None
 
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()
 
+    def _mark_unhealthy(self) -> None:
+        """Flip health to network-down so usage_snapshot reports a cooldown
+        immediately, without waiting for the catalog TTL (60s) to drive a
+        refresh. Shared by the chat_completions transport-error path and
+        passed as the `on_transport_error` hook to chat_to_responses_stream.
+        Mirrors litellm_gateway._mark_unhealthy."""
+        self._healthy = False
+        self._last_health_reason = "network"
+
     async def chat_completions(self, body: dict[str, Any], handle: CallHandle | None = None) -> dict[str, Any]:
-        raise NotImplementedError("Ollama Cloud chat dispatch is wired in sub-slice 2")
+        """Non-stream POST to the local ollama daemon's OpenAI-compatible
+        /v1/chat/completions endpoint.
+
+        The daemon holds the Ollama Cloud auth under `ollama signin`, so this
+        backend sends NO `Authorization` header — the daemon injects cloud
+        auth upstream. Body-prep strips Codex-only fields (`reasoning`,
+        `parallel_tool_calls`) that ollama rejects, same as litellm_gateway.
+        No inference-param merge this slice (ollama_cloud has no
+        `_operator_state`; see sub-slice 2 plan deferred-item).
+        """
+        await self._refresh_catalog_if_stale()
+        out_body = _strip_codex_only_fields({**body, "stream": False})
+        try:
+            response = await self._client.post(
+                f"{self._ollama_url}/v1/chat/completions",
+                json=out_body,
+                headers={"Content-Type": "application/json"},
+            )
+        except httpx.HTTPError as exc:
+            # Daemon unreachable — flip health so usage_snapshot reports
+            # cooldown immediately, without waiting for the catalog TTL.
+            self._mark_unhealthy()
+            raise BackendError(classification="transient", message=str(exc)) from exc
+        if handle is not None:
+            handle.upstream_status = response.status_code
+            handle.upstream_headers = dict(response.headers)
+        if response.status_code >= 400:
+            raise error_from_response(response)
+        return cast(dict[str, Any], response.json())
 
     async def chat_completions_stream(
         self, body: dict[str, Any], handle: CallHandle | None = None
     ) -> AsyncIterator[bytes]:
-        raise NotImplementedError("Ollama Cloud chat dispatch is wired in sub-slice 2")
-        # Unreachable: the raise above fires on first `__anext__`. The yield
-        # keeps this an async generator (satisfies the Backend Protocol's
-        # AsyncIterator return type) rather than a plain coroutine.
-        yield b""  # pragma: no cover
+        """Raw byte passthrough of the chat-completions SSE stream.
+
+        Chat-native path (rarely used: Codex traffic flows through
+        /v1/responses → responses_stream). Token accounting is intentionally
+        NOT set on `handle.stream_summary` here, mirroring litellm_gateway's
+        existing NULL-stream_summary gap on its chat-native path — not new
+        debt, out of scope for this slice.
+        """
+        await self._refresh_catalog_if_stale()
+        out_body = _strip_codex_only_fields({**body, "stream": True})
+        try:
+            stream_ctx = self._client.stream(
+                "POST",
+                f"{self._ollama_url}/v1/chat/completions",
+                json=out_body,
+                headers={"Content-Type": "application/json"},
+            )
+            async with stream_ctx as response:
+                if handle is not None:
+                    handle.upstream_status = response.status_code
+                    handle.upstream_headers = dict(response.headers)
+                if response.status_code >= 400:
+                    await response.aread()
+                    raise error_from_response(response)
+                async for chunk in stall_guarded(
+                    response.aiter_bytes(),
+                    first_item_timeout_s=LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S,
+                    idle_timeout_s=LOCAL_STREAM_IDLE_TIMEOUT_S,
+                    what=f"ollama-cloud {out_body.get('model', '')}",
+                    handle=handle,
+                ):
+                    yield chunk
+        except httpx.HTTPError as exc:
+            raise BackendError(classification="transient", message=str(exc)) from exc
 
     async def responses(self, body: dict[str, Any], handle: CallHandle | None = None) -> dict[str, Any]:
-        raise NotImplementedError("Ollama Cloud responses dispatch is wired in sub-slice 2")
+        """Responses-API surface, translated to/from chat-completions.
+
+        The ollama daemon has no native Responses endpoint, so translate the
+        Responses-shaped request to chat, call the chat-completions endpoint,
+        and translate the chat reply back to Responses shape. The shared
+        translators in `callosum.backends._responses_chat` are the same ones
+        litellm_gateway uses — see that module's docstring.
+        """
+        chat_body = _responses_to_chat_request(body)
+        chat_response = await self.chat_completions(chat_body, handle)
+        return _chat_to_responses_response(chat_response)
 
     async def responses_stream(self, body: dict[str, Any], handle: CallHandle | None = None) -> AsyncIterator[bytes]:
-        raise NotImplementedError("Ollama Cloud responses dispatch is wired in sub-slice 2")
-        yield b""  # pragma: no cover
+        """Responses-API SSE stream, translated from chat-completions deltas.
+
+        Codex CLI traffic flows through here (/v1/responses, stream:true).
+        The chat→Responses streaming generator lives in the shared
+        `callosum.backends._responses_chat` module (one copy for every
+        chat-shaped backend); we inject this backend's coupling points via
+        the keyword-only hooks: the daemon's /v1/chat/completions URL, the
+        no-auth header (the daemon holds cloud auth), the codex-strip body
+        prep, and the local-band stall-guard timeouts. The collector tees the
+        generator's output so `handle.stream_summary` carries the
+        response.completed usage block → per-request token accounting + the
+        usage log populate automatically (see app.py:_extract_tokens, which
+        accepts the chat usage shape this generator emits).
+        """
+        collector = ResponsesStreamCollector(
+            chat_to_responses_stream(
+                client=self._client,
+                chat_url=f"{self._ollama_url}/v1/chat/completions",
+                body=body,
+                handle=handle,
+                prep_body=lambda b: _strip_codex_only_fields({**b, "stream": True}),
+                headers={"Content-Type": "application/json"},
+                first_item_timeout_s=LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S,
+                idle_timeout_s=LOCAL_STREAM_IDLE_TIMEOUT_S,
+                what_label="ollama-cloud",
+                on_success=lambda: None,
+                on_transport_error=self._mark_unhealthy,
+            )
+        )
+        try:
+            async for chunk in collector.iter_through():
+                yield chunk
+        finally:
+            if handle is not None:
+                handle.stream_summary = collector.summary
 
     def cell_capabilities(self, model: str) -> CellCapabilities:
         """Return real capabilities for `model`, discovered from ollama.

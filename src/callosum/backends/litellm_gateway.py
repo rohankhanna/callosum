@@ -35,6 +35,16 @@ import httpx
 
 from callosum.backend import BackendKind, CallHandle, HealthStatus, UsageSnapshot
 from callosum.backends._http import error_from_response, stall_guarded
+from callosum.backends._responses_chat import (  # noqa: F401  (re-exported for tests — see note below)
+    _CODEX_ONLY_BODY_KEYS,
+    _RESPONSES_ONLY_KEYS,
+    _chat_to_responses_response,
+    _extract_reasoning_text,
+    _extract_text_from_content,
+    _responses_to_chat_request,
+    _strip_codex_only_fields,
+    chat_to_responses_stream,
+)
 from callosum.cell_grid import ModelMetadata
 from callosum.config import LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S, LOCAL_STREAM_IDLE_TIMEOUT_S
 from callosum.errors import BackendError
@@ -45,6 +55,16 @@ from callosum.operator_state import (
 )
 from callosum.routing.protocols import CellCapabilities
 from callosum.sse_tee import ResponsesStreamCollector
+
+# The Responses↔Chat translators + chat→Responses streaming generator above
+# were extracted to the shared `backends._responses_chat` module once a second
+# chat-shaped backend (ollama_cloud) needed the same translation — see that
+# module's docstring. We re-import the `_`-prefixed names so this backend's
+# internal call sites AND `tests/unit/test_litellm_gateway.py` (which imports
+# `_strip_codex_only_fields` etc. from `callosum.backends.litellm_gateway`) keep
+# working without a rename sweep. This is a re-export, not a duplicate
+# definition; F401 is suppressed because the names are re-exported, not used
+# here directly.
 
 logger = logging.getLogger(__name__)
 
@@ -236,8 +256,7 @@ class LiteLLMGatewayBackend:
             # catalog TTL (60 s) to drive a refresh. Otherwise the
             # heuristic-fallback tier keeps picking a local cell
             # whose backend is dead.
-            self._healthy = False
-            self._last_health_reason = "network"
+            self._mark_unhealthy()
             raise BackendError(classification="transient", message=str(exc)) from exc
         if handle is not None:
             handle.upstream_status = response.status_code
@@ -326,14 +345,36 @@ class LiteLLMGatewayBackend:
         prompt_tokens/completion_tokens/total_tokens columns in the
         request log. Without this wrap, token accounting is silently
         NULL for every local-served streamed request. The actual
-        translation runs in `_responses_stream_inner` so the public
+        translation runs in the shared `chat_to_responses_stream`
+        generator (see `callosum.backends._responses_chat`) so this
         method can compose the collector + the generator without
         twisting either's control flow.
         """
-        # Capture the inner generator's output as it flows so the
-        # final `handle.stream_summary` has a parseable raw_blob
-        # containing the emitted response.completed event.
-        collector = ResponsesStreamCollector(self._responses_stream_inner(body, handle))
+        # The chat→Responses translation generator now lives in the shared
+        # `backends._responses_chat` module (one copy for every chat-shaped
+        # backend). We inject this backend's coupling points via the
+        # keyword-only hooks: the gateway base URL + master-key headers, the
+        # inference-param-aware body prep, and the local-band stall-guard
+        # timeouts. The collector tees the generator's output so the final
+        # `handle.stream_summary` has a parseable raw_blob containing the
+        # emitted response.completed event (token accounting).
+        collector = ResponsesStreamCollector(
+            chat_to_responses_stream(
+                client=self._client,
+                chat_url=f"{self._base_url}/v1/chat/completions",
+                body=body,
+                handle=handle,
+                prep_body=lambda b: self._apply_inference_params(
+                    _strip_codex_only_fields({**b, "stream": True})
+                ),
+                headers=self._build_headers(),
+                first_item_timeout_s=LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S,
+                idle_timeout_s=LOCAL_STREAM_IDLE_TIMEOUT_S,
+                what_label="local LLM gateway",
+                on_success=self._on_transport_success_litellm,
+                on_transport_error=self._mark_unhealthy,
+            )
+        )
         try:
             async for chunk in collector.iter_through():
                 yield chunk
@@ -341,407 +382,14 @@ class LiteLLMGatewayBackend:
             if handle is not None:
                 handle.stream_summary = collector.summary
 
-    async def _responses_stream_inner(self, body: dict[str, Any], handle: CallHandle | None) -> AsyncIterator[bytes]:
-        """The translation generator. Was previously the body of
-        `responses_stream` directly; split out so the outer method
-        can tee the output through a ResponsesStreamCollector to
-        populate stream_summary on the handle. See `responses_stream`
-        docstring for the rationale."""
-        out_body = self._apply_inference_params(_strip_codex_only_fields({**body, "stream": True}))
-        # If the body arrived in Responses-API shape (has `input` instead
-        # of `messages`), translate to Chat Completions shape before
-        # forwarding. This is the streaming counterpart of what `responses`
-        # already does on the non-stream path. Without this, LiteLLM's
-        # Router throws TypeError("missing required argument: 'messages'")
-        # against any bare ollama / vLLM endpoint that doesn't have a
-        # Responses-API translation wrapper running in front. Idempotent:
-        # if the body is already in Chat shape, this branch is skipped.
-        if "input" in out_body and "messages" not in out_body:
-            out_body = _responses_to_chat_request(out_body)
-        # OpenAI Chat Completions streaming omits the `usage` block
-        # unless include_usage is explicitly requested. Without it, no
-        # SSE chunk carries token counts, the terminal response.completed
-        # event ships zeros, and downstream token accounting is NULL for
-        # every streamed local-served request. ollama / LiteLLM / vLLM
-        # all honor this flag in their OpenAI-compatible mode. We set
-        # it unconditionally because every streamed chat completion
-        # benefits from it; if the operator already set it in the body,
-        # ours is a no-op (same value).
-        stream_options = out_body.get("stream_options")
-        if not isinstance(stream_options, dict):
-            stream_options = {}
-        stream_options["include_usage"] = True
-        out_body["stream_options"] = stream_options
-        # In-band reasoning re-routing. callosum's transform framework does
-        # not process streaming responses, and this translator is the sole
-        # place callosum owns the chat→Responses *stream* translation (it is
-        # never a byte-passed Responses stream), so the in-band splitter
-        # hooks here. The gate loads the cell's capability profile and
-        # returns a splitter only for `inband_tags` cells; for every other
-        # cell (native/none/unknown/unprobed) it returns None and the
-        # content path below is byte-for-byte unchanged. `body["model"]` is
-        # the cell id the profile is keyed by (before any runtime rewrite).
-        from callosum.transforms.inband_reasoning import inband_splitter_for_model
-
-        reasoning_splitter = inband_splitter_for_model(str(body.get("model", "")))
-        seq = 0
-
-        def _emit(event_type: str, payload: dict[str, Any]) -> bytes:
-            nonlocal seq
-            seq += 1
-            ev = {"type": event_type, "sequence_number": seq, **payload}
-            return f"event: {event_type}\ndata: {json.dumps(ev)}\n\n".encode()
-
-        # Per-stream accumulation state. Indexed by "output_index" in the
-        # Responses-API sense; each output item gets a stable index from
-        # the order it FIRST appeared in the stream.
-        text_so_far = ""
-        thinking_so_far = ""
-        tool_calls_state: dict[int, dict[str, Any]] = {}  # idx → {id, name, args, output_index}
-        output_items: list[dict[str, Any]] = []  # final assembled output for response.completed
-        next_output_index = 0
-        reasoning_output_index: int | None = None
-        message_output_index: int | None = None
-        message_item_id: str | None = None
-        reasoning_item_id: str | None = None
-        resp_id = "resp-litellm"
-        upstream_model = out_body.get("model", "")
-        usage: dict[str, Any] | None = None
-
-        def _reasoning_events(text: str) -> list[bytes]:
-            """Emit a reasoning-summary delta, lazily opening the reasoning
-            output item on first use. Shared by the native `thinking`
-            channel and the in-band splitter so both feed one reasoning
-            item."""
-            nonlocal reasoning_output_index, reasoning_item_id, next_output_index, thinking_so_far
-            evs: list[bytes] = []
-            if reasoning_output_index is None:
-                reasoning_output_index = next_output_index
-                next_output_index += 1
-                reasoning_item_id = f"rs_{resp_id}_{reasoning_output_index}"
-                evs.append(
-                    _emit(
-                        "response.output_item.added",
-                        {
-                            "output_index": reasoning_output_index,
-                            "item": {
-                                "type": "reasoning",
-                                "id": reasoning_item_id,
-                                "summary": [],
-                            },
-                        },
-                    )
-                )
-            thinking_so_far += text
-            evs.append(
-                _emit(
-                    "response.reasoning_summary_text.delta",
-                    {
-                        "item_id": reasoning_item_id,
-                        "output_index": reasoning_output_index,
-                        "summary_index": 0,
-                        "delta": text,
-                    },
-                )
-            )
-            return evs
-
-        def _content_events(text: str) -> list[bytes]:
-            """Emit a visible output_text delta, lazily opening the message
-            output item on first use."""
-            nonlocal message_output_index, message_item_id, next_output_index, text_so_far
-            evs: list[bytes] = []
-            if message_output_index is None:
-                message_output_index = next_output_index
-                next_output_index += 1
-                message_item_id = f"msg_{resp_id}_{message_output_index}"
-                evs.append(
-                    _emit(
-                        "response.output_item.added",
-                        {
-                            "output_index": message_output_index,
-                            "item": {
-                                "type": "message",
-                                "id": message_item_id,
-                                "role": "assistant",
-                                "content": [],
-                                "status": "in_progress",
-                            },
-                        },
-                    )
-                )
-            text_so_far += text
-            evs.append(
-                _emit(
-                    "response.output_text.delta",
-                    {
-                        "item_id": message_item_id,
-                        "output_index": message_output_index,
-                        "content_index": 0,
-                        "delta": text,
-                    },
-                )
-            )
-            return evs
-
-        def _route_content(text: str) -> list[bytes]:
-            """Route a content delta to the right channel. With no in-band
-            splitter active this is just `_content_events(text)`. With one
-            active, each segment the splitter yields goes to the reasoning
-            or content channel; partial tags are held back across deltas."""
-            if reasoning_splitter is None:
-                return _content_events(text)
-            evs: list[bytes] = []
-            for channel, segment in reasoning_splitter.push(text):
-                if channel == "reasoning":
-                    evs.extend(_reasoning_events(segment))
-                else:
-                    evs.extend(_content_events(segment))
-            return evs
-
-        try:
-            stream_ctx = self._client.stream(
-                "POST",
-                f"{self._base_url}/v1/chat/completions",
-                json=out_body,
-                headers=self._build_headers(),
-            )
-            async with stream_ctx as response:
-                if handle is not None:
-                    handle.upstream_status = response.status_code
-                    handle.upstream_headers = dict(response.headers)
-                if response.status_code >= 400:
-                    await response.aread()
-                    raise error_from_response(response)
-                # Emit response.created early so clients show progress.
-                base_response = {
-                    "id": resp_id,
-                    "object": "response",
-                    "model": upstream_model,
-                    "status": "in_progress",
-                    "output": [],
-                }
-                yield _emit("response.created", {"response": base_response})
-                yield _emit("response.in_progress", {"response": base_response})
-
-                async for line in stall_guarded(
-                    response.aiter_lines(),
-                    first_item_timeout_s=LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S,
-                    idle_timeout_s=LOCAL_STREAM_IDLE_TIMEOUT_S,
-                    what=f"local LLM gateway {upstream_model}",
-                    handle=handle,
-                ):
-                    if not line:
-                        continue
-                    if line.startswith("data:"):
-                        payload_str = line[5:].strip()
-                    else:
-                        continue
-                    if payload_str == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(payload_str)
-                    except json.JSONDecodeError:
-                        continue
-                    if isinstance(chunk.get("id"), str) and chunk["id"]:
-                        resp_id = chunk["id"]
-                    if isinstance(chunk.get("model"), str) and chunk["model"]:
-                        upstream_model = chunk["model"]
-                    if isinstance(chunk.get("usage"), dict):
-                        usage = chunk["usage"]
-                    choices = chunk.get("choices") or []
-                    if not isinstance(choices, list) or not choices:
-                        continue
-                    choice = choices[0]
-                    if not isinstance(choice, dict):
-                        continue
-                    delta = choice.get("delta") or {}
-                    if not isinstance(delta, dict):
-                        delta = {}
-
-                    # Reasoning deltas (model-a0d5/model-a0g2/r1 and other
-                    # OpenAI-compatible local servers) arriving in a
-                    # native field.
-                    thinking_delta = _extract_reasoning_text(delta)
-                    if isinstance(thinking_delta, str) and thinking_delta:
-                        for ev in _reasoning_events(thinking_delta):
-                            yield ev
-
-                    # Tool-call deltas.
-                    tool_calls_delta = delta.get("tool_calls") or []
-                    if isinstance(tool_calls_delta, list):
-                        for tc_delta in tool_calls_delta:
-                            if not isinstance(tc_delta, dict):
-                                continue
-                            tc_idx = tc_delta.get("index", 0)
-                            if not isinstance(tc_idx, int):
-                                tc_idx = 0
-                            state = tool_calls_state.get(tc_idx)
-                            if state is None:
-                                # First time we see this tool call — emit added.
-                                call_id = tc_delta.get("id") or f"fc_{resp_id}_{tc_idx}"
-                                fn = tc_delta.get("function") or {}
-                                name = fn.get("name", "") if isinstance(fn, dict) else ""
-                                out_idx = next_output_index
-                                next_output_index += 1
-                                state = {
-                                    "id": call_id,
-                                    "name": name,
-                                    "args": "",
-                                    "output_index": out_idx,
-                                    "item_id": f"fc_{call_id}",
-                                }
-                                tool_calls_state[tc_idx] = state
-                                yield _emit(
-                                    "response.output_item.added",
-                                    {
-                                        "output_index": out_idx,
-                                        "item": {
-                                            "type": "function_call",
-                                            "id": state["item_id"],
-                                            "call_id": call_id,
-                                            "name": name,
-                                            "arguments": "",
-                                            "status": "in_progress",
-                                        },
-                                    },
-                                )
-                            else:
-                                fn = tc_delta.get("function") or {}
-                                if isinstance(fn, dict) and isinstance(fn.get("name"), str):
-                                    state["name"] = fn["name"] or state["name"]
-                            fn = tc_delta.get("function") or {}
-                            args_delta = fn.get("arguments") if isinstance(fn, dict) else None
-                            if isinstance(args_delta, str) and args_delta:
-                                state["args"] += args_delta
-                                yield _emit(
-                                    "response.function_call_arguments.delta",
-                                    {
-                                        "item_id": state["item_id"],
-                                        "output_index": state["output_index"],
-                                        "delta": args_delta,
-                                    },
-                                )
-
-                    # Message text delta. Routed through the in-band splitter
-                    # when the cell is an `inband_tags` cell (else verbatim).
-                    content_delta = delta.get("content")
-                    if isinstance(content_delta, str) and content_delta:
-                        for ev in _route_content(content_delta):
-                            yield ev
-
-            # Stream ended cleanly. Release any tag-fragment text the
-            # in-band splitter buffered at end-of-stream onto its active
-            # channel before the per-item .done events.
-            if reasoning_splitter is not None:
-                for channel, segment in reasoning_splitter.flush():
-                    events = _reasoning_events(segment) if channel == "reasoning" else _content_events(segment)
-                    for ev in events:
-                        yield ev
-            # Emit per-item .done events in output order, then
-            # response.output_item.done, then response.completed.
-            if reasoning_output_index is not None:
-                yield _emit(
-                    "response.reasoning_summary_text.done",
-                    {
-                        "item_id": reasoning_item_id,
-                        "output_index": reasoning_output_index,
-                        "summary_index": 0,
-                        "text": thinking_so_far,
-                    },
-                )
-                reasoning_item = {
-                    "type": "reasoning",
-                    "id": reasoning_item_id,
-                    "summary": [{"type": "summary_text", "text": thinking_so_far}],
-                }
-                output_items.append(reasoning_item)
-                yield _emit(
-                    "response.output_item.done",
-                    {
-                        "output_index": reasoning_output_index,
-                        "item": reasoning_item,
-                    },
-                )
-
-            for tc_idx in sorted(tool_calls_state):
-                state = tool_calls_state[tc_idx]
-                yield _emit(
-                    "response.function_call_arguments.done",
-                    {
-                        "item_id": state["item_id"],
-                        "output_index": state["output_index"],
-                        "arguments": state["args"],
-                    },
-                )
-                fn_item = {
-                    "type": "function_call",
-                    "id": state["item_id"],
-                    "call_id": state["id"],
-                    "name": state["name"],
-                    "arguments": state["args"],
-                    "status": "completed",
-                }
-                output_items.append(fn_item)
-                yield _emit(
-                    "response.output_item.done",
-                    {
-                        "output_index": state["output_index"],
-                        "item": fn_item,
-                    },
-                )
-
-            if message_output_index is not None:
-                yield _emit(
-                    "response.output_text.done",
-                    {
-                        "item_id": message_item_id,
-                        "output_index": message_output_index,
-                        "content_index": 0,
-                        "text": text_so_far,
-                    },
-                )
-                msg_item = {
-                    "type": "message",
-                    "id": message_item_id,
-                    "role": "assistant",
-                    "content": [{"type": "output_text", "text": text_so_far}],
-                    "status": "completed",
-                }
-                output_items.append(msg_item)
-                yield _emit(
-                    "response.output_item.done",
-                    {
-                        "output_index": message_output_index,
-                        "item": msg_item,
-                    },
-                )
-
-            # Codex CLI requires input_tokens; map from chat usage shape.
-            chat_usage = usage if isinstance(usage, dict) else {}
-            usage_out = {
-                "input_tokens": int(chat_usage.get("prompt_tokens", 0) or 0),
-                "output_tokens": int(chat_usage.get("completion_tokens", 0) or 0),
-                "total_tokens": int(chat_usage.get("total_tokens", 0) or 0),
-            }
-            full_response = {
-                "id": resp_id,
-                "object": "response",
-                "model": upstream_model,
-                "status": "completed",
-                "output": output_items,
-                "usage": usage_out,
-            }
-            yield _emit("response.completed", {"response": full_response})
-            yield b"data: [DONE]\n\n"
-            # Success — clear the offline tracker.
-            self._on_transport_success_litellm()
-        except httpx.HTTPError as exc:
-            # Transport-level error during the stream — flip _healthy
-            # so the offline detector kicks in.
-            self._healthy = False
-            self._last_health_reason = "network"
-            raise BackendError(classification="transient", message=str(exc)) from exc
+    def _mark_unhealthy(self) -> None:
+        """Flip health to network-down so usage_snapshot reports a cooldown
+        immediately, without waiting for the catalog TTL to drive a refresh.
+        Shared by the chat_completions / responses_stream transport-error
+        paths and passed as the `on_transport_error` hook to
+        chat_to_responses_stream."""
+        self._healthy = False
+        self._last_health_reason = "network"
 
     def _on_transport_success_litellm(self) -> None:
         """No-op placeholder so the structure mirrors codex_auth_vault's
@@ -973,332 +621,3 @@ class LiteLLMGatewayBackend:
         # Failures here don't fail catalog refresh — cell_capabilities
         # falls back to safe defaults when the cache is empty.
         await self._refresh_capabilities()
-
-
-# ---------- body hygiene ------------------------------------------------
-# Local backends (ollama / vLLM / model-a0e0 behind LiteLLM) don't honor
-# every Chat-Completions request field OpenAI advertises. LiteLLM in
-# `drop_params: false` mode (the default in local LLM gateway's config) errors
-# hard instead of silently dropping — `litellm.UnsupportedParamsError`
-# bubbles up as a 400 to the caller. Strip the fields known to trigger
-# this BEFORE sending. Currently includes:
-#   * `reasoning`: Codex-specific routing hint; no local backend uses it.
-#   * `parallel_tool_calls`: standard Chat-Completions field (controls
-#     whether the model emits multiple tool calls in one turn) but ollama
-#     does not implement it. The model defaults to its native behavior
-#     either way; dropping the flag is harmless because no local backend
-#     can honor it. Add new keys as more upstream incompatibilities
-#     surface in real traffic.
-_CODEX_ONLY_BODY_KEYS = ("reasoning", "parallel_tool_calls")
-
-
-def _strip_codex_only_fields(body: dict[str, Any]) -> dict[str, Any]:
-    """Drop request keys local backends refuse from a body destined for
-    a local backend.
-
-    Pure-fn returns a new dict; the caller's `body` is untouched. The
-    name is historical — the strip list started as Codex-only fields but
-    has grown to cover any field that OpenAI Chat Completions advertises
-    but local OpenAI-compatible servers reject. See _CODEX_ONLY_BODY_KEYS
-    docstring for the current contents and why each is dropped.
-    """
-    if not any(k in body for k in _CODEX_ONLY_BODY_KEYS):
-        return body
-    return {k: v for k, v in body.items() if k not in _CODEX_ONLY_BODY_KEYS}
-
-
-# ---------- /v1/responses ↔ /v1/chat/completions translation -------------
-# Translation helpers live here rather than a shared module — they're the
-# refactor if a third backend needs the same translation.
-
-
-# Keys that are part of the Responses-API request envelope and have no
-# meaning for /v1/chat/completions. Stripped during translation so the
-# Chat backend doesn't reject the body or silently ignore them. Everything
-# else (stream, stream_options, temperature, tools, tool_choice, max_tokens,
-# top_p, parallel_tool_calls, n, seed, response_format, …) is preserved
-# verbatim — keeps the translator small as new request fields are added
-# upstream.
-_RESPONSES_ONLY_KEYS: frozenset[str] = frozenset(
-    {
-        "input",
-        "instructions",
-        "store",
-        "include",
-        "prompt_cache_key",
-        "client_metadata",
-        "text",  # Responses-API response_format equivalent; not the same field
-        "reasoning",  # Codex-only request hint; redundant since _strip_codex_only_fields
-    }
-)
-
-
-def _extract_reasoning_text(payload: dict[str, Any]) -> str:
-    """Return the first non-empty reasoning alias from a chat payload."""
-    for key in ("thinking", "reasoning_content", "reasoning"):
-        value = payload.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return ""
-
-
-def _extract_text_from_content(content: Any) -> str:
-    """Pull all text from a Responses-API `content` field.
-
-    The Responses API allows content to be either a plain string OR a list
-    of part dicts like `{"type": "input_text", "text": "..."}`. Both shapes
-    appear in Codex CLI traffic. Return the concatenation of every text-
-    bearing part; non-text parts (images, audio) are silently skipped here
-    because the chat-completions translator can't represent them in a
-    text-only role.content slot.
-    """
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for p in content:
-            if isinstance(p, dict) and isinstance(p.get("text"), str):
-                parts.append(p["text"])
-        return "".join(parts)
-    return ""
-
-
-def _responses_to_chat_request(body: dict[str, Any]) -> dict[str, Any]:
-    """Translate a Codex /v1/responses request body to /v1/chat/completions shape.
-
-    Handles the item types Codex CLI actually sends:
-
-      * `message` (user / assistant / developer / system): copied to a
-        chat message with the same role + extracted text.
-      * `function_call`: collected into a pending tool_calls list; consecutive
-        function_calls collapse into ONE assistant message with multiple
-        tool_calls (matches OpenAI's parallel-tool-call shape so downstream
-        models that paid attention to its training know what to do).
-      * `function_call_output`: flushes the pending tool_calls group, then
-        emits a `role: tool` message with `tool_call_id` matching the call.
-      * `custom_tool_call` / `custom_tool_call_output`: same as function_*,
-        treated identically since the on-wire shape is the same.
-      * `reasoning`: DROPPED. The encrypted_content blobs are OpenAI-server-
-        side state with no chat-completions representation. The model loses
-        its prior internal CoT but the visible assistant messages still
-        carry the conclusions, which is what matters for continuation.
-      * `compaction`: preserved as a system note so the model knows prior
-        turns were summarized away.
-
-    Preserves every other top-level key from the input body (stream,
-    stream_options, temperature, tools, tool_choice, max_tokens, top_p,
-    parallel_tool_calls, etc.) so future Responses-API fields that ALSO
-    apply to chat-completions don't need a translator change.
-    """
-    # Start with every non-Responses-only key carried over unchanged. This
-    # is the opposite of a key whitelist — we explicitly know what to
-    # drop, and pass through everything else. Reduces translator churn as
-    # the upstream API grows.
-    chat_body: dict[str, Any] = {k: v for k, v in body.items() if k not in _RESPONSES_ONLY_KEYS}
-    messages: list[dict[str, Any]] = []
-    instructions = body.get("instructions")
-    if isinstance(instructions, str) and instructions:
-        messages.append({"role": "system", "content": instructions})
-    input_block = body.get("input")
-    if isinstance(input_block, str):
-        messages.append({"role": "user", "content": input_block})
-    elif isinstance(input_block, list):
-        # Pending group of consecutive function_call items, materialized as
-        # a single assistant message with multiple tool_calls when something
-        # non-function_call interrupts the run.
-        pending_tool_calls: list[dict[str, Any]] = []
-
-        def _flush_pending() -> None:
-            if pending_tool_calls:
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": list(pending_tool_calls),
-                    }
-                )
-                pending_tool_calls.clear()
-
-        for item in input_block:
-            if not isinstance(item, dict):
-                continue
-            t = item.get("type")
-            if t == "message":
-                _flush_pending()
-                role = item.get("role", "user")
-                text = _extract_text_from_content(item.get("content"))
-                # Always emit even if text is empty — preserves turn
-                # structure for models that expect alternation.
-                messages.append({"role": role, "content": text})
-            elif t in ("function_call", "custom_tool_call"):
-                call_id = item.get("call_id") or item.get("id", "")
-                args = item.get("arguments")
-                if args is None:
-                    # custom_tool_call uses `input` instead of `arguments`.
-                    args = item.get("input", "")
-                if isinstance(args, (dict, list)):
-                    args = json.dumps(args)
-                elif not isinstance(args, str):
-                    args = "{}"
-                pending_tool_calls.append(
-                    {
-                        "id": call_id,
-                        "type": "function",
-                        "function": {
-                            "name": item.get("name", ""),
-                            "arguments": args,
-                        },
-                    }
-                )
-            elif t in ("function_call_output", "custom_tool_call_output"):
-                _flush_pending()
-                output = item.get("output", "")
-                if isinstance(output, (dict, list)):
-                    output = json.dumps(output)
-                elif not isinstance(output, str):
-                    output = str(output)
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": item.get("call_id", ""),
-                        "content": output,
-                    }
-                )
-            elif t == "reasoning":
-                # Encrypted CoT from prior OpenAI turns; no chat-completions
-                # equivalent. Dropping it is correct, not lossy in the sense
-                # that matters — visible assistant messages already encode
-                # the externally-stated conclusions of whatever the prior
-                # reasoning produced.
-                continue
-            elif t == "compaction":
-                summary = _extract_text_from_content(item.get("content")) or (
-                    item.get("summary") if isinstance(item.get("summary"), str) else ""
-                )
-                if summary:
-                    _flush_pending()
-                    messages.append(
-                        {
-                            "role": "system",
-                            "content": f"[compacted prior turns: {summary}]",
-                        }
-                    )
-            # Unknown types are intentionally dropped. Add a branch here
-            # the first time a new type surfaces in real traffic.
-        _flush_pending()
-    if not messages:
-        messages.append({"role": "user", "content": ""})
-    chat_body["model"] = body.get("model", "")
-    chat_body["messages"] = messages
-    return chat_body
-
-
-def _chat_to_responses_response(chat: dict[str, Any]) -> dict[str, Any]:
-    """Inverse of _responses_to_chat_request, on the response side.
-
-    Translates BOTH content text AND tool_calls. Earlier versions only
-    extracted message.content and dropped tool_calls on the floor —
-    which manifested as Codex CLI receiving a response.completed event
-    with empty output and silently displaying nothing. Tool-use prompts
-    (Codex sends a tools array on every request, then the model picks
-    a tool) require the function_call items in output[].
-    """
-    choices = chat.get("choices")
-    text = ""
-    thinking = ""
-    tool_calls: list[dict[str, Any]] = []
-    if isinstance(choices, list) and choices:
-        first = choices[0] if isinstance(choices[0], dict) else {}
-        message = first.get("message") if isinstance(first.get("message"), dict) else {}
-        if isinstance(message, dict):
-            raw_content = message.get("content")
-            if isinstance(raw_content, str):
-                text = raw_content
-            # Some local models emit chain-of-thought in a separate chat
-            # field. Preserve the common OpenAI-compatible aliases as one
-            # reasoning output item so the translator never drops it.
-            thinking = _extract_reasoning_text(message)
-            raw_tool_calls = message.get("tool_calls")
-            if isinstance(raw_tool_calls, list):
-                for tc in raw_tool_calls:
-                    if isinstance(tc, dict):
-                        tool_calls.append(tc)
-    # Build the Responses-API output list. Reasoning (chain-of-thought
-    # from thinking-mode models) comes first if present — matches
-    # OpenAI's o1/o3 reasoning-summary convention. function_call items
-    # come next so Codex CLI executes them in order. A message item
-    # with the assistant's visible text follows. When none of these
-    # are present, emit an empty message so output[] is never empty.
-    output: list[dict[str, Any]] = []
-    if thinking:
-        output.append(
-            {
-                "type": "reasoning",
-                "id": f"rs_{chat.get('id', 'reasoning')}",
-                "summary": [{"type": "summary_text", "text": thinking}],
-            }
-        )
-    for tc in tool_calls:
-        fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
-        if not isinstance(fn, dict):
-            fn = {}
-        # Arguments arrive as a JSON string from ollama-tool-calling
-        # convention; some serving stacks return them as dicts instead.
-        # The Responses-API spec wants a string.
-        args = fn.get("arguments", "{}")
-        if isinstance(args, (dict, list)):
-            args = json.dumps(args)
-        elif not isinstance(args, str):
-            args = "{}"
-        call_id = tc.get("id") or fn.get("name", "") or "fc-unknown"
-        output.append(
-            {
-                "type": "function_call",
-                "id": f"fc_{call_id}",
-                "call_id": call_id,
-                "name": fn.get("name", ""),
-                "arguments": args,
-                "status": "completed",
-            }
-        )
-    if text or not tool_calls:
-        # Emit the message even when empty if there were no tool calls,
-        # so output[] is never an empty list (Codex parsers vary on
-        # how strictly they require at least one item).
-        output.append(
-            {
-                "type": "message",
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": text}],
-            }
-        )
-    # Translate usage from chat-completions shape (prompt_tokens /
-    # completion_tokens) to Responses-API shape (input_tokens /
-    # output_tokens). Codex CLI's stream parser hard-fails with
-    # "missing field 'input_tokens'" when the response.completed event
-    # lacks it, so we ALWAYS emit at least zeros — even when ollama
-    # omits usage from its chat-completions reply.
-    _maybe_usage = chat.get("usage")
-    chat_usage: dict[str, Any] = _maybe_usage if isinstance(_maybe_usage, dict) else {}
-    usage: dict[str, Any] = {
-        "input_tokens": int(chat_usage.get("prompt_tokens", 0) or 0),
-        "output_tokens": int(chat_usage.get("completion_tokens", 0) or 0),
-        "total_tokens": int(chat_usage.get("total_tokens", 0) or 0),
-    }
-    # Preserve any cache / reasoning-token sub-fields the upstream
-    # included — they're optional in the Responses API but if present
-    # they help downstream cost accounting.
-    prompt_details = chat_usage.get("prompt_tokens_details")
-    if isinstance(prompt_details, dict):
-        usage["input_tokens_details"] = prompt_details
-    completion_details = chat_usage.get("completion_tokens_details")
-    if isinstance(completion_details, dict):
-        usage["output_tokens_details"] = completion_details
-    return {
-        "id": chat.get("id", "resp-litellm"),
-        "object": "response",
-        "model": chat.get("model", ""),
-        "status": "completed",
-        "output": output,
-        "usage": usage,
-    }
