@@ -11,6 +11,7 @@ BackendKind = Literal[
     "codex_auth_vault",
     "credential_proxy",
     "litellm_gateway",
+    "ollama_cloud",
 ]
 HealthReason = Literal["ok", "rate_limited", "auth_invalid", "network", "unknown"]
 

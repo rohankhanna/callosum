@@ -262,3 +262,52 @@ def test_auto_mode_all_healthy_routes_normally(tmp_path: Path) -> None:
         assert response.status_code == 200
     finally:
         state.close()
+
+
+# ---------- ollama_cloud classification (remote, not local) ---------------
+# Pins the BackendKind partition: an ollama_cloud backend must land in the
+# REMOTE lane (admitted by remote-only, excluded by local-only) so cloud
+# models — which burn real Ollama Cloud quota — never get mis-routed as FREE
+# local cells. See backends/ollama_cloud.py + work tracker .
+
+
+def test_ollama_cloud_excluded_from_local_only(tmp_path: Path) -> None:
+    """local-only mode must NOT serve an ollama_cloud backend — it is a remote
+    fleet, not a free local one. With cloud as the only healthy backend,
+    local-only excludes it and returns a clean 503 (not a silent mis-route to
+    a metered cloud cell)."""
+    cloud = _make_backend(id="cloud", kind="ollama_cloud")
+    state = OperatorState(tmp_path / "op.sqlite")
+    state.set_routing("local-only")
+    try:
+        app = create_app(backends=[cloud], operator_state=state)
+        with TestClient(app) as client:
+            response = client.post(
+                "/v1/responses",
+                json={"model": "auto-learning", "input": []},
+            )
+        assert response.status_code == 503
+        assert "Retry-After" in response.headers
+    finally:
+        state.close()
+
+
+def test_ollama_cloud_served_in_remote_only(tmp_path: Path) -> None:
+    """remote-only mode admits an ollama_cloud backend (it IS remote). With
+    cloud as the only backend, remote-only routes to it and serves 200."""
+    cloud = _make_backend(id="cloud", kind="ollama_cloud")
+    state = OperatorState(tmp_path / "op.sqlite")
+    state.set_routing("remote-only")
+    try:
+        app = create_app(backends=[cloud], operator_state=state)
+        with TestClient(app) as client:
+            response = client.post(
+                "/v1/responses",
+                json={"model": "auto-learning", "input": []},
+            )
+        assert response.status_code == 200, response.text
+        # Served by the cloud backend, proving it was admitted to the remote
+        # lane (not filtered out as unknown-kind).
+        assert "fake responses from cloud" in response.text
+    finally:
+        state.close()

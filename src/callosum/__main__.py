@@ -17,6 +17,11 @@ from callosum.backends.litellm_gateway import (
 )
 from callosum.backends.litellm_gateway import LiteLLMGatewayBackend
 from callosum.backends.local_direct import LocalModelRegistryBackend
+from callosum.backends.ollama_cloud import (
+    DEFAULT_MODEL_SUFFIX as OLLAMA_CLOUD_DEFAULT_MODEL_SUFFIX,
+)
+from callosum.backends.ollama_cloud import DEFAULT_OLLAMA_URL as OLLAMA_CLOUD_DEFAULT_URL
+from callosum.backends.ollama_cloud import OllamaCloudBackend
 from callosum.config import Config, build_backends, load_config
 from callosum.local import LocalModelRegistrySource
 from callosum.operator_state import OperatorState
@@ -84,6 +89,28 @@ def build_runtime_backends(cfg: Config, *, operator_state: OperatorState) -> lis
             "upstream runtime is a responses-only proxy (-responses-proxy "
             "entries). Prefer LocalModelRegistryBackend (auto-registered when the "
             "`local-llm` CLI is on PATH) for production use."
+        )
+    # Ollama Cloud: cloud models served by the local ollama daemon under
+    # `ollama signin`. The daemon holds the Ollama Cloud auth; callosum holds
+    # NO credential. This is an INDEPENDENT backend (own id, own fleet), not a
+    # local fallback — cloud requests burn real Ollama Cloud quota, so it must
+    # route as remote (BackendKind="ollama_cloud"), not as a free local cell.
+    # Env-gated OFF by default so enabling is a no-op for live routing until the
+    # operator turns it on. See backends/ollama_cloud.py + work tracker
+    #  / .
+    if os.environ.get("CALLOSUM_OLLAMA_CLOUD_ENABLED") == "1":
+        ollama_cloud_url = os.environ.get(
+            "CALLOSUM_OLLAMA_CLOUD_URL", OLLAMA_CLOUD_DEFAULT_URL
+        )
+        ollama_cloud_suffix = os.environ.get(
+            "CALLOSUM_OLLAMA_CLOUD_MODEL_SUFFIX", OLLAMA_CLOUD_DEFAULT_MODEL_SUFFIX
+        )
+        backends.append(
+            OllamaCloudBackend(
+                id="ollama-cloud",
+                ollama_url=ollama_cloud_url,
+                model_suffix=ollama_cloud_suffix,
+            )
         )
     return backends
 

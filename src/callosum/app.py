@@ -1072,6 +1072,7 @@ def create_app(
                 "codex_auth_vault",
                 "credential_proxy",
                 "litellm_gateway",
+                "ollama_cloud",
             ):
                 continue
             backend_meta = getattr(b, "model_metadata", None) or {}
@@ -4639,7 +4640,7 @@ def _log_attempt(
         backend_kind = getattr(backend, "kind", "")
         if backend_kind == "litellm_gateway":
             resp_layer = "callosum-local"
-        elif backend_kind == "codex_auth_vault":
+        elif backend_kind in ("codex_auth_vault", "ollama_cloud"):
             resp_layer = "upstream-remote"
         else:
             resp_layer = "unknown"

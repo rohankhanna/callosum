@@ -70,6 +70,26 @@ def test_cells_needing_probe_skips_remote_backends(tmp_path: Path) -> None:
     assert todo == []
 
 
+def test_cells_needing_probe_skips_ollama_cloud(tmp_path: Path) -> None:
+    """ollama_cloud is a remote fleet, not auto-probed. Its capabilities come
+    from /api/show at catalog refresh (see backends/ollama_cloud.py), so the
+    probe scheduler must exclude it just like codex_auth_vault — probing a
+    cloud cell would burn real Ollama Cloud quota on a synthetic tool-call."""
+    state = _state(tmp_path)
+    cloud = _FakeBackend(
+        id="ollama-cloud",
+        kind="ollama_cloud",
+        models=frozenset({"model-a0d2:cloud"}),
+    )
+    todo = _cells_needing_probe(
+        backends=[cloud],
+        operator_state=state,
+        probe_ttl_s=3600.0,
+        now=time.time(),
+    )
+    assert todo == []
+
+
 def test_cells_needing_probe_includes_local_cells(tmp_path: Path) -> None:
     state = _state(tmp_path)
     local = _FakeBackend(
