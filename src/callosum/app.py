@@ -31,6 +31,7 @@ from callosum.auth_db import ApiKey, Session
 from callosum.backend import Backend, CallHandle, HealthStatus
 from callosum.caches import TtlCache
 from callosum.cell_grid import (
+    FALLBACK_REASONING_LEVELS,
     VIRTUAL_MODELS,
     Cell,
     ModelMetadata,
@@ -153,6 +154,12 @@ _PEER_QUALITY_OVERHEAD_TOKEN_BUDGET = 1200
 # folded into the exact subtraction, biased to slightly over-count so the audit
 # can never appear on the meter.
 _PEER_QUALITY_MESSAGE_FRAMING_TOKENS = 4
+
+# Backend kinds whose reasoning levels are NOT subject to the effort cap.
+# ollama-cloud models use a non-canonical level vocabulary (default) and
+# are explicitly immune to reasoning-level regulation: their cells are never
+# dropped by the cap even if a future cloud model exposed standard level names.
+_EFFORT_CAP_IMMUNE_BACKEND_KINDS: tuple[str, ...] = ("ollama_cloud",)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1582,8 +1589,8 @@ def create_app(
     # poll after the TTL recomputes, the rest reuse the last snapshot. Live
     # fields (backend health/usage/quota, wiring config, pinned, sessions)
     # are NOT cached and stay fresh; the routing-enforcement uses of
-    # cell_sample_counts (the xhigh/quota coverage checks further down) are
-    # also NOT cached and stay live. TTL is env-tunable.
+    # cell_sample_counts (the effort-cap / quota coverage checks further down)
+    # are also NOT cached and stay live. TTL is env-tunable.
     _status_obs_cache = TtlCache(
         float(os.environ.get("CALLOSUM_STATUS_OBS_TTL_S", "120"))
     )
@@ -1718,10 +1725,12 @@ def create_app(
                 # report config, not run a random draw.
                 "enabled": _peer_quality_sidecar_enqueue_rate() > 0,
             },
-            "xhigh_cap": {
-                "enabled": auto_cfg.xhigh_cap_enabled,
-                "cap_pct": auto_cfg.xhigh_cap_pct,
-                "window_seconds": auto_cfg.xhigh_cap_window_seconds,
+            "effort_cap": {
+                "enabled": auto_cfg.effort_cap_enabled,
+                "cap_pct": auto_cfg.effort_cap_pct,
+                "top_n": auto_cfg.effort_cap_top_n,
+                "window_seconds": auto_cfg.effort_cap_window_seconds,
+                "immune_backend_kinds": list(_EFFORT_CAP_IMMUNE_BACKEND_KINDS),
             },
         }
         # Expensive observability aggregates (peer-quality shadow, min-coverage
@@ -2533,23 +2542,42 @@ async def _dispatch_internal(
         _dispatch_routable = [b for b in _routable if b.advertised_models]
         cells_now = _filter_cells_to_routable(cells_now, _dispatch_routable)
         if (
-            auto_cfg.xhigh_cap_enabled
+            auto_cfg.effort_cap_enabled
             and usage_log is not None
-            and not (_selector is not None and _selector.pinned_effort == "xhigh")
+            and not (_selector is not None and _selector.pinned_effort is not None)
         ):
-            _xhigh_coverage = cell_sample_counts(
-                usage_log.path,
-                list(cells_now),
-                window_seconds=auto_cfg.xhigh_cap_window_seconds,
+            # Cap the top-N canonical reasoning efforts (by severity rank, not
+            # by name) so automatic routing keeps the expensive tiers rare.
+            # Models served by exempt backend kinds — ollama-cloud, whose
+            # reasoning levels are not the standard regulated ladder — are
+            # immune: their cells are never dropped and excluded from the share
+            # denominator. Explicit effort pins bypass this filter entirely.
+            _immune_models = frozenset(
+                m
+                for b in backends_list
+                if getattr(b, "kind", "") in _EFFORT_CAP_IMMUNE_BACKEND_KINDS
+                for m in b.advertised_models
             )
-            cells_now = list(
-                filter_cells_by_effort_cap(
-                    cells_now,
-                    _xhigh_coverage,
-                    effort="xhigh",
-                    cap_pct=auto_cfg.xhigh_cap_pct,
+            _capped_efforts = (
+                frozenset(FALLBACK_REASONING_LEVELS[-auto_cfg.effort_cap_top_n :])
+                if auto_cfg.effort_cap_top_n > 0
+                else frozenset[str]()
+            )
+            if _capped_efforts:
+                _effort_coverage = cell_sample_counts(
+                    usage_log.path,
+                    list(cells_now),
+                    window_seconds=auto_cfg.effort_cap_window_seconds,
                 )
-            )
+                cells_now = list(
+                    filter_cells_by_effort_cap(
+                        cells_now,
+                        _effort_coverage,
+                        capped_efforts=_capped_efforts,
+                        immune_models=_immune_models,
+                        cap_pct=auto_cfg.effort_cap_pct,
+                    )
+                )
         if not cells_now:
             if _process_pin_concrete_model:
                 _pinned_backend = next((b for b in backends_list if b.id == _process_pin), None)

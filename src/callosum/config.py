@@ -211,14 +211,21 @@ class AutoRouterConfig(BaseModel):
     # re-arms as soon as it completes any sample. 10 min.
     min_coverage_cooldown_window_seconds: int = 600
 
-    # Temporary guardrail for remote reasoning-cost blowups: once xhigh cells
-    # account for this share of recent successful traffic, keep automatic
-    # routing away from xhigh while non-xhigh alternatives are available.
-    # Explicit callosum:<source>/<model>:xhigh pins remain available.
-    xhigh_cap_enabled: bool = True
-    xhigh_cap_pct: float = 0.01
+    # Guardrail for reasoning-cost blowups: cap the highest-severity reasoning
+    # tiers so automatic routing keeps the expensive levels rare. The cap
+    # targets the top-N canonical reasoning efforts BY SEVERITY RANK (the last
+    # N rungs of the low<medium<high<xhigh ladder), not by name — so it
+    # generalizes if the ladder grows and never regulates the cheap tiers.
+    # Efforts outside the canonical ladder (e.g. an ollama-cloud model's
+    # default) are never capped, and models served by exempt backend kinds
+    # (ollama-cloud) are immune outright: their cells are never dropped and
+    # excluded from the share denominator. Explicit
+    # callosum:<source>/<model>:<effort> pins bypass this filter entirely.
+    effort_cap_enabled: bool = True
+    effort_cap_pct: float = 0.01
+    effort_cap_top_n: int = 2
     # Seven days keeps the cap aligned with the upstream weekly quota window.
-    xhigh_cap_window_seconds: int = 604_800
+    effort_cap_window_seconds: int = 604_800
 
     # Dynamic per-model cost_rank derived from MEASURED weekly-quota burn
     # (weekly_used_percent deltas in the request log), replacing the flat

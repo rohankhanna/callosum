@@ -665,11 +665,15 @@ time_estimate_fallback_base_ms = 500.0
 time_estimate_local_slowdown = 4.0       # cold-start tilt when a remote prior is reused for a local cell
 time_estimate_overrides = {}             # {model_slug: [ms_per_token, base_ms]}
 
-# Temporary guardrail: keep auto-routing away from xhigh once it exceeds this
-# share of recent successful traffic (while non-xhigh alternatives exist).
-xhigh_cap_enabled = true
-xhigh_cap_pct = 0.01
-xhigh_cap_window_seconds = 604800        # 7 days, aligned to the weekly quota window
+# Guardrail: cap the top-N canonical reasoning tiers (by severity rank, not by
+# name) so auto-routing keeps the expensive levels rare. Each capped tier is
+# dropped from automatic routing once its share of recent successful traffic
+# exceeds this fraction (while cheaper alternatives exist). ollama-cloud models
+# are immune — their reasoning levels are not subject to this regulation.
+effort_cap_enabled = true
+effort_cap_pct = 0.01
+effort_cap_top_n = 2
+effort_cap_window_seconds = 604800       # 7 days, aligned to the weekly quota window
 ```
 
 

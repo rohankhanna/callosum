@@ -137,10 +137,10 @@ def _effective_modes(db: Path) -> list[str]:
 
 
 @pytest.mark.asyncio
-async def test_xhigh_cap_removes_xhigh_from_auto_candidates(tmp_path: Path) -> None:
-    """The temporary xhigh guardrail caps automatic routing once recent
-    successful xhigh traffic is already at 1%, while leaving non-xhigh cells
-    available for the router and quota layer."""
+async def test_effort_cap_removes_top_effort_from_auto_candidates(tmp_path: Path) -> None:
+    """The effort cap regulates the top-N canonical reasoning tiers: once a
+    capped effort's recent share is already at 1%, automatic routing drops it
+    while leaving cheaper cells available for the router and quota layer."""
     from callosum.config import AutoRouterConfig
 
     db = tmp_path / "u.sqlite"
@@ -186,7 +186,7 @@ async def test_xhigh_cap_removes_xhigh_from_auto_candidates(tmp_path: Path) -> N
         conn.commit()
     finally:
         conn.close()
-    cfg = AutoRouterConfig(xhigh_cap_enabled=True, xhigh_cap_pct=0.01, xhigh_cap_window_seconds=604_800)
+    cfg = AutoRouterConfig(effort_cap_enabled=True, effort_cap_pct=0.01, effort_cap_top_n=2, effort_cap_window_seconds=604_800)
     async with _client(backends=[backend], usage_log=log, auto_router_config=cfg) as client:
         r = await client.post("/v1/responses", json={"model": "auto-learning", "input": []})
         assert r.status_code == 200
