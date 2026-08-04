@@ -305,8 +305,16 @@ cell against a registered set of capability dimensions
 (`tool_call_shape`, `tool_call_at_scale`, ...). Each probe produces
 a `DimensionFinding` with status (`pass` / `fail` / `error` /
 `skipped`), summary, evidence, and — when status is `fail` — an
-`adapter_hint` that describes in concrete terms what a transform
-would need to do.
+`adapter_hint` (free prose: what a transform would need to do) plus
+the structured gap fields the shim-reduction P3 pass added so the dev
+loop does not automation agently author a transform off free prose:
+`gap_class` ("A" = generic protocol a substrate owns, "B" =
+model-specific quirk no substrate owns) and `suggested_action` (a
+`ContractAction`: `route_native` / `author_temporary_adapter` /
+`remove_shim` / `verify_fix` / `quarantine_cell`). `suggested_action`
+is the authoritative signal; `callosum.gap_triage.classify_gap` falls
+back to inferring it from `adapter_hint` when the structured field is
+absent (backward-compatible with pre-P3 findings).
 
 Findings persist as JSON under `logs/capability_profiles/<cell>.json`.
 The runner (`callosum.capability.runner.run_dimensions`) is the
