@@ -27,14 +27,16 @@ wheel_path="$(ls -1t dist/*.whl | head -n 1)"
 # old code while pip installs into the new one — a silent split-brain venv.
 rm -rf "${venv_dir}"
 python3 -m venv "${venv_dir}"
-# Install the wheel WITH the [embeddings] extra so the runtime artifact is
-# self-sufficient: a host whose config selects the bge embedding provider can
-# start the installed binary without a follow-up pip install. This mirrors
-# uv's default-groups (["dev", "embeddings"]) used by `uv run` source serving.
+# Install the bare wheel. The former [embeddings] extra (sentence-transformers
+# + torch) was removed when the BGE prompt-embedding + KNN predictor subsystem
+# was ripped out — embeddings have no runtime role, so the runtime artifact no
+# longer drags in the multi-GB torch/huggingface stack. This also shrinks the
+# build's network-dependent download surface (torch was the failure-prone step
+# that timed out builds when pip could not reach its cache).
 # Install via the venv's OWN interpreter (`bin/python3 -m pip`), not `bin/pip`:
 # bin/pip's shebang can point at a different interpreter than bin/python3 after
 # cross-version rebuilds, which would install into the wrong site-packages.
-"${venv_dir}/bin/python3" -m pip install --force-reinstall "${wheel_path}[embeddings]" >/dev/null
+"${venv_dir}/bin/python3" -m pip install --force-reinstall "${wheel_path}" >/dev/null
 
 cat <<EOF
 runtime_venv=${venv_dir}

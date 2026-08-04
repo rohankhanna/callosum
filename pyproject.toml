@@ -18,14 +18,6 @@ dependencies = [
     "tiktoken>=0.7",
 ]
 
-[project.optional-dependencies]
-# Real embedding providers. Skip when using the noop provider — keeps
-# the proxy installable without dragging in torch / huggingface stacks
-# (multi-GB). Install with `pip install -e '.[embeddings]'`.
-embeddings = [
-    "sentence-transformers>=3.0",
-]
-
 [project.scripts]
 # Unified `callosum` CLI: server + admin in one entry point.
 # `callosum serve` starts the proxy daemon; `callosum status` / routing /
@@ -38,7 +30,6 @@ callosum = "callosum.cli:main"
 # alias once those callers have migrated.
 callosum-ctl = "callosum.cli:main"
 callosum-dev-loop = "callosum.dev_loop.cli:main"
-callosum-embed-backfill = "callosum.jobs.embed_backfill:main"
 callosum-apply-failure-labels = "callosum.jobs.apply_failure_labels:main"
 callosum-recover-prompt-text = "callosum.jobs.recover_prompt_text:main"
 
@@ -50,21 +41,14 @@ dev = [
     "mypy>=1.10",
     "httpx>=0.27",
 ]
-# Mirror of the `embeddings` extra as a dependency-group so it can be made a
-# default install for `uv run` / `uv sync` (uv 0.11 has no `default-extras`,
-# only `default-groups`). The extra above stays for `pip install -e '.[embeddings]'`
-# users. Keeps the BGE provider's torch/sentence-transformers stack present
-# across restarts and reboots ().
-embeddings = [
-    "sentence-transformers>=3.0",
-]
 
 [tool.uv]
-# Install the embeddings group by default so the systemd ExecStart
-# (`uv run callosum serve`) and any `uv sync` retain sentence-transformers,
-# which the live BGE embedding provider requires. `dev` is listed explicitly
-# because setting default-groups overrides uv's implicit ["dev"] default.
-default-groups = ["dev", "embeddings"]
+# `dev` is listed explicitly because setting default-groups overrides uv's
+# implicit ["dev"] default. The former `embeddings` group (sentence-transformers
+# + torch) was removed when the BGE prompt-embedding + KNN predictor subsystem
+# was ripped out — embeddings have no runtime role, so the proxy no longer
+# drags in the multi-GB torch/huggingface stack.
+default-groups = ["dev"]
 
 [build-system]
 requires = ["hatchling"]

@@ -12,17 +12,16 @@ callosum build
 ```
 
 The helper creates a single runtime venv under
-`~/.local/share/callosum/runtime/venv` and installs the wheel there **with
-the `[embeddings]` extra** (which pulls in `sentence-transformers`). The extra
-is currently dormant dead weight — no live config selects an embedding
-provider (the BGE prompt-embedding + KNN predictor subsystem was removed; the
-quality predictor is now `cell_majority_prior`, which ignores prompt
-embeddings) — but it is carried for parity with `uv`'s `default-groups`
-(`["dev", "embeddings"]`) that source-mode serving (`uv run callosum serve`)
-installs, so the runtime artifact and the source checkout carry the same
-dependency surface. Removing the extra (and `sentence-transformers`) from
-`pyproject.toml` is a deferred cleanup item that changes the dependency
-surface and belongs in a maintenance window.
+`~/.local/share/callosum/runtime/venv` and installs the bare wheel there. The
+former `[embeddings]` extra (which pulled in `sentence-transformers` + torch)
+was removed when the BGE prompt-embedding + KNN predictor subsystem was ripped
+out — embeddings have no runtime role (the quality predictor is
+`cell_majority_prior`, which ignores prompt embeddings), so the runtime
+artifact no longer drags in the multi-GB torch/huggingface stack. This also
+shrinks the build's network-dependent download surface: torch was the
+failure-prone step that timed out builds when pip could not reach its cache.
+Source-mode serving (`uv run callosum serve`) uses the same dependency surface
+(`uv`'s `default-groups` is now just `["dev"]`).
 
 The canonical deployed CLI is:
 
