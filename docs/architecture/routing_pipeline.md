@@ -48,7 +48,19 @@ strategies, not multiple competing routers.
    graced — see `feasibility.py` / ). Local cells also
    carry capability-matrix metadata from `local-llm capabilities --json`
    (`quantization`, host-fit status, and measured/estimated tokens/s when the
-   hub has it). The local backend converts throughput into an explicit GPU
+   hub has it). Per-cell `modalities`/`supports_tools` feeding the hard
+   `CapabilityFilter` are resolved by a three-tier, per-field precedence in
+   `LocalModelRegistryBackend.cell_capabilities`: (1) hub-canonical — when the hub
+   emits a modality/tool field it is canonical truth (defensively parsed off
+   `CapabilityRow`; inert until the sibling hub ships the fields); (2)
+   direct-ask stopgap — otherwise ask the runtime via ollama `/api/show`
+   (`CALLOSUM_LOCAL_CAPABILITIES_STOPGAP` = `off`|`modalities` (default)|`all`;
+   modalities are strictly additive so they ship on, tool accuracy is
+   operator-gated because the runtime tool-probe is one-directional — it can
+   revoke a wrong claim but cannot grant); (3) conservative defaults
+   (`text`-only, `supports_tools=True` optimistic so non-ollama runtimes with
+   no direct-ask source stay tool-routable, probe-revocable). The hard filter
+   itself is unchanged — the fix is upstream in capability population. The local backend converts throughput into an explicit GPU
    opportunity-cost signal (`seconds/token`) so local cells remain nearly-free
    relative to remote quota cost while slower local models are still costlier
    inside the local fleet. The cost selector uses that local cost only after

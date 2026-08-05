@@ -236,6 +236,9 @@ def test_probe_candidates_filters_to_enabled_vllm_responses() -> None:
                 ),
             ]
 
+        def capabilities(self, *, force: bool = False) -> dict[str, object]:
+            return {}
+
     ids = [m.id for m in job._probe_candidates(FakeSource())]  # type: ignore[attr-defined]
     assert ids == ["vllm-good"]
 

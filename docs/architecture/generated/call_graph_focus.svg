@@ -14,13 +14,13 @@
 <g id="node1" class="node">
 <title>callosum.__main__:_run_server</title>
 <path fill="#f6d365" stroke="#555555" d="M436,-1854C436,-1854 12,-1854 12,-1854 6,-1854 0,-1848 0,-1842 0,-1842 0,-1830 0,-1830 0,-1824 6,-1818 12,-1818 12,-1818 436,-1818 436,-1818 442,-1818 448,-1824 448,-1830 448,-1830 448,-1842 448,-1842 448,-1848 442,-1854 436,-1854"/>
-<text xml:space="preserve" text-anchor="middle" x="224" y="-1831.33" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.__main__:_run_server\nsrc/callosum/__main__.py:161</text>
+<text xml:space="preserve" text-anchor="middle" x="224" y="-1831.33" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.__main__:_run_server\nsrc/callosum/__main__.py:198</text>
 </g>
 <!-- callosum.__main__:build_runtime_backends -->
 <g id="node2" class="node">
 <title>callosum.__main__:build_runtime_backends</title>
 <path fill="#fff8dc" stroke="#555555" d="M998,-2508C998,-2508 496,-2508 496,-2508 490,-2508 484,-2502 484,-2496 484,-2496 484,-2484 484,-2484 484,-2478 490,-2472 496,-2472 496,-2472 998,-2472 998,-2472 1004,-2472 1010,-2478 1010,-2484 1010,-2484 1010,-2496 1010,-2496 1010,-2502 1004,-2508 998,-2508"/>
-<text xml:space="preserve" text-anchor="middle" x="747" y="-2485.32" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.__main__:build_runtime_backends\nsrc/callosum/__main__.py:51</text>
+<text xml:space="preserve" text-anchor="middle" x="747" y="-2485.32" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.__main__:build_runtime_backends\nsrc/callosum/__main__.py:54</text>
 </g>
 <!-- callosum.__main__:_run_server&#45;&gt;callosum.__main__:build_runtime_backends -->
 <g id="edge1" class="edge">
@@ -68,7 +68,7 @@
 <g id="node105" class="node">
 <title>callosum.local_llm_hub:LocalLlmHubSource.is_available</title>
 <path fill="#fff8dc" stroke="#555555" d="M1683,-2508C1683,-2508 1058,-2508 1058,-2508 1052,-2508 1046,-2502 1046,-2496 1046,-2496 1046,-2484 1046,-2484 1046,-2478 1052,-2472 1058,-2472 1058,-2472 1683,-2472 1683,-2472 1689,-2472 1695,-2478 1695,-2484 1695,-2484 1695,-2496 1695,-2496 1695,-2502 1689,-2508 1683,-2508"/>
-<text xml:space="preserve" text-anchor="middle" x="1370.5" y="-2485.32" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.local_llm_hub:LocalLlmHubSource.is_available\nsrc/callosum/local_llm_hub.py:279</text>
+<text xml:space="preserve" text-anchor="middle" x="1370.5" y="-2485.32" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.local_llm_hub:LocalLlmHubSource.is_available\nsrc/callosum/local_llm_hub.py:296</text>
 </g>
 <!-- callosum.__main__:build_runtime_backends&#45;&gt;callosum.local_llm_hub:LocalLlmHubSource.is_available -->
 <g id="edge5" class="edge">
@@ -1556,7 +1556,7 @@
 <g id="node119" class="node">
 <title>callosum.routing.factory:build_router</title>
 <path fill="#f6d365" stroke="#555555" d="M1618.5,-2184C1618.5,-2184 1122.5,-2184 1122.5,-2184 1116.5,-2184 1110.5,-2178 1110.5,-2172 1110.5,-2172 1110.5,-2160 1110.5,-2160 1110.5,-2154 1116.5,-2148 1122.5,-2148 1122.5,-2148 1618.5,-2148 1618.5,-2148 1624.5,-2148 1630.5,-2154 1630.5,-2160 1630.5,-2160 1630.5,-2172 1630.5,-2172 1630.5,-2178 1624.5,-2184 1618.5,-2184"/>
-<text xml:space="preserve" text-anchor="middle" x="1370.5" y="-2161.32" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.routing.factory:build_router\nsrc/callosum/routing/factory.py:53</text>
+<text xml:space="preserve" text-anchor="middle" x="1370.5" y="-2161.32" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.routing.factory:build_router\nsrc/callosum/routing/factory.py:70</text>
 </g>
 <!-- callosum.app:create_app&#45;&gt;callosum.routing.factory:build_router -->
 <g id="edge149" class="edge">

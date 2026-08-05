@@ -35,6 +35,10 @@ import httpx
 
 from callosum.backend import BackendKind, CallHandle, HealthStatus, UsageSnapshot
 from callosum.backends._http import error_from_response, stall_guarded
+from callosum.backends._ollama_capabilities import (
+    DEFAULT_HEALTH_TIMEOUT_S,
+    fetch_ollama_capabilities,
+)
 from callosum.backends._responses_chat import (  # noqa: F401  (re-exported for tests — see note below)
     _CODEX_ONLY_BODY_KEYS,
     _RESPONSES_ONLY_KEYS,
@@ -70,7 +74,9 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "http://127.0.0.1:4000"
 DEFAULT_CATALOG_REFRESH_S = 60.0  # local model lineup changes via yaml reloads — keep fresh
-DEFAULT_HEALTH_TIMEOUT_S = 2.0
+# DEFAULT_HEALTH_TIMEOUT_S is imported from backends._ollama_capabilities
+# (hoisted there so both this backend and local_direct share the ollama /api/show
+# parse without a circular import). See the import block above.
 # Default HTTP timeout for chat_completions / responses calls. Generous on
 # purpose: a 31B-parameter local model can take 60-120s to cold-load from
 # disk into VRAM, and the first request after a model swap is the one that
@@ -471,58 +477,28 @@ class LiteLLMGatewayBackend:
                 continue
             if model_id.startswith("ollama/"):
                 ollama_mapping[litellm_name] = model_id[len("ollama/") :]
-        # Step 2: per-model /api/show on ollama directly.
+        # Step 2: per-model /api/show on ollama directly. The POST + parse live
+        # in the shared `backends._ollama_capabilities` module (also used by the
+        # local_direct backend); this loop just fetches + translates to
+        # CellCapabilities. fetch_ollama_capabilities never raises — it returns
+        # None on any transport/HTTP/parse failure, so a bad entry is skipped.
         for litellm_name, ollama_name in ollama_mapping.items():
-            try:
-                show = await self._client.post(
-                    f"{self._ollama_url}/api/show",
-                    json={"name": ollama_name},
-                    timeout=DEFAULT_HEALTH_TIMEOUT_S,
-                )
-            except Exception:
+            caps = await fetch_ollama_capabilities(
+                self._client,
+                endpoint=self._ollama_url,
+                runtime_model=ollama_name,
+            )
+            if caps is None:
                 continue
-            if show.status_code != 200:
-                continue
-            try:
-                info = show.json()
-            except Exception:
-                continue
-            # Step 3: parse + translate. ollama's response shape:
-            #   {
-            #     "capabilities": ["completion","tools","vision","thinking"],
-            #     "model_info": {"general.architecture": "...",
-            #                    "<arch>.context_length": <int>, ...}
-            #   }
-            caps_list = info.get("capabilities") or []
-            caps_set = {str(c).lower() for c in caps_list if isinstance(c, str)}
-            modalities: set[str] = {"text"}
-            if "vision" in caps_set:
-                modalities.add("image")
-            if "audio" in caps_set:
-                modalities.add("audio")
-            supports_tools = "tools" in caps_set
-            # Context length lives under <architecture>.context_length;
-            # we don't know the architecture name a priori. Walk the
-            # model_info dict and find any key ending in `.context_length`.
-            # Parameter count is exposed at `general.parameter_count`
-            # uniformly across architectures — used by the selector as
-            # a "more capable" tiebreaker when cost is tied.
-            context_window = 128_000  # fallback
-            parameter_count: int | None = None
-            model_info = info.get("model_info") or {}
-            if isinstance(model_info, dict):
-                for k, v in model_info.items():
-                    if isinstance(k, str) and k.endswith("context_length") and isinstance(v, int) and v > 0:
-                        context_window = v
-                pc = model_info.get("general.parameter_count")
-                if isinstance(pc, int) and pc > 0:
-                    parameter_count = pc
+            # Step 3: translate primitives -> CellCapabilities. cost_rank is 0
+            # (local cells are cheapest by definition); parameter_count is used
+            # by the selector as a "more capable" tiebreaker when cost is tied.
             self._capabilities_cache[litellm_name] = CellCapabilities(
-                context_window=context_window,
-                modalities=frozenset(modalities),
-                supports_tools=supports_tools,
+                context_window=caps.context_window,
+                modalities=caps.modalities,
+                supports_tools=caps.supports_tools,
                 cost_rank=0,
-                parameter_count=parameter_count,
+                parameter_count=caps.parameter_count,
             )
 
     async def refresh_advertised_models(self, *, now: float | None = None) -> None:

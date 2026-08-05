@@ -150,6 +150,8 @@ class CapabilityRow:
     fit_limit_tokens: int | None
     prefill_ms_per_token: float | None
     decode_bandwidth_kappa: float | None
+    modalities: frozenset[str] | None = None
+    supports_tools: bool | None = None
 
     @classmethod
     def from_cli_row(cls, row: dict[str, Any]) -> CapabilityRow | None:
@@ -217,6 +219,19 @@ class CapabilityRow:
             chosen_gb = total_ram_gb if unified else total_vram_gb
             if isinstance(chosen_gb, (int, float)) and chosen_gb > 0:
                 pool_bytes = int(float(chosen_gb) * 1024**3)
+        modalities: frozenset[str] | None = None
+        raw_modalities = row.get("modalities")
+        if isinstance(raw_modalities, list) and all(
+            isinstance(m, str) for m in raw_modalities
+        ):
+            normalized = {m.lower() for m in raw_modalities}
+            if normalized:
+                normalized.add("text")
+                modalities = frozenset(normalized)
+        supports_tools: bool | None = None
+        raw_supports_tools = row.get("supports_tools")
+        if isinstance(raw_supports_tools, bool):
+            supports_tools = raw_supports_tools
         return cls(
             model_id=model_id,
             quantization_label=quantization_label,
@@ -227,6 +242,8 @@ class CapabilityRow:
             fit_limit_tokens=fit_limit_tokens,
             prefill_ms_per_token=prefill_ms_per_token,
             decode_bandwidth_kappa=decode_bandwidth_kappa,
+            modalities=modalities,
+            supports_tools=supports_tools,
         )
 
 

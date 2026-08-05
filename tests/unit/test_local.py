@@ -10,7 +10,14 @@ import json
 import subprocess
 from typing import Any
 
-from callosum.local import LocalModelRegistrySource, ModelEntry
+from callosum.local import CapabilityRow, LocalModelRegistrySource, ModelEntry
+
+
+def _make_cap_row(**overrides: Any) -> dict[str, Any]:
+    """Canonical minimal capability-matrix row dict for `from_cli_row`."""
+    base: dict[str, Any] = {"model_id": "m1"}
+    base.update(overrides)
+    return base
 
 
 def _make_payload(entries: list[dict[str, Any]]) -> str:
@@ -278,3 +285,79 @@ def test_models_enrich_entries_with_capability_matrix(monkeypatch) -> None:
     assert models[0].local_prefill_ms_per_token == 2.0
     assert models[0].local_decode_bandwidth_kappa == 1.25
     assert len(calls) == 2
+
+
+def test_capability_row_from_cli_row_defaults_when_keys_absent() -> None:
+    """Today the hub emits neither modalities nor supports_tools; both
+    must parse to None (no guesswork)."""
+    row = _make_cap_row()
+    cap = CapabilityRow.from_cli_row(row)
+    assert cap is not None
+    assert cap.modalities is None
+    assert cap.supports_tools is None
+
+
+def test_capability_row_parses_modalities_list_of_strings() -> None:
+    row = _make_cap_row(modalities=["text", "image"])
+    cap = CapabilityRow.from_cli_row(row)
+    assert cap is not None
+    assert cap.modalities == frozenset({"text", "image"})
+    assert cap.supports_tools is None
+
+
+def test_capability_row_normalizes_modalities_lowercase_and_text() -> None:
+    row = _make_cap_row(modalities=["IMAGE"])
+    cap = CapabilityRow.from_cli_row(row)
+    assert cap is not None
+    assert cap.modalities == frozenset({"text", "image"})
+
+
+def test_capability_row_modalities_adds_text_when_missing() -> None:
+    row = _make_cap_row(modalities=["image"])
+    cap = CapabilityRow.from_cli_row(row)
+    assert cap is not None
+    assert cap.modalities == frozenset({"text", "image"})
+
+
+def test_capability_row_supports_tools_real_bool_true() -> None:
+    row = _make_cap_row(supports_tools=True)
+    cap = CapabilityRow.from_cli_row(row)
+    assert cap is not None
+    assert cap.supports_tools is True
+
+
+def test_capability_row_supports_tools_real_bool_false() -> None:
+    row = _make_cap_row(supports_tools=False)
+    cap = CapabilityRow.from_cli_row(row)
+    assert cap is not None
+    assert cap.supports_tools is False
+
+
+def test_capability_row_supports_tools_string_false_is_none() -> None:
+    """Regression guard: the string 'false' is truthy in Python and must
+    NOT become True. Strings are never trusted as bools."""
+    row = _make_cap_row(supports_tools="false")
+    cap = CapabilityRow.from_cli_row(row)
+    assert cap is not None
+    assert cap.supports_tools is None
+
+
+def test_capability_row_supports_tools_string_true_is_none() -> None:
+    row = _make_cap_row(supports_tools="true")
+    cap = CapabilityRow.from_cli_row(row)
+    assert cap is not None
+    assert cap.supports_tools is None
+
+
+def test_capability_row_modalities_string_not_list_is_none() -> None:
+    row = _make_cap_row(modalities="text")
+    cap = CapabilityRow.from_cli_row(row)
+    assert cap is not None
+    assert cap.modalities is None
+
+
+def test_capability_row_modalities_empty_list_is_none() -> None:
+    row = _make_cap_row(modalities=[])
+    cap = CapabilityRow.from_cli_row(row)
+    assert cap is not None
+    assert cap.modalities is None

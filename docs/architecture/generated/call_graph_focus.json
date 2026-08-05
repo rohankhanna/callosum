@@ -856,15 +856,15 @@
   "generated_from": "scripts/generate_static_graphs.py",
   "nodes": [
     {
-      "end_line": 249,
+      "end_line": 286,
       "id": "callosum.__main__:_run_server",
-      "line": 161,
+      "line": 198,
       "path": "src/callosum/__main__.py"
     },
     {
-      "end_line": 115,
+      "end_line": 152,
       "id": "callosum.__main__:build_runtime_backends",
-      "line": 51,
+      "line": 54,
       "path": "src/callosum/__main__.py"
     },
     {
@@ -1480,9 +1480,9 @@
       "path": "src/callosum/label_ui.py"
     },
     {
-      "end_line": 293,
+      "end_line": 310,
       "id": "callosum.local:LocalModelRegistrySource.is_available",
-      "line": 279,
+      "line": 296,
       "path": "src/callosum/local.py"
     },
     {
@@ -1564,9 +1564,9 @@
       "path": "src/callosum/routing/coverage.py"
     },
     {
-      "end_line": 83,
+      "end_line": 100,
       "id": "callosum.routing.factory:build_router",
-      "line": 53,
+      "line": 70,
       "path": "src/callosum/routing/factory.py"
     },
     {

@@ -119,8 +119,13 @@ class SurfaceConformance:
 
 # Capability fields the substrate must advertise per model
 # (ADR section 3). local LLM gateway emits context_window + quantization +
-# supported_reasoning_levels today; tools/modalities/throughput/
-# verified_chat_translation are gaps -> P4 handoff.
+# supported_reasoning_levels today. tools/modalities are now PARSED
+# defensively on the callosum side (tier-1 hub-canonical off
+# CapabilityRow + a tier-2 ollama /api/show direct-ask stopgap), so callosum
+# consumes them the moment the hub emits them — but the hub does not EMIT
+# them yet, so they remain an upstream-EMISSION gap (sibling-repo handoff,
+# not a callosum shim). throughput/verified_chat_translation remain gaps
+# with no defensive consumer -> P4 handoff.
 REQUIRED_CAPABILITY_FIELDS: frozenset[str] = frozenset(
     {
         "context_window",

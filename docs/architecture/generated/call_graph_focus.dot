@@ -2,8 +2,8 @@ digraph call_graph_focus {
   graph [rankdir=LR, bgcolor="white", label="callosum static call graph focus", labelloc=t];
   node [shape=box, style="rounded,filled", fillcolor="#fff8dc", color="#555555", fontname="Helvetica"];
   edge [color="#555555"];
-  "callosum.__main__:_run_server" [label="callosum.__main__:_run_server\\nsrc/callosum/__main__.py:161", fillcolor="#f6d365"];
-  "callosum.__main__:build_runtime_backends" [label="callosum.__main__:build_runtime_backends\\nsrc/callosum/__main__.py:51", fillcolor="#fff8dc"];
+  "callosum.__main__:_run_server" [label="callosum.__main__:_run_server\\nsrc/callosum/__main__.py:198", fillcolor="#f6d365"];
+  "callosum.__main__:build_runtime_backends" [label="callosum.__main__:build_runtime_backends\\nsrc/callosum/__main__.py:54", fillcolor="#fff8dc"];
   "callosum.app:_active_api_key_count" [label="callosum.app:_active_api_key_count\\nsrc/callosum/app.py:4799", fillcolor="#fff8dc"];
   "callosum.app:_active_pool" [label="callosum.app:_active_pool\\nsrc/callosum/app.py:2882", fillcolor="#fff8dc"];
   "callosum.app:_append_peer_quality_instruction" [label="callosum.app:_append_peer_quality_instruction\\nsrc/callosum/app.py:708", fillcolor="#fff8dc"];
@@ -106,7 +106,7 @@ digraph call_graph_focus {
   "callosum.label_ui:_do_update_quality" [label="callosum.label_ui:_do_update_quality\\nsrc/callosum/label_ui.py:163", fillcolor="#fff8dc"];
   "callosum.label_ui:_get_db" [label="callosum.label_ui:_get_db\\nsrc/callosum/label_ui.py:47", fillcolor="#fff8dc"];
   "callosum.label_ui:install_label_ui" [label="callosum.label_ui:install_label_ui\\nsrc/callosum/label_ui.py:174", fillcolor="#fff8dc"];
-  "callosum.local:LocalModelRegistrySource.is_available" [label="callosum.local:LocalModelRegistrySource.is_available\\nsrc/callosum/local.py:279", fillcolor="#fff8dc"];
+  "callosum.local:LocalModelRegistrySource.is_available" [label="callosum.local:LocalModelRegistrySource.is_available\\nsrc/callosum/local.py:296", fillcolor="#fff8dc"];
   "callosum.peer_quality_sidecar:_record_sidecar_response" [label="callosum.peer_quality_sidecar:_record_sidecar_response\\nsrc/callosum/peer_quality_sidecar.py:98", fillcolor="#fff8dc"];
   "callosum.peer_quality_sidecar:build_sidecar_judge_request" [label="callosum.peer_quality_sidecar:build_sidecar_judge_request\\nsrc/callosum/peer_quality_sidecar.py:202", fillcolor="#fff8dc"];
   "callosum.peer_quality_sidecar:execute_sidecar_judge_candidate" [label="callosum.peer_quality_sidecar:execute_sidecar_judge_candidate\\nsrc/callosum/peer_quality_sidecar.py:139", fillcolor="#fff8dc"];
@@ -120,7 +120,7 @@ digraph call_graph_focus {
   "callosum.routing.cost_labels:cutoff_for_window" [label="callosum.routing.cost_labels:cutoff_for_window\\nsrc/callosum/routing/cost_labels.py:601", fillcolor="#fff8dc"];
   "callosum.routing.cost_labels:quantized_cost_windows" [label="callosum.routing.cost_labels:quantized_cost_windows\\nsrc/callosum/routing/cost_labels.py:289", fillcolor="#fff8dc"];
   "callosum.routing.coverage:coverage_order" [label="callosum.routing.coverage:coverage_order\\nsrc/callosum/routing/coverage.py:26", fillcolor="#fff8dc"];
-  "callosum.routing.factory:build_router" [label="callosum.routing.factory:build_router\\nsrc/callosum/routing/factory.py:53", fillcolor="#f6d365"];
+  "callosum.routing.factory:build_router" [label="callosum.routing.factory:build_router\\nsrc/callosum/routing/factory.py:70", fillcolor="#f6d365"];
   "callosum.routing.feasibility:feasibility_eligible" [label="callosum.routing.feasibility:feasibility_eligible\\nsrc/callosum/routing/feasibility.py:62", fillcolor="#fff8dc"];
   "callosum.routing.features:_approx_tokens" [label="callosum.routing.features:_approx_tokens\\nsrc/callosum/routing/features.py:59", fillcolor="#fff8dc"];
   "callosum.routing.features:_detect_modalities" [label="callosum.routing.features:_detect_modalities\\nsrc/callosum/routing/features.py:66", fillcolor="#fff8dc"];

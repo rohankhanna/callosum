@@ -39,6 +39,18 @@ install, unmerged), so the "substrate already owns the in-band strip" claim is
 contingent on that branch merging; stale `sse.py:222` citation corrected to
 stream `sse.py:~414` / non-stream `sse.py:~704`.
 
+**Amended 2026-08-05:** §3 — the `supports_tools`/`modalities` consumption side
+is now closed defensively (no behavior change until the hub emits; no external
+edit). `LocalModelRegistryBackend.cell_capabilities` resolves those fields via a
+three-tier per-field precedence: hub-canonical (`CapabilityRow.modalities`/
+`supports_tools`, parsed defensively, `None` until the hub emits) > a tier-2
+ollama `/api/show` direct-ask stopgap (`CALLOSUM_LOCAL_CAPABILITIES_STOPGAP`=
+`off`|`modalities`(default)|`all`; modalities strictly additive — vision was a
+hard 400 — so they ship on; tool accuracy operator-gated because the runtime
+tool-probe is one-directional) > conservative defaults. The EMISSION gap (the
+hub actually emitting the fields) remains the open P4 handoff; callosum no
+longer needs the hub to emit before it can route vision to a local ollama cell.
+
 **Amended 2026-07-29:** §5 and Consequences updated to make the Class A (generic
 protocol — consume/retire, substrates own it) vs Class B (model-specific quirk —
 callosum authors as temporary debt with upstream owner + close condition)
@@ -211,9 +223,11 @@ local LLM gateway CLI shapes** callosum already consumes (`local-llm models loca
 | `verified_chat_translation` | models local | ❌ (hard-coded responses-only) | ✅ — so callosum can route chat traffic to responses lanes when verified |
 
 Closing these gaps is substrate work → **P4 upstream handoff** to local LLM gateway
-(handoff prompt only; no external edits from callosum). Until closed, callosum
-keeps its capability probes for tools/modalities and its `cell_capabilities`
-defaults (`local_direct.py:238-271`) as TEMPORARY-DEBT.
+(handoff prompt only; no external edits from callosum). Until the hub EMITS
+the fields, callosum keeps its capability probes for tools and a tier-2 ollama
+`/api/show` direct-ask stopgap for modalities/tools plus its `cell_capabilities`
+conservative defaults (three-tier precedence; see the 2026-08-05 amendment) as
+TEMPORARY-DEBT.
 
 ### 4. `drop_params` and request-field hygiene
 

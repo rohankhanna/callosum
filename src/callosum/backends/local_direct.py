@@ -24,8 +24,10 @@ Compared to talking to ollama directly:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
 import time
 from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
@@ -35,10 +37,14 @@ import httpx
 
 from callosum.backend import BackendKind, CallHandle, HealthStatus, UsageSnapshot
 from callosum.backends._http import error_from_response, stall_guarded
+from callosum.backends._ollama_capabilities import (
+    OllamaShowCapabilities,
+    fetch_ollama_capabilities,
+)
 from callosum.cell_grid import ModelMetadata
 from callosum.config import LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S, LOCAL_STREAM_IDLE_TIMEOUT_S
 from callosum.errors import BackendError
-from callosum.local import ModelEntry
+from callosum.local import CapabilityRow, ModelEntry
 from callosum.local_model_catalog import CuratedLocalModel, curate_local_models, curated_local_model_ids
 from callosum.operator_state import (
     BACKEND_DEFAULT_INFERENCE_PARAMS,
@@ -66,6 +72,17 @@ def _gpu_seconds_per_token(tokens_per_second: float | None) -> float | None:
 
 class LocalModelSource(Protocol):
     def models(self, *, force: bool = False) -> list[ModelEntry]: ...
+
+    def capabilities(self, *, force: bool = False) -> dict[str, CapabilityRow]:
+        """Per-model hub-canonical capability rows (modalities/supports_tools).
+
+        Returns an empty dict when the source does not emit deeper capability
+        info (older hub builds / today) — callers treat absent rows as
+        "hub is silent on this model" and fall through to the stopgap or
+        conservative defaults. A row present but with `modalities`/`supports_tools`
+        left `None` means the hub emitted the row but not those fields.
+        """
+        ...
 
 
 class LocalModelRegistryBackend:
@@ -107,6 +124,23 @@ class LocalModelRegistryBackend:
         # and configured?"
         self._healthy: bool = False
         self._last_health_reason: str = "unknown"
+        # Tier-2 (ollama /api/show direct-ask stopgap) capability cache, keyed by
+        # model id. Populated asynchronously by _refresh_capabilities on each
+        # catalog refresh; cell_capabilities() reads it synchronously. Only
+        # ollama runtimes are probed (only ollama exposes /api/show); other
+        # runtimes fall to the hub-canonical tier or conservative defaults.
+        self._capabilities_cache: dict[str, OllamaShowCapabilities] = {}
+        # Stopgap scope, gated per operator decision:
+        #   off | modalities (default) | all.
+        # Modalities are strictly additive (vision was a hard 400 today -> zero
+        # regression) so they ship on by default. Tool accuracy is operator-gated
+        # because the runtime tool-probe is one-directional (probe-fail revokes,
+        # probe-pass CANNOT grant): a sticky false-negative would exclude a cell
+        # from tool routing with no path back in. Read once at construction.
+        _stopgap = os.environ.get("CALLOSUM_LOCAL_CAPABILITIES_STOPGAP", "modalities")
+        _stopgap = _stopgap.strip().lower()
+        self._stopgap_modalities_enabled = _stopgap in {"modalities", "all"}
+        self._stopgap_tools_enabled = _stopgap == "all"
 
     _PROBE_RESULTS_TTL_S = 60.0
 
@@ -236,38 +270,82 @@ class LocalModelRegistryBackend:
         return ("unknown-model",)
 
     def cell_capabilities(self, model: str) -> CellCapabilities:
-        """Per-cell capabilities from local LLM gateway's registry.
+        """Per-cell capabilities via a three-tier, per-field precedence.
 
-        Modality / tool support: today the local LLM gateway `models`
-        output doesn't expose these uniformly across runtimes — vllm
-        and ollama report different field shapes, and a `capabilities`
-        list isn't in every entry. Conservative defaults until we wire
-        the capabilities CLI (a later commit will use `local-llm
-        capabilities --json` to fill in tools / modalities per cell).
+        Tier 1 — hub-canonical: when local LLM gateway's `capabilities --json`
+            emits a modality/tool field for this model, that field is canonical
+            truth (per operator instruction). Read defensively off the source's
+            capability row; `None` when the hub is silent on that field (today
+            it emits neither, so tier 1 is inert until the sibling hub ships
+            the fields — tracked as an upstream handoff, NOT a callosum shim).
+        Tier 2 — direct-ask stopgap (gated `CALLOSUM_LOCAL_CAPABILITIES_STOPGAP`
+            = off | modalities (default) | all): when the hub won't/can't answer,
+            ask the model's runtime directly via ollama `/api/show`. The self-report
+            may be inaccurate; the runtime tool-probe stays as the safety net that
+            can REVOKE a wrong tool claim (the probe is one-directional — it can
+            revoke but cannot grant). Modalities are on by default (strictly
+            additive — vision was a hard 400 today); tool accuracy is
+            operator-gated (`all`) because a sticky false-negative would exclude
+            a cell from tool routing with no path back in.
+        Tier 3 — conservative defaults (current values; `supports_tools=True`
+            optimistic so non-ollama runtimes with no direct-ask source stay
+            routable for tools, probe-revocable).
+
+        Local-performance fields (throughput/quant/admission) ALWAYS come from
+        the roster entry, never from tiers 1/2. `context_window`: tier 2 fills
+        only when the roster entry is `None` (don't let an ollama self-report
+        clobber a measured hub roster value); tier 1 has no context window of
+        its own.
         """
-        for m in self._source.models():
-            if m.id == model:
-                reasons = self.local_model_admission_reasons(model)
-                return CellCapabilities(
-                    context_window=m.context_window or 128_000,
-                    modalities=frozenset({"text"}),
-                    supports_tools=True,  # most modern local serving honors tools
-                    cost_rank=0,
-                    local_throughput_tps=m.estimated_tokens_per_second,
-                    local_gpu_seconds_per_token=_gpu_seconds_per_token(m.estimated_tokens_per_second),
-                    local_quantization=m.local_quantization,
-                    local_runnable_on_host=m.local_runnable_on_host,
-                    local_status=m.local_status,
-                    local_catalog_admitted=not reasons,
-                    local_admission_reasons=reasons,
-                )
+        entry = next((m for m in self._source.models() if m.id == model), None)
+        if entry is None:
+            return CellCapabilities(
+                context_window=128_000,
+                modalities=frozenset({"text"}),
+                supports_tools=False,
+                cost_rank=0,
+                local_catalog_admitted=False,
+                local_admission_reasons=("unknown-model",),
+            )
+        reasons = self.local_model_admission_reasons(model)
+
+        # Tier 3 baseline (defaults + ALWAYS-PRESERVED local-perf fields).
+        modalities: frozenset[str] = frozenset({"text"})
+        supports_tools: bool = True  # optimistic; probe-revocable
+        context_window: int = entry.context_window or 128_000
+
+        # Tier 2: ollama /api/show self-report (gated per operator decision).
+        stopgap = self._capabilities_cache.get(model)
+        if stopgap is not None:
+            if self._stopgap_modalities_enabled:
+                modalities = stopgap.modalities
+            if self._stopgap_tools_enabled:
+                supports_tools = stopgap.supports_tools
+            if entry.context_window is None and stopgap.context_window:
+                context_window = stopgap.context_window
+
+        # Tier 1: hub-canonical — PER-FIELD, wins over tier 2 when present. Not
+        # gated (canonical truth by operator instruction); only activates when
+        # the hub emits the fields, which it doesn't yet (both stay None today).
+        hub = self._source.capabilities().get(model)
+        if hub is not None:
+            if hub.modalities is not None:
+                modalities = hub.modalities
+            if hub.supports_tools is not None:
+                supports_tools = hub.supports_tools
+
         return CellCapabilities(
-            context_window=128_000,
-            modalities=frozenset({"text"}),
-            supports_tools=False,
+            context_window=context_window,
+            modalities=modalities,
+            supports_tools=supports_tools,
             cost_rank=0,
-            local_catalog_admitted=False,
-            local_admission_reasons=("unknown-model",),
+            local_throughput_tps=entry.estimated_tokens_per_second,
+            local_gpu_seconds_per_token=_gpu_seconds_per_token(entry.estimated_tokens_per_second),
+            local_quantization=entry.local_quantization,
+            local_runnable_on_host=entry.local_runnable_on_host,
+            local_status=entry.local_status,
+            local_catalog_admitted=not reasons,
+            local_admission_reasons=reasons,
         )
 
     def local_performance_model(self, model: str) -> LocalPerformanceModel | None:
@@ -303,6 +381,42 @@ class LocalModelRegistryBackend:
         models = self._source.models(force=True)
         self._healthy = bool(models)
         self._last_health_reason = "ok" if self._healthy else "no models"
+        await self._refresh_capabilities()
+
+    async def _refresh_capabilities(self) -> None:
+        """Populate `_capabilities_cache` from ollama's /api/show — the tier-2
+        direct-ask stopgap. Best-effort, never raises.
+
+        Only ollama runtimes are probed (only ollama exposes /api/show). Non-ollama
+        runtimes (vllm, model-a0e0, responses_proxy, gpt_oss) have no callosum-side
+        direct-ask source and fall to the hub-canonical tier or conservative
+        defaults. Runs concurrently via asyncio.gather so many cells don't block
+        the lifespan refresh tick; each call carries its own 2s timeout and
+        fetch_ollama_capabilities never raises, so a bad cell is skipped, not
+        fatal. Stale entries for removed models are harmless — cell_capabilities
+        guards every cache read behind a roster-entry lookup.
+        """
+        try:
+            entries = self._source.models()
+        except Exception:
+            return
+        ollama_entries = [m for m in entries if m.runtime == "ollama" and m.runtime_model]
+        if not ollama_entries:
+            return
+        tasks = [
+            (m.id, asyncio.create_task(
+                fetch_ollama_capabilities(
+                    self._client,
+                    endpoint=m.endpoint,
+                    runtime_model=m.runtime_model,
+                )
+            ))
+            for m in ollama_entries
+        ]
+        results = await asyncio.gather(*(t for _, t in tasks), return_exceptions=True)
+        for (model_id, _), result in zip(tasks, results, strict=True):
+            if isinstance(result, OllamaShowCapabilities):
+                self._capabilities_cache[model_id] = result
 
     async def health(self) -> HealthStatus:
         # Cheap — reads cached state, refreshes only if stale.

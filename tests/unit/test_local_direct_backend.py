@@ -19,23 +19,35 @@ import httpx
 import pytest
 
 from callosum.backend import CallHandle
+from callosum.backends._ollama_capabilities import OllamaShowCapabilities
 from callosum.backends.local_direct import LocalModelRegistryBackend
+from callosum.cell_grid import Cell
 from callosum.errors import BackendError
-from callosum.local import ModelEntry
+from callosum.local import CapabilityRow, ModelEntry
+from callosum.routing.capability import CapabilityFilter
 from callosum.routing.local_performance import LocalPerformanceRegime
+from callosum.routing.protocols import PromptFeatures
 
 pytestmark = pytest.mark.anyio
 
 
 class _FakeSource:
     """LocalModelRegistrySource stub. The backend only consumes .models(force)
-    so a tiny shim suffices."""
+    and .capabilities(force) so a tiny shim suffices."""
 
-    def __init__(self, entries: list[ModelEntry]) -> None:
+    def __init__(
+        self,
+        entries: list[ModelEntry],
+        caps: dict[str, CapabilityRow] | None = None,
+    ) -> None:
         self._entries = entries
+        self._caps = caps or {}
 
     def models(self, *, force: bool = False) -> list[ModelEntry]:
         return list(self._entries)
+
+    def capabilities(self, *, force: bool = False) -> dict[str, CapabilityRow]:
+        return dict(self._caps)
 
 
 def _entry(model_id: str, surfaces: tuple[str, ...]) -> ModelEntry:
@@ -489,3 +501,316 @@ async def test_responses_forwards_large_tool_request_no_size_cap() -> None:
     assert exc_info.value.status_code != 413
     assert "/v1/responses" in calls
     await backend.aclose()
+
+
+# ---------------------------------------------------------------------------
+# cell_capabilities — three-tier, per-field precedence
+# (tier 1 hub-canonical > tier 2 ollama /api/show stopgap > tier 3 defaults)
+# ---------------------------------------------------------------------------
+
+
+def _hub_row(
+    model_id: str,
+    *,
+    modalities: frozenset[str] | None = None,
+    supports_tools: bool | None = None,
+) -> CapabilityRow:
+    return CapabilityRow(
+        model_id=model_id,
+        quantization_label=None,
+        runnable_on_host=None,
+        status=None,
+        estimated_tokens_per_second=None,
+        pool_bytes=None,
+        fit_limit_tokens=None,
+        prefill_ms_per_token=None,
+        decode_bandwidth_kappa=None,
+        modalities=modalities,
+        supports_tools=supports_tools,
+    )
+
+
+def _ollama_stopgap(
+    *,
+    modalities: frozenset[str] = frozenset({"text"}),
+    supports_tools: bool = True,
+    context_window: int = 128_000,
+    parameter_count: int | None = None,
+) -> OllamaShowCapabilities:
+    return OllamaShowCapabilities(
+        modalities=modalities,
+        supports_tools=supports_tools,
+        context_window=context_window,
+        parameter_count=parameter_count,
+    )
+
+
+def test_cell_capabilities_tier3_defaults_when_no_stopgap_no_hub() -> None:
+    """With neither a tier-2 stopgap cache entry nor a tier-1 hub row, the
+    cell reports the conservative defaults — text-only, optimistic tools,
+    the roster's context window — and local-perf fields flow from the entry."""
+    src = _FakeSource([_catalog_entry("m", throughput=25.0)])
+    backend = LocalModelRegistryBackend(id="test", source=src)
+    caps = backend.cell_capabilities("m")
+    assert caps.modalities == frozenset({"text"})
+    assert caps.supports_tools is True
+    assert caps.context_window == 128_000
+    assert caps.local_throughput_tps == 25.0
+    assert caps.local_catalog_admitted is True
+
+
+def test_cell_capabilities_tier2_modalities_stopgap_default_mode() -> None:
+    """Default env (modalities): a tier-2 /api/show vision self-report is
+    applied to modalities (strictly additive), but a tools=False claim is
+    NOT applied — tools stay optimistic (probe-revocable). The roster's
+    context window is not clobbered by the self-report."""
+    src = _FakeSource([_catalog_entry("m", throughput=25.0)])
+    backend = LocalModelRegistryBackend(id="test", source=src)
+    backend._capabilities_cache["m"] = _ollama_stopgap(
+        modalities=frozenset({"text", "image"}), supports_tools=False, context_window=200_000
+    )
+    caps = backend.cell_capabilities("m")
+    assert caps.modalities == frozenset({"text", "image"})
+    assert caps.supports_tools is True  # tools NOT applied in modalities mode
+    assert caps.context_window == 128_000  # roster value preserved (risk-#2 guard)
+
+
+def test_cell_capabilities_tier2_all_mode_applies_tool_accuracy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Env `all`: the tier-2 tools claim is applied too — a self-reported
+    supports_tools=False flows through. This is operator-gated because the
+    probe is one-directional (probe-fail revokes, probe-pass cannot grant)."""
+    monkeypatch.setenv("CALLOSUM_LOCAL_CAPABILITIES_STOPGAP", "all")
+    src = _FakeSource([_catalog_entry("m", throughput=25.0)])
+    backend = LocalModelRegistryBackend(id="test", source=src)
+    backend._capabilities_cache["m"] = _ollama_stopgap(
+        modalities=frozenset({"text", "image"}), supports_tools=False, context_window=200_000
+    )
+    caps = backend.cell_capabilities("m")
+    assert caps.supports_tools is False
+    assert caps.modalities == frozenset({"text", "image"})
+
+
+def test_cell_capabilities_tier2_off_mode_ignores_stopgap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Env `off`: the tier-2 stopgap is ignored entirely — modalities and tools
+    fall back to tier-3 defaults regardless of what the cache holds."""
+    monkeypatch.setenv("CALLOSUM_LOCAL_CAPABILITIES_STOPGAP", "off")
+    src = _FakeSource([_catalog_entry("m", throughput=25.0)])
+    backend = LocalModelRegistryBackend(id="test", source=src)
+    backend._capabilities_cache["m"] = _ollama_stopgap(
+        modalities=frozenset({"text", "image"}), supports_tools=False
+    )
+    caps = backend.cell_capabilities("m")
+    assert caps.modalities == frozenset({"text"})
+    assert caps.supports_tools is True
+
+
+def test_cell_capabilities_tier2_context_window_fills_only_when_entry_lacks_it() -> None:
+    """Risk-#2 guard: an ollama self-reported context window never clobbers a
+    measured roster value; it fills only when the roster entry is None."""
+    # Roster has a value -> self-report ignored.
+    src_known = _FakeSource([_catalog_entry("m-known", throughput=25.0)])
+    backend_known = LocalModelRegistryBackend(id="test", source=src_known)
+    backend_known._capabilities_cache["m-known"] = _ollama_stopgap(context_window=200_000)
+    assert backend_known.cell_capabilities("m-known").context_window == 128_000
+
+    # Roster lacks a value -> self-report fills it.
+    src_unknown = _FakeSource(
+        [
+            ModelEntry(
+                id="m-unknown",
+                endpoint="http://127.0.0.1:0",
+                runtime="ollama",
+                runtime_model="m-unknown",
+                family="test",
+                context_window=None,
+                api_surfaces=("responses",),
+                enabled=True,
+            )
+        ]
+    )
+    backend_unknown = LocalModelRegistryBackend(id="test", source=src_unknown)
+    backend_unknown._capabilities_cache["m-unknown"] = _ollama_stopgap(context_window=200_000)
+    assert backend_unknown.cell_capabilities("m-unknown").context_window == 200_000
+
+
+def test_cell_capabilities_tier1_hub_canonical_wins_per_field_over_stopgap() -> None:
+    """When the hub emits a field, it is canonical truth and wins over the
+    tier-2 stopgap PER FIELD. Hub says text-only + no-tools; stopgap says
+    vision + tools -> hub wins both (text, tools=False)."""
+    src = _FakeSource(
+        [_catalog_entry("m", throughput=25.0)],
+        caps={"m": _hub_row("m", modalities=frozenset({"text"}), supports_tools=False)},
+    )
+    backend = LocalModelRegistryBackend(id="test", source=src)
+    backend._capabilities_cache["m"] = _ollama_stopgap(
+        modalities=frozenset({"text", "image"}), supports_tools=True
+    )
+    caps = backend.cell_capabilities("m")
+    assert caps.modalities == frozenset({"text"})
+    assert caps.supports_tools is False
+
+
+def test_cell_capabilities_tier1_hub_silent_field_falls_through_to_stopgap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Per-field precedence: when the hub emits modalities but is silent on
+    supports_tools (None), tools come from the tier-2 stopgap (which only
+    applies under `all`). Hub modalities win; stopgap tools fill the gap."""
+    monkeypatch.setenv("CALLOSUM_LOCAL_CAPABILITIES_STOPGAP", "all")
+    src = _FakeSource(
+        [_catalog_entry("m", throughput=25.0)],
+        caps={"m": _hub_row("m", modalities=frozenset({"text"}), supports_tools=None)},
+    )
+    backend = LocalModelRegistryBackend(id="test", source=src)
+    backend._capabilities_cache["m"] = _ollama_stopgap(
+        modalities=frozenset({"text", "image"}), supports_tools=True
+    )
+    caps = backend.cell_capabilities("m")
+    assert caps.modalities == frozenset({"text"})  # hub canonical
+    assert caps.supports_tools is True  # tier-2 stopgap fills the hub-silent field
+
+
+def test_cell_capabilities_preserves_local_perf_fields_across_tiers() -> None:
+    """Local-performance fields (throughput/quant/admission) ALWAYS come from the
+    roster entry, never from tiers 1 or 2 — even when both tiers are active."""
+    src = _FakeSource(
+        [_catalog_entry("m", throughput=25.0, quantization="bf16", status="working")],
+        caps={"m": _hub_row("m", modalities=frozenset({"text"}), supports_tools=False)},
+    )
+    backend = LocalModelRegistryBackend(id="test", source=src)
+    backend._capabilities_cache["m"] = _ollama_stopgap(
+        modalities=frozenset({"text", "image"}), supports_tools=False
+    )
+    caps = backend.cell_capabilities("m")
+    assert caps.local_throughput_tps == 25.0
+    assert caps.local_gpu_seconds_per_token == 0.04
+    assert caps.local_quantization == "bf16"
+    assert caps.local_status == "working"
+    assert caps.local_catalog_admitted is True
+
+
+def test_cell_capabilities_unknown_model_returns_conservative_fallback() -> None:
+    """A model id absent from the roster gets the unknown-model fallback —
+    text-only, supports_tools=False (not routable), flagged unknown."""
+    src = _FakeSource([_catalog_entry("m", throughput=25.0)])
+    backend = LocalModelRegistryBackend(id="test", source=src)
+    caps = backend.cell_capabilities("missing")
+    assert caps.modalities == frozenset({"text"})
+    assert caps.supports_tools is False
+    assert caps.local_catalog_admitted is False
+    assert "unknown-model" in caps.local_admission_reasons
+
+
+async def test_refresh_capabilities_populates_cache_for_ollama_only() -> None:
+    """_refresh_capabilities probes only ollama runtimes (only ollama exposes
+    /api/show). A vllm cell on the same backend is skipped and falls to tier 1
+    or 3. The cache is keyed by model id."""
+    entries = [
+        ModelEntry(
+            id="ollama-vision",
+            endpoint="http://127.0.0.1:11434",
+            runtime="ollama",
+            runtime_model="model-a0g1-vision",
+            family="test",
+            context_window=128_000,
+            api_surfaces=("responses",),
+            enabled=True,
+        ),
+        ModelEntry(
+            id="vllm-cell",
+            endpoint="http://127.0.0.1:8000",
+            runtime="vllm",
+            runtime_model="vllm-cell",
+            family="test",
+            context_window=128_000,
+            api_surfaces=("responses",),
+            enabled=True,
+        ),
+    ]
+    src = _FakeSource(entries)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body.get("name") == "model-a0g1-vision":
+            return httpx.Response(
+                200,
+                json={
+                    "capabilities": ["completion", "tools", "vision"],
+                    "model_info": {"model-a0g1.context_length": 131072, "general.parameter_count": 8000000000},
+                },
+            )
+        # A vllm cell should never be probed; if it is, surface it loudly.
+        if body.get("name") == "vllm-cell":
+            return httpx.Response(200, json={"capabilities": ["completion"]})
+        return httpx.Response(404)
+
+    backend = LocalModelRegistryBackend(id="test", source=src, transport=httpx.MockTransport(handler))
+    await backend.refresh_advertised_models()
+    assert "ollama-vision" in backend._capabilities_cache
+    assert "vllm-cell" not in backend._capabilities_cache
+    cached = backend._capabilities_cache["ollama-vision"]
+    assert cached.modalities == frozenset({"text", "image"})
+    assert cached.supports_tools is True
+    assert cached.context_window == 131_072
+    await backend.aclose()
+
+
+async def test_refresh_capabilities_failure_yields_tier3_defaults() -> None:
+    """When /api/show fails (non-200 / bad JSON / transport error), the cache
+    stays empty for that cell and cell_capabilities falls back to tier-3
+    defaults — never raises, never blocks the refresh tick."""
+    src = _FakeSource(
+        [
+            ModelEntry(
+                id="bad-cell",
+                endpoint="http://127.0.0.1:11434",
+                runtime="ollama",
+                runtime_model="bad-cell",
+                family="test",
+                context_window=128_000,
+                api_surfaces=("responses",),
+                enabled=True,
+            )
+        ]
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
+
+    backend = LocalModelRegistryBackend(id="test", source=src, transport=httpx.MockTransport(handler))
+    await backend.refresh_advertised_models()
+    assert "bad-cell" not in backend._capabilities_cache
+    caps = backend.cell_capabilities("bad-cell")
+    assert caps.modalities == frozenset({"text"})  # tier-3 default
+    assert caps.supports_tools is True
+    await backend.aclose()
+
+
+def test_vision_request_routes_to_local_vision_cell_through_capability_filter() -> None:
+    """Headline behavior: a vision request (modalities={text,image}) against a
+    local ollama cell whose tier-2 /api/show stopgap reports vision PASSES the
+    hard CapabilityFilter. Today (no stopgap) such a cell reports text-only and
+    is dropped -> empty pool -> HTTP 400. The modality stopgap is strictly
+    additive: zero regression for the text-only routing that works today."""
+    src = _FakeSource([_catalog_entry("vision-cell", throughput=25.0)])
+    backend = LocalModelRegistryBackend(id="test", source=src)
+    backend._capabilities_cache["vision-cell"] = _ollama_stopgap(
+        modalities=frozenset({"text", "image"})
+    )
+    cell = Cell(model="vision-cell", reasoning_effort="default")
+
+    capabilities_of = {cell: backend.cell_capabilities(cell.model)}
+    filt = CapabilityFilter(capabilities_of=capabilities_of.__getitem__)
+
+    vision_features = PromptFeatures(
+        text="describe this image",
+        tokens=10,
+        modalities=frozenset({"text", "image"}),
+        needs_tools=False,
+    )
+    assert filt.filter([cell], vision_features) == [cell]
+
+    # A text-only cell (no stopgap) is still dropped for a vision request.
+    text_only = Cell(model="text-cell", reasoning_effort="default")
+    caps_of = {text_only: backend.cell_capabilities("text-cell")}
+    assert caps_of[text_only].modalities == frozenset({"text"})
+    filt_text = CapabilityFilter(capabilities_of=caps_of.__getitem__)
+    assert filt_text.filter([text_only], vision_features) == []

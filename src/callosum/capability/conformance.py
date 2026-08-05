@@ -429,7 +429,11 @@ def contract_inputs_from_catalog(
                 continue
     # Capability fields the substrate is known to advertise today. The
     # required set is REQUIRED_CAPABILITY_FIELDS; anything missing here will
-    # be reported by classify_contract as a FILE_UPSTREAM_GAP.
+    # be reported by classify_contract as a FILE_UPSTREAM_GAP. Note
+    # supports_tools/modalities are now defensively consumed (tier-1 hub row
+    # + tier-2 ollama /api/show stopgap) when present, so they register here
+    # the moment the hub emits them; the gap is the hub EMISSION, not the
+    # callosum parse.
     present: set[str] = set()
     for obj in (entry, cap_row):
         if obj is None:
