@@ -42,8 +42,11 @@ same path litellm_gateway uses, so the shared Responses↔Chat translators in
 from __future__ import annotations
 
 import logging
+import math
 import time
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, cast
 
 import httpx
@@ -85,6 +88,200 @@ DEFAULT_CALL_TIMEOUT_S = 300.0
 # via `cost_rank_overrides`. See routing/cost_model.py.
 CLOUD_PRIORITY_OFFSET = 1_000
 
+# ---------------------------------------------------------------------
+# credential proxy usage source (credential-free, loopback-only, lazy+cached).
+#
+# Callosum holds NO credential proxy credential. The `OllamaCloudUsageSource` reads
+# the loopback `/v1/ollama/usage` endpoint exposed by the credential proxy menubar
+# applet (port 7342) using a short-lived stand-in token minted for the
+# `ollama-usage` scope. The token's TTL is clamped to credential proxy's
+# MAX_STANDIN_TTL_SECONDS (1800s). All network failures are swallowed and
+# surfaced as `None` — usage is advisory only and must never fail routing.
+# ---------------------------------------------------------------------
+DEFAULT_CUSTODY_URL = "http://127.0.0.1:7342"
+DEFAULT_OLLAMA_USAGE_ACCOUNT = "primary"
+DEFAULT_STANDIN_TTL_S = 1800
+MAX_STANDIN_TTL_S = 1800  # credential proxy's MAX_STANDIN_TTL_SECONDS; clamp requested TTL down to this
+OLLAMA_USAGE_SCOPE = "ollama-usage"
+DEFAULT_USAGE_CACHE_TTL_S = 30.0
+DEFAULT_USAGE_TIMEOUT_S = 5.0
+
+
+@dataclass(frozen=True, slots=True)
+class UsageMeter:
+    percent_used: float
+    resets_at_ts: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class OllamaUsage:
+    plan: str | None
+    session: UsageMeter
+    weekly: UsageMeter
+    fetched_at_ts: float
+
+
+def _parse_meter(meter: Any) -> UsageMeter:
+    """Parse an credential proxy meter dict into a `UsageMeter`.
+
+    credential proxy emits `{"percent": float, "resets_at": "ISO8601 UTC str"}` for a
+    populated meter, or `{}` (empty) when the upstream value is unparseable.
+    `resets_at` is an ISO8601 UTC string like "2026-06-30T19:00:00Z"; convert
+    to epoch via `datetime.fromisoformat(s.replace("Z","+00:00")).timestamp()`
+    guarded by try/except → None on failure.
+
+    An empty/missing meter yields `percent_used=NaN` so the live projection's
+    finiteness check (`math.isfinite`) skips it cleanly.
+    """
+    if not isinstance(meter, dict) or not meter:
+        return UsageMeter(percent_used=float("nan"), resets_at_ts=None)
+    percent = meter.get("percent")
+    if not isinstance(percent, (int, float)):
+        percent = float("nan")
+    resets_raw = meter.get("resets_at")
+    resets_ts: float | None = None
+    if isinstance(resets_raw, str):
+        try:
+            resets_ts = datetime.fromisoformat(resets_raw.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            resets_ts = None
+    return UsageMeter(percent_used=float(percent), resets_at_ts=resets_ts)
+
+
+class OllamaCloudUsageSource:
+    """Credential-free, loopback-only, lazy+cached reader of credential proxy's
+    `/v1/ollama/usage` endpoint.
+
+    Callosum holds NO credential proxy credential; the credential proxy menubar applet holds
+    the real Ollama-cookie custody. This source mints a short-lived stand-in
+    token (scope `ollama-usage`, TTL clamped to `MAX_STANDIN_TTL_S`) against
+    credential proxy's loopback `/v1/standin` endpoint, then uses that token to GET
+    `/v1/ollama/usage`. All failures are swallowed and returned as `None`;
+    this source is advisory-only and must never fail routing.
+
+    The HTTP client is built the same way as `OllamaCloudBackend`'s: owned
+    when neither `client` nor `transport` is supplied; constructed with the
+    given `transport` when `client` is None; borrowed (not owned) when
+    `client` is supplied.
+    """
+
+    def __init__(
+        self,
+        *,
+        custody_url: str = DEFAULT_CUSTODY_URL,
+        account: str = DEFAULT_OLLAMA_USAGE_ACCOUNT,
+        standin_ttl_s: int = DEFAULT_STANDIN_TTL_S,
+        cache_ttl_s: float = DEFAULT_USAGE_CACHE_TTL_S,
+        client: httpx.AsyncClient | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
+        timeout_s: float = DEFAULT_USAGE_TIMEOUT_S,
+    ) -> None:
+        self._custody_url = custody_url.rstrip("/")
+        self._account = account
+        # Clamp the requested stand-in TTL down to credential proxy's hard ceiling so
+        # a misconfigured request doesn't ask credential proxy for more than it will
+        # grant.
+        self._standin_ttl_s = min(standin_ttl_s, MAX_STANDIN_TTL_S)
+        self._cache_ttl_s = cache_ttl_s
+        if client is not None:
+            self._client = client
+            self._owns_client = False
+        else:
+            self._client = httpx.AsyncClient(transport=transport, timeout=timeout_s)
+            self._owns_client = True
+        self._token: str | None = None
+        self._token_expires_at: float = 0.0
+        self._cached: OllamaUsage | None = None
+        self._cached_at: float = 0.0
+
+    async def fetch(self) -> OllamaUsage | None:
+        """Return a cached `OllamaUsage` if fresh, else fetch from credential proxy.
+
+        Never raises. On any failure (network, non-200, parse error, token
+        mint failure) returns `None`. On a 401 from the usage endpoint the
+        stand-in token is invalidated so the next call re-mints, but a
+        transient upstream failure (502/503/network) does NOT clear the
+        token.
+        """
+        if self._cached is not None and (time.monotonic() - self._cached_at) < self._cache_ttl_s:
+            return self._cached
+
+        # Ensure a fresh stand-in token (60s safety margin before expiry).
+        if self._token is None or time.monotonic() >= (self._token_expires_at - 60.0):
+            try:
+                resp = await self._client.post(
+                    f"{self._custody_url}/v1/standin",
+                    json={
+                        "account": self._account,
+                        "scope": OLLAMA_USAGE_SCOPE,
+                        "ttl_seconds": self._standin_ttl_s,
+                    },
+                )
+            except httpx.HTTPError:
+                return None
+            if resp.status_code != 200:
+                return None
+            try:
+                standin_body = resp.json()
+            except ValueError:
+                return None
+            token = standin_body.get("token") if isinstance(standin_body, dict) else None
+            if not isinstance(token, str) or not token:
+                return None
+            self._token = token
+            expires_raw = standin_body.get("expires_at") if isinstance(standin_body, dict) else None
+            try:
+                # credential proxy returns expires_at as an epoch/ts number (relative
+                # seconds until expiry). Fall back to monotonic + standin TTL
+                # if missing/unparseable. The `or` short-circuit handles a
+                # falsy/zero/missing value just like the spec formula.
+                expires_at = float(expires_raw) if expires_raw else float(self._standin_ttl_s)
+            except (TypeError, ValueError):
+                expires_at = float(self._standin_ttl_s)
+            self._token_expires_at = time.monotonic() + expires_at
+
+        # Fetch the usage payload with the stand-in token.
+        try:
+            resp = await self._client.get(
+                f"{self._custody_url}/v1/ollama/usage",
+                headers={"Authorization": f"Bearer {self._token}"},
+            )
+        except httpx.HTTPError:
+            return None
+
+        if resp.status_code == 401:
+            # Token rejected/expired — invalidate so next fetch re-mints.
+            self._token = None
+            return None
+        if resp.status_code != 200:
+            # Transient upstream (502/503) — do NOT punish the token.
+            return None
+        try:
+            payload = resp.json()
+        except ValueError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+
+        plan = payload.get("plan")
+        if not isinstance(plan, str):
+            plan = None
+        session = _parse_meter(payload.get("session"))
+        weekly = _parse_meter(payload.get("weekly"))
+        usage = OllamaUsage(
+            plan=plan,
+            session=session,
+            weekly=weekly,
+            fetched_at_ts=time.time(),
+        )
+        self._cached = usage
+        self._cached_at = time.monotonic()
+        return usage
+
+    async def aclose(self) -> None:
+        if self._owns_client:
+            await self._client.aclose()
+
 
 class OllamaCloudBackend:
     """Cloud models served by the local ollama daemon under `ollama signin`."""
@@ -101,6 +298,8 @@ class OllamaCloudBackend:
         client: httpx.AsyncClient | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         timeout_s: float = DEFAULT_CALL_TIMEOUT_S,
+        usage_source: OllamaCloudUsageSource | None = None,
+        usage_live: bool = False,
     ) -> None:
         self.id = id
         self._ollama_url = ollama_url.rstrip("/")
@@ -125,6 +324,13 @@ class OllamaCloudBackend:
         # reads this cache synchronously; when discovery hasn't run yet (or
         # /api/show failed for a model), falls back to conservative defaults.
         self._capabilities_cache: dict[str, CellCapabilities] = {}
+        # Optional credential-free credential proxy usage source + live-projection
+        # flag. When `usage_live` is True and `usage_source` is set,
+        # `usage_snapshot()` prefers a measured session/weekly percent from
+        # credential proxy's loopback `/v1/ollama/usage` over the honest-advisory
+        # fallback. Both default off so existing construction is unchanged.
+        self._usage_source = usage_source
+        self._usage_live = usage_live
 
     @property
     def advertised_models(self) -> frozenset[str]:
@@ -167,23 +373,59 @@ class OllamaCloudBackend:
             reason="network" if self._last_health_reason == "network" else "unknown",
         )
 
+    @property
+    def usage_source(self) -> OllamaCloudUsageSource | None:
+        return self._usage_source
+
     async def usage_snapshot(self) -> UsageSnapshot:
-        """Honest-advisory: report a remote cell with no quota signal yet.
+        """Report remaining quota for this cloud cell.
 
-        Cloud requests burn real Ollama Cloud quota, but the daemon exposes
-        no quota/usage headers (ollama/ollama #15663), so we cannot report a
-        measured remaining fraction. We report `remaining_fraction=1.0`
-        ("full, eligible") rather than the local free-stub's 0.001 — cloud is
-        NOT free and must compete as a normal remote for primary selection,
-        not be suppressed. `weekly_exhausted=False` because we genuinely don't
-        know exhaustion from headers; the dispatch layer's failure-attribution
-        + this backend's health handle outages separately.
+        When `usage_live` is True and a `usage_source` is wired, prefer a
+        measured session/weekly percent from credential proxy's loopback
+        `/v1/ollama/usage` endpoint. The credential proxy source is credential-free
+        (callosum holds no Ollama-cookie); it mints a short-lived stand-in
+        token for the `ollama-usage` scope and reads the usage meter. All
+        failures fall through to the honest-advisory block below.
 
-        When the last health probe failed (daemon unreachable), report a short
-        cooldown so `_routable_backends` excludes us — mirrors
+        Honest-advisory fallback: report a remote cell with no quota signal
+        yet. Cloud requests burn real Ollama Cloud quota, but the daemon
+        exposes no quota/usage headers (ollama/ollama #15663), so we cannot
+        report a measured remaining fraction. We report
+        `remaining_fraction=1.0` ("full, eligible") rather than the local
+        free-stub's 0.001 — cloud is NOT free and must compete as a normal
+        remote for primary selection, not be suppressed.
+        `weekly_exhausted=False` because we genuinely don't know exhaustion
+        from headers; the dispatch layer's failure-attribution + this
+        backend's health handle outages separately.
+
+        When the last health probe failed (daemon unreachable), report a
+        short cooldown so `_routable_backends` excludes us — mirrors
         litellm_gateway's cold-start-vs-outage handling.
         """
         now = time.time()
+
+        # Live projection — preferred when wired and enabled.
+        if self._usage_live and self._usage_source is not None:
+            try:
+                payload = await self._usage_source.fetch()
+            except Exception:
+                logger.exception("ollama-cloud usage source fetch failed")
+                payload = None
+            if payload is not None and math.isfinite(payload.session.percent_used):
+                session_used = payload.session.percent_used
+                weekly_used = (
+                    payload.weekly.percent_used
+                    if math.isfinite(payload.weekly.percent_used)
+                    else 0.0
+                )
+                return UsageSnapshot(
+                    remaining_fraction=max(0.0, (100.0 - session_used) / 100.0),
+                    cooldown_until_ts=None,
+                    weekly_exhausted=weekly_used >= 100.0,
+                    probed_at_ts=now,
+                )
+            # else fall through to honest-advisory
+
         cooldown_until: float | None = None
         if not self._healthy and self._catalog_fetched_at > 0:
             # We've polled successfully before; treat current unhealthy state
@@ -207,6 +449,8 @@ class OllamaCloudBackend:
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()
+        if self._usage_source is not None:
+            await self._usage_source.aclose()
 
     def _mark_unhealthy(self) -> None:
         """Flip health to network-down so usage_snapshot reports a cooldown

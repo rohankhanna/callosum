@@ -160,8 +160,12 @@ All paths are under `src/callosum/`.
   translators and chat→Responses streaming generator live in the shared
   `backends/_responses_chat.py` (imported by both `litellm_gateway` and
   `ollama_cloud`; litellm re-exports the `_`-prefixed names for backward
-  compatibility). `credential_proxy.py` is a thin adapter
-  for the legacy credential-proxy shape.
+  compatibility). `ollama_cloud` can optionally read real 5h-session /
+  7d-weekly usage meters from credential proxy (credential-custody sibling on
+  `127.0.0.1:7342`) via a credential-free loopback stand-in token —
+  callosum still holds NO credential; this is env-gated and defaults OFF
+  (see `docs/operations/runtime_deploy.md`). `credential_proxy.py` is a
+  thin adapter for the legacy credential-proxy shape.
 - `cell_grid.py` — the (model, reasoning_effort) cell taxonomy and
   the merger that produces the live cell pool from backend
   `advertised_models` and per-backend `model_metadata`.

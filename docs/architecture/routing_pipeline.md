@@ -30,9 +30,13 @@ strategies, not multiple competing routers.
    `codex_auth_vault` (Codex Plus/Pro) and `ollama_cloud` (cloud models via the
    local ollama daemon under `ollama signin`; `BackendKind="ollama_cloud"`,
    env-gated via `CALLOSUM_OLLAMA_CLOUD_ENABLED`, `CLOUD_PRIORITY_OFFSET=1_000`).
-   Every `=="litellm_gateway"` (local-affirmative) site excludes `ollama_cloud`
-   by omission, so cloud cells land in remote lanes and stay out of
-   local-only/probing paths without a per-site predicate.
+   `ollama_cloud` exposes an honest-advisory `usage_snapshot()` by default;
+   real 5h/7d usage meters can be read from credential proxy when operator-gated
+   (`CALLOSUM_OLLAMA_CLOUD_USAGE_*`, defaults OFF — see
+   `docs/operations/runtime_deploy.md`). Every `=="litellm_gateway"`
+   (local-affirmative) site excludes `ollama_cloud` by omission, so cloud
+   cells land in remote lanes and stay out of local-only/probing paths
+   without a per-site predicate.
 7. **`router.route(body, cells_now)`** — the one decision (`routing/router.py`):
    `extract_features` → `CapabilityFilter` (empty → 400) →
    `QualityPredictor.predict` (`cell_majority_prior` = learned per-cell

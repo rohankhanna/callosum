@@ -18,10 +18,13 @@ from callosum.backends.litellm_gateway import (
 from callosum.backends.litellm_gateway import LiteLLMGatewayBackend
 from callosum.backends.local_direct import LocalModelRegistryBackend
 from callosum.backends.ollama_cloud import (
+    DEFAULT_CUSTODY_URL as OLLAMA_CLOUD_DEFAULT_CUSTODY_URL,
+)
+from callosum.backends.ollama_cloud import (
     DEFAULT_MODEL_SUFFIX as OLLAMA_CLOUD_DEFAULT_MODEL_SUFFIX,
 )
 from callosum.backends.ollama_cloud import DEFAULT_OLLAMA_URL as OLLAMA_CLOUD_DEFAULT_URL
-from callosum.backends.ollama_cloud import OllamaCloudBackend
+from callosum.backends.ollama_cloud import OllamaCloudBackend, OllamaCloudUsageSource
 from callosum.config import Config, build_backends, load_config
 from callosum.local import LocalModelRegistrySource
 from callosum.operator_state import OperatorState
@@ -105,11 +108,45 @@ def build_runtime_backends(cfg: Config, *, operator_state: OperatorState) -> lis
         ollama_cloud_suffix = os.environ.get(
             "CALLOSUM_OLLAMA_CLOUD_MODEL_SUFFIX", OLLAMA_CLOUD_DEFAULT_MODEL_SUFFIX
         )
+
+        # Optional usage-source wiring (credential proxy loopback). Both flags default
+        # OFF so this block is a no-op for live routing at merge time.
+        # CALLOSUM_OLLAMA_CLOUD_USAGE_SOURCE_ENABLED gates source construction;
+        # CALLOSUM_OLLAMA_CLOUD_USAGE_LIVE gates whether the backend treats the
+        # source as authoritative (vs. shadow-only). See work tracker
+        #  /  (OPERATOR-GATED).
+        usage_source = None
+        usage_live = False
+        if os.environ.get("CALLOSUM_OLLAMA_CLOUD_USAGE_SOURCE_ENABLED") == "1":
+            usage_custody_url = os.environ.get(
+                "CALLOSUM_OLLAMA_CLOUD_USAGE_URL", OLLAMA_CLOUD_DEFAULT_CUSTODY_URL
+            )
+            usage_account = os.environ.get(
+                "CALLOSUM_OLLAMA_CLOUD_USAGE_ACCOUNT", "primary"
+            )
+            try:
+                usage_standin_ttl = int(
+                    os.environ.get("CALLOSUM_OLLAMA_CLOUD_STANDIN_TTL", "1800")
+                )
+            except ValueError:
+                logging.getLogger("callosum.startup").warning(
+                    "CALLOSUM_OLLAMA_CLOUD_STANDIN_TTL not an int; falling back to 1800"
+                )
+                usage_standin_ttl = 1800
+            usage_source = OllamaCloudUsageSource(
+                custody_url=usage_custody_url,
+                account=usage_account,
+                standin_ttl_s=usage_standin_ttl,
+            )
+            usage_live = os.environ.get("CALLOSUM_OLLAMA_CLOUD_USAGE_LIVE") == "1"
+
         backends.append(
             OllamaCloudBackend(
                 id="ollama-cloud",
                 ollama_url=ollama_cloud_url,
                 model_suffix=ollama_cloud_suffix,
+                usage_source=usage_source,
+                usage_live=usage_live,
             )
         )
     return backends

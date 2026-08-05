@@ -18,6 +18,7 @@ Most output is JSON; `review` / `service` print human-readable text.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import subprocess
@@ -32,6 +33,7 @@ from urllib import error, request
 from callosum.config import load_config
 from callosum.usage_diagnostic import (
     render_compounding_cost_json,
+    render_ollama_cloud_usage_text,
     render_recent_turns_json,
     render_token_time_series_json,
 )
@@ -396,6 +398,31 @@ def cmd_usage_compounding(args: argparse.Namespace) -> int:
         min_turns=args.min_turns,
     )
     _print(payload, pretty=not args.compact)
+    return 0
+
+
+def cmd_usage_ollama_cloud(args: argparse.Namespace) -> int:
+    # Read-only fetch from the credential proxy loopback; no DB, no daemon required.
+    # Env vars mirror __main__.py's usage-source wiring so the CLI and the
+    # daemon agree on which credential proxy/account to query.
+    custody_url = os.environ.get(
+        "CALLOSUM_OLLAMA_CLOUD_USAGE_URL", "http://127.0.0.1:7342"
+    )
+    account = os.environ.get("CALLOSUM_OLLAMA_CLOUD_USAGE_ACCOUNT", "primary")
+    try:
+        standin_ttl = int(
+            os.environ.get("CALLOSUM_OLLAMA_CLOUD_STANDIN_TTL", "1800")
+        )
+    except ValueError:
+        standin_ttl = 1800
+    text = asyncio.run(
+        render_ollama_cloud_usage_text(
+            custody_url=custody_url,
+            account=account,
+            standin_ttl_s=standin_ttl,
+        )
+    )
+    print(text)
     return 0
 
 
@@ -907,6 +934,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit one-line JSON instead of pretty-printed JSON.",
     )
     compounding.set_defaults(func=cmd_usage_compounding)
+    ollama_cloud = pu.add_parser(
+        "ollama-cloud",
+        help=(
+            "Show Ollama Cloud quota usage (session + weekly percent used, "
+            "reset times) fetched from the credential proxy loopback."
+        ),
+    )
+    ollama_cloud.set_defaults(func=cmd_usage_ollama_cloud)
 
     p_params = sub.add_parser("params", help="Per-cell inference parameter overrides.")
     pp = p_params.add_subparsers(dest="subcommand", required=True)

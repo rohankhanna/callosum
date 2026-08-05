@@ -128,6 +128,64 @@ local LLM gateway's `/v1/models` serving endpoint, which excludes unmanaged
 per-cell minimum-coverage grid, so the quota may route some real
 traffic to `glm-5.X:cloud` to satisfy the per-cell floor.
 
+### Ollama Cloud usage source (credential proxy, credential-free)
+
+By default `OllamaCloudBackend.usage_snapshot()` returns an
+**honest-advisory** snapshot (`remaining_fraction=1.0`,
+`weekly_exhausted=false`) — it does NOT cool down on the cloud account
+because callosum has no real usage meter. The advisory is honest about
+the gap: it simply never claims exhaustion.
+
+Callosum can now optionally read the **real** ollama-cloud 5h-session
+and 7d-weekly usage meters from credential proxy (the credential-custody sibling
+on `127.0.0.1:7342`) via a credential-free loopback stand-in token.
+Callosum holds NO credential for this either — same daemon-custody
+principle as the `ollama_cloud` backend itself; credential proxy owns the
+ollama signin cookie and exposes a read-only usage endpoint.
+
+Two env flags gate the path. **Both default OFF — there is no
+live-routing change at merge.**
+
+```ini
+[Service]
+# Construct the read-only OllamaCloudUsageSource (shadow-available;
+# does NOT change routing by itself).
+Environment=CALLOSUM_OLLAMA_CLOUD_USAGE_SOURCE_ENABLED=1
+# Project the real session/weekly meters into usage_snapshot() so the
+# quota/cool-down path reacts to them. A2/scoped-A4 operator-gated.
+# Requires the source flag ON too. Default OFF → honest-advisory unchanged.
+Environment=CALLOSUM_OLLAMA_CLOUD_USAGE_LIVE=1
+```
+
+Auxiliary env vars (defaults shown):
+
+```ini
+Environment=CALLOSUM_OLLAMA_CLOUD_USAGE_URL=http://127.0.0.1:7342
+Environment=CALLOSUM_OLLAMA_CLOUD_USAGE_ACCOUNT=primary
+Environment=CALLOSUM_OLLAMA_CLOUD_STANDIN_TTL=1800
+```
+
+`CALLOSUM_OLLAMA_CLOUD_STANDIN_TTL` is the stand-in token lifetime in
+seconds (credential proxy max is 1800s). The source is read-only and
+shadow-available: when `CALLOSUM_OLLAMA_CLOUD_USAGE_LIVE` is OFF, or
+the source returns `None` (credential proxy down / cookies expired / 401),
+`usage_snapshot()` falls back to the existing honest-advisory —
+routing never errors and never cools down the cloud lane just because
+a meter is unavailable.
+
+**Observability:** `callosum usage ollama-cloud` is a read-only
+diagnostic that constructs an ephemeral source from the same env vars
+and prints the live session/weekly meters without touching routing:
+
+```bash
+callosum usage ollama-cloud
+```
+
+**Stopgap status:** this cookie-custody path is temporary — it exists
+until ollama ships keypair/API-key auth or an official usage API. The
+fallback contract above means the path can be removed without changing
+routing behavior (it reverts to honest-advisory).
+
 ## Host-side change
 
 The systemd user unit lives in the dotfiles repo and must be updated
