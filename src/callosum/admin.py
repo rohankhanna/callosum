@@ -39,9 +39,11 @@ from callosum.dev_loop.state import (
     list_pending_review_branches,
     read_dispatcher_outcome,
 )
+from callosum.feedback_redirect import format_feedback_redirect
 from callosum.operator_state import VALID_ROUTING_MODES, OperatorState
 from callosum.retention import RetentionRunner, result_to_dict
 from callosum.self_assessment import SelfAssessmentRunner
+from callosum.usage_log import UsageLog
 
 
 def _repo_root_for_branch_listing() -> Path:
@@ -106,6 +108,7 @@ def install_admin_routes(
     autonomy_store: AutonomyStore | None = None,
     retention_runner: RetentionRunner | None = None,
     self_assessment_runner: SelfAssessmentRunner | None = None,
+    usage_log: UsageLog | None = None,
 ) -> None:
     """Mount the /admin/* endpoints on `app`, gated by the admin token.
 
@@ -119,6 +122,13 @@ def install_admin_routes(
     /admin/autonomy/*. When None, those endpoints return 503; the proxy
     can still operate at effective L1_MANUAL (manual everything) which
     is the safe default behavior when state isn't configured.
+
+    `usage_log` backs the /admin/feedback* surface-only redirect endpoints
+    (). When None, those endpoints return 503; the proxy
+    can still operate, the operator just has no in-CLI view of bad-output
+    feedback suggestions (they can still file feedback directly via the
+    external channels). callosum never relays feedback upstream — the
+    redirect only points the operator at their own external channels.
     """
     token = ensure_admin_token()
     router = APIRouter(prefix="/admin", tags=["admin"])
@@ -142,6 +152,9 @@ def install_admin_routes(
             ],
             "denylist": [{"model": m, "reason": r} for m, r in operator_state.list_denied_cells()],
             "dev_loop": _dev_loop_status_payload(),
+            "feedback_suggestions_pending": (
+                usage_log.pending_feedback_suggestion_count() if usage_log is not None else 0
+            ),
         }
 
     @router.get("/params")
@@ -402,6 +415,14 @@ def install_admin_routes(
             )
         return autonomy_store
 
+    def _require_usage_log() -> UsageLog:
+        if usage_log is None:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "usage log not configured; feedback redirect unavailable",
+            )
+        return usage_log
+
     @router.get("/autonomy")
     async def admin_autonomy_show(request: Request) -> dict[str, Any]:
         _check(request)
@@ -584,6 +605,106 @@ def install_admin_routes(
             "metrics": _dataclass_to_dict(metrics),
             "decision": _dataclass_to_dict(decision),
         }
+
+    # --- feedback surface-only redirect () ---------------
+    # NOT an upstream relay. callosum points the operator at their own
+    # external channels (/feedback -> Sentry, GitHub 3-cli.yml issue,
+    # ChatGPT thumbs) and records the acknowledge/dismiss decision. The
+    # snippet is scrubbed of secret-shaped strings before it leaves this
+    # endpoint. No payload is ever proxied or auto-sent upstream.
+
+    @router.get("/feedback")
+    async def admin_feedback_list(request: Request) -> dict[str, Any]:
+        """List pending bad-output suggestions (operator-approve-send).
+
+        Each entry carries the request id, cell, thread id, detector, and a
+        ready-to-paste scrubbed redirect message. The raw transcript text is
+        NOT returned here — only the already-scrubbed message. Use
+        /admin/feedback/{request_id} for the full scrubbed snippet of one item.
+        """
+        _check(request)
+        log = _require_usage_log()
+        limit = 50
+        # Allow ?limit=N but cap to avoid unbounded scans.
+        qstr = request.query_params.get("limit")
+        if qstr and qstr.isdigit():
+            limit = max(1, min(int(qstr), 200))
+        suggestions = log.list_pending_feedback_suggestions(limit=limit)
+        entries: list[dict[str, Any]] = []
+        for s in suggestions:
+            entries.append(
+                {
+                    "request_id": s.request_id,
+                    "ts_start": s.ts_start,
+                    "session_id": s.session_id,
+                    "model": s.model,
+                    "reasoning_effort": s.reasoning_effort,
+                    "detector": s.quality_label_method,
+                    "status": "pending",
+                    "redirect": format_feedback_redirect(
+                        request_id=s.request_id,
+                        thread_id=s.session_id,
+                        model=s.model,
+                        reasoning_effort=s.reasoning_effort,
+                        detector=s.quality_label_method,
+                        prompt_text=s.prompt_text,
+                        response_text=s.response_text,
+                    ),
+                }
+            )
+        return {"pending": entries, "count": len(entries)}
+
+    @router.get("/feedback/{request_id}")
+    async def admin_feedback_show(request: Request, request_id: int) -> dict[str, Any]:
+        """Return the scrubbed snippet + redirect for one suggestion.
+
+        Works for pending, acknowledged, and dismissed items (the operator may
+        want to review a just-decided item). 404 if the request is not a flagged
+        bad output or has no extractable snippet.
+        """
+        _check(request)
+        log = _require_usage_log()
+        s = log.get_feedback_suggestion(request_id)
+        if s is None:
+            raise HTTPException(404, "no flagged bad-output snippet for that request id")
+        return {
+            "request_id": s.request_id,
+            "ts_start": s.ts_start,
+            "session_id": s.session_id,
+            "model": s.model,
+            "reasoning_effort": s.reasoning_effort,
+            "detector": s.quality_label_method,
+            "status": log.feedback_suggestion_status(request_id) or "pending",
+            "redirect": format_feedback_redirect(
+                request_id=s.request_id,
+                thread_id=s.session_id,
+                model=s.model,
+                reasoning_effort=s.reasoning_effort,
+                detector=s.quality_label_method,
+                prompt_text=s.prompt_text,
+                response_text=s.response_text,
+            ),
+        }
+
+    @router.post("/feedback/{request_id}/acknowledge")
+    async def admin_feedback_acknowledge(request: Request, request_id: int) -> dict[str, Any]:
+        """Record that the operator acknowledged the suggestion (filed feedback)."""
+        _check(request)
+        log = _require_usage_log()
+        ok = log.decide_feedback_suggestion(request_id, "acknowledged", decided_at=time.time())
+        if not ok:
+            raise HTTPException(404, "no flagged bad-output request with that id")
+        return {"request_id": request_id, "status": "acknowledged"}
+
+    @router.post("/feedback/{request_id}/dismiss")
+    async def admin_feedback_dismiss(request: Request, request_id: int) -> dict[str, Any]:
+        """Record that the operator dismissed the suggestion (not worth filing)."""
+        _check(request)
+        log = _require_usage_log()
+        ok = log.decide_feedback_suggestion(request_id, "dismissed", decided_at=time.time())
+        if not ok:
+            raise HTTPException(404, "no flagged bad-output request with that id")
+        return {"request_id": request_id, "status": "dismissed"}
 
     app.include_router(router)
 

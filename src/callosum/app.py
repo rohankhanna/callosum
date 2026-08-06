@@ -1521,6 +1521,7 @@ def create_app(
             autonomy_store=autonomy_store,
             retention_runner=retention_runner,
             self_assessment_runner=self_assessment_runner,
+            usage_log=usage_log,
         )
 
     # Bearer middleware for /v1/* and /diagnose/* — only enforced when an

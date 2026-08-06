@@ -184,6 +184,28 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_peer_quality_sidecar_candidates_dedup
 CREATE INDEX IF NOT EXISTS idx_peer_quality_sidecar_candidates_pending
     ON peer_quality_sidecar_candidates(status, created_at);
 
+-- Operator decision audit for the surface-only feedback redirect
+-- (). A request row with quality_score = -1 (the existing
+-- fault signal set by the failure labeler / peer-quality calibration /
+-- user /v1/feedback) is the trigger that the operator should be pointed at
+-- the external feedback channels. This table records ONLY the operator's
+-- decision to acknowledge or dismiss that suggestion — "pending" means the
+-- row does not yet exist here (derive-on-read, no auto-create), which keeps
+-- the three async detection paths un-hooked. One row per request_id: once
+-- the operator decides, the suggestion is settled and dropped from the
+-- pending list. No payload is stored here; the scrubbed snippet is derived
+-- from requests.prompt_text / response_text at read time and scrubbed
+-- before display. callosum never relays this upstream — the redirect points
+-- the user AT their own external channels (/feedback -> Sentry, GitHub
+-- 3-cli.yml issue, ChatGPT thumbs); it does not proxy the upload.
+CREATE TABLE IF NOT EXISTS feedback_suggestions (
+    request_id INTEGER PRIMARY KEY REFERENCES requests(id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN ('acknowledged', 'dismissed')),
+    decided_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_suggestions_status
+    ON feedback_suggestions(status, decided_at);
+
 -- One row per local model: the latest full-context memory-fit probe result.
 -- Re-probing after an artifact change overwrites the prior row (PK = model_id);
 -- content_hash records which exact artifact was measured so the probe job
@@ -469,6 +491,29 @@ class SessionAssistantTurn:
     request_id: int
     model: str
     reasoning_effort: str | None
+    response_text: str
+
+
+@dataclass(frozen=True, slots=True)
+class FeedbackSuggestion:
+    """A pending operator-facing feedback-redirect suggestion.
+
+    Derived on read from a requests row whose quality_score = -1
+    (the existing fault signal) that has no matching feedback_suggestions
+    decision row yet. Carries the raw transcript snippet ingredients; the
+    caller is responsible for scrubbing prompt_text / response_text
+    before any display or paste target. ts_start is the request's wall
+    time (for ordering/preview); quality_label_method names which detector
+    flagged it ('user', 'implicit_failure_v1', 'peer_quality', ...).
+    """
+
+    request_id: int
+    ts_start: float
+    session_id: str | None
+    model: str
+    reasoning_effort: str | None
+    quality_label_method: str | None
+    prompt_text: str
     response_text: str
 
 
@@ -831,6 +876,148 @@ class UsageLog:
                 "UPDATE requests SET quality_score = ?, quality_label_method = ? WHERE id = ?",
                 (score, method, request_id),
             )
+
+    # --- feedback-redirect audit () ---------------------
+    # The fault trigger is the existing quality_score = -1 signal (set by the
+    # failure labeler / peer-quality calibration / user /v1/feedback). These
+    # methods are derive-on-read for "pending" and write-on-decide for the
+    # audit; no detection path is hooked. callosum does NOT relay upstream.
+
+    def list_pending_feedback_suggestions(self, *, limit: int = 50) -> list[FeedbackSuggestion]:
+        """Return up to limit bad-output requests awaiting an operator decision.
+
+        A request is "pending" iff its quality_score = -1 (a detector flagged
+        it) and the operator has not yet acknowledged or dismissed it (no matching
+        feedback_suggestions row). Ordered newest-first by request time.
+        Only rows with non-empty prompt_text and response_text are surfaced
+        (a snippet with nothing to paste is useless to the operator).
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT r.id, r.ts_start, r.session_id, r.model, r.reasoning_effort,
+                       r.quality_label_method, r.prompt_text, r.response_text
+                FROM requests r
+                LEFT JOIN feedback_suggestions fs ON fs.request_id = r.id
+                WHERE r.quality_score = -1
+                  AND r.prompt_text IS NOT NULL AND r.prompt_text != ''
+                  AND r.response_text IS NOT NULL AND r.response_text != ''
+                  AND fs.request_id IS NULL
+                ORDER BY r.ts_start DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        out: list[FeedbackSuggestion] = []
+        for r in rows:
+            prompt = r[6]
+            resp = r[7]
+            if not isinstance(prompt, str) or not isinstance(resp, str):
+                continue
+            out.append(
+                FeedbackSuggestion(
+                    request_id=int(r[0]),
+                    ts_start=float(r[1]),
+                    session_id=r[2],
+                    model=str(r[3]),
+                    reasoning_effort=r[4],
+                    quality_label_method=r[5],
+                    prompt_text=prompt,
+                    response_text=resp,
+                )
+            )
+        return out
+
+    def get_feedback_suggestion(self, request_id: int) -> FeedbackSuggestion | None:
+        """Return the snippet for one request_id, or None if it is not a flagged bad output.
+
+        Unlike list_pending_feedback_suggestions this returns the row
+        regardless of whether the operator already decided, so callosum
+        feedback show can still display a just-acknowledged/dismissed item
+        for review. The decision status is NOT part of this dataclass; the
+        caller checks feedback_suggestions separately if it needs it.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT id, ts_start, session_id, model, reasoning_effort,
+                       quality_label_method, prompt_text, response_text
+                FROM requests
+                WHERE id = ? AND quality_score = -1
+                  AND prompt_text IS NOT NULL AND prompt_text != ''
+                  AND response_text IS NOT NULL AND response_text != ''
+                """,
+                (request_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        prompt = row[6]
+        resp = row[7]
+        if not isinstance(prompt, str) or not isinstance(resp, str):
+            return None
+        return FeedbackSuggestion(
+            request_id=int(row[0]),
+            ts_start=float(row[1]),
+            session_id=row[2],
+            model=str(row[3]),
+            reasoning_effort=row[4],
+            quality_label_method=row[5],
+            prompt_text=prompt,
+            response_text=resp,
+        )
+
+    def feedback_suggestion_status(self, request_id: int) -> str | None:
+        """Return the decision status for a suggestion, or None if undecided/unknown.
+
+        'acknowledged' / 'dismissed' / None (no decision row — still pending).
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT status FROM feedback_suggestions WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+        return row[0] if row is not None else None
+
+    def decide_feedback_suggestion(self, request_id: int, status: str, *, decided_at: float) -> bool:
+        """Record the operator's acknowledge/dismiss decision. Upsert; returns
+        True if a row was inserted or updated, False if the request is not a
+        flagged bad output (no quality_score = -1 to decide on).
+        """
+        if status not in ("acknowledged", "dismissed"):
+            raise ValueError(f"feedback decision status must be acknowledged or dismissed; got {status}")
+        with self._lock:
+            # Only decide on a row that is actually a flagged bad output.
+            exists = self._conn.execute(
+                "SELECT 1 FROM requests WHERE id = ? AND quality_score = -1",
+                (request_id,),
+            ).fetchone()
+            if exists is None:
+                return False
+            self._conn.execute(
+                """
+                INSERT INTO feedback_suggestions (request_id, status, decided_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(request_id) DO UPDATE SET status = excluded.status, decided_at = excluded.decided_at
+                """,
+                (request_id, status, decided_at),
+            )
+        return True
+
+    def pending_feedback_suggestion_count(self) -> int:
+        """Count bad-output requests awaiting an operator decision (for /status nudge)."""
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM requests r
+                LEFT JOIN feedback_suggestions fs ON fs.request_id = r.id
+                WHERE r.quality_score = -1
+                  AND r.prompt_text IS NOT NULL AND r.prompt_text != ''
+                  AND r.response_text IS NOT NULL AND r.response_text != ''
+                  AND fs.request_id IS NULL
+                """,
+            ).fetchone()
+        return int(row[0]) if row is not None else 0
 
     def record_peer_quality_opinions(
         self,

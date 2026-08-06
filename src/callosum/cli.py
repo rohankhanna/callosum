@@ -1193,6 +1193,33 @@ def build_parser() -> argparse.ArgumentParser:
     t_triage.add_argument("--acceptance", required=True, help="machine-checkable acceptance test id")
     t_triage.set_defaults(func=cmd_ticket_triage)
 
+    # Surface-only feedback redirect (). Points the
+    # operator at the existing external feedback channels (/feedback -> the
+    # model provider's telemetry tenant, GitHub 3-cli.yml issue, ChatGPT
+    # thumbs) for outputs callosum flagged as bad (quality_score = -1), and
+    # records the operator's acknowledge/dismiss decision in a local audit
+    # table. callosum does NOT relay feedback upstream; the snippet is
+    # scrubbed of secret-shaped strings before display. Auto-send (in-band
+    # injection without operator approval) is a separate scoped-A4 decision
+    # with the auto-promotion master switch OFF and is NOT wired here.
+    p_feedback = sub.add_parser(
+        "feedback",
+        help="Surface-only feedback redirect: point at external channels for flagged outputs.",
+    )
+    pf = p_feedback.add_subparsers(dest="feedback_cmd", required=True)
+    pf_list = pf.add_parser("list", help="List pending bad-output suggestions (compact).")
+    pf_list.add_argument("--limit", type=int, default=50)
+    pf_list.set_defaults(func=cmd_feedback_list)
+    pf_show = pf.add_parser("show", help="Show the scrubbed snippet + redirect for one request.")
+    pf_show.add_argument("request_id", type=int)
+    pf_show.set_defaults(func=cmd_feedback_show)
+    pf_ack = pf.add_parser("acknowledge", help="Mark a suggestion acknowledged (you filed feedback).")
+    pf_ack.add_argument("request_id", type=int)
+    pf_ack.set_defaults(func=cmd_feedback_acknowledge)
+    pf_dis = pf.add_parser("dismiss", help="Mark a suggestion dismissed (not worth filing).")
+    pf_dis.add_argument("request_id", type=int)
+    pf_dis.set_defaults(func=cmd_feedback_dismiss)
+
     # Auth-rotate wizard. Wired here so the help surface lists it
     # alongside the other operator commands.
     from callosum.auth_rotate import add_subparser as _add_auth_rotate
@@ -1274,6 +1301,97 @@ def build_parser() -> argparse.ArgumentParser:
     p_gate.set_defaults(func=cmd_gate)
 
     return parser
+
+
+def _fmt_ts(ts: float) -> str:
+    """Render a request-log epoch float as a local timestamp string."""
+    from datetime import datetime
+
+    try:
+        return datetime.fromtimestamp(float(ts)).strftime("%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError, OSError):
+        return "(unknown)"
+
+
+def _cell_label(model: str | None, effort: str | None) -> str:
+    if not model:
+        return "(unknown cell)"
+    return f"{model}/{effort}" if effort else model
+
+
+def cmd_feedback_list(args: argparse.Namespace) -> int:
+    """Compact listing of pending bad-output suggestions.
+
+    Prints one line per suggestion (request id, cell, thread, detector,
+    timestamp) plus the ready-to-paste redirect message for each. The
+    operator reads these, files feedback via the named external channels
+    themselves, then `callosum feedback acknowledge <id>` (filed) or
+    `callosum feedback dismiss <id>` (not worth filing). callosum never
+    relays anything upstream.
+    """
+    payload = _request("GET", f"/admin/feedback?limit={args.limit}")
+    if not isinstance(payload, dict):
+        print("error: unexpected /admin/feedback payload", file=sys.stderr)
+        return 1
+    entries = payload.get("pending") or []
+    count = payload.get("count", len(entries))
+    if not entries:
+        print("pending feedback suggestions: 0 (clean queue)")
+        return 0
+    print(f"pending feedback suggestions: {count}")
+    print()
+    for e in entries:
+        rid = e.get("request_id", "?")
+        cell = _cell_label(e.get("model"), e.get("reasoning_effort"))
+        thread = e.get("session_id") or "(none)"
+        detector = e.get("detector") or "unknown"
+        ts = _fmt_ts(e.get("ts_start", 0.0))
+        print(f"  request {rid}  {ts}  cell={cell}  thread={thread}  detector={detector}")
+        redirect = e.get("redirect")
+        if isinstance(redirect, str) and redirect:
+            print()
+            print(redirect.rstrip())
+        print()
+        print(f"    file via external channels, then:  callosum feedback acknowledge {rid}")
+        print(f"    or skip:                            callosum feedback dismiss {rid}")
+        print()
+    return 0
+
+
+def cmd_feedback_show(args: argparse.Namespace) -> int:
+    """Show the scrubbed snippet + redirect for one request id."""
+    payload = _request("GET", f"/admin/feedback/{args.request_id}")
+    if not isinstance(payload, dict):
+        print("error: unexpected /admin/feedback payload", file=sys.stderr)
+        return 1
+    status = payload.get("status", "pending")
+    cell = _cell_label(payload.get("model"), payload.get("reasoning_effort"))
+    thread = payload.get("session_id") or "(none)"
+    detector = payload.get("detector") or "unknown"
+    ts = _fmt_ts(payload.get("ts_start", 0.0))
+    print(f"request {payload.get('request_id', args.request_id)}  {ts}  status={status}")
+    print(f"  cell={cell}  thread={thread}  detector={detector}")
+    print()
+    redirect = payload.get("redirect")
+    if isinstance(redirect, str) and redirect:
+        print(redirect.rstrip())
+    else:
+        print("(no redirect text)")
+    return 0
+
+
+def cmd_feedback_acknowledge(args: argparse.Namespace) -> int:
+    """Mark a suggestion acknowledged (operator filed feedback externally)."""
+    payload = _request("POST", f"/admin/feedback/{args.request_id}/acknowledge")
+    _print(payload)
+    return 0
+
+
+def cmd_feedback_dismiss(args: argparse.Namespace) -> int:
+    """Mark a suggestion dismissed (not worth filing)."""
+    payload = _request("POST", f"/admin/feedback/{args.request_id}/dismiss")
+    _print(payload)
+    return 0
 
 
 def cmd_ticket_add(args: argparse.Namespace) -> int:
