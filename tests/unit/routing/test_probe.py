@@ -1,18 +1,24 @@
 """Tests for the tool-call verification probe.
 
 Covers the contract: a cell passes only when it returns a Responses-API
-response carrying at least one structured `function_call` output item
-AND no message text that parses as a tool-call-shaped JSON object.
+response carrying at least one structured function_call output item
+AND no message text that looks like a tool call the model emitted as
+text: a JSON object with name and arguments keys, OR a Hermes-family
+tag format (a function=NAME block, a tool_call pipe marker, or a
+tool_call special-token block).
 
 Quirks the probe MUST catch:
   * tool calls emitted as JSON text inside message content (model-a0e5 quirk)
+  * tool calls emitted as Hermes-family tag-format text inside message
+    content (model-a0d4 and other Hermes-template models via an
+    un-translating responses-proxy)
   * the dual-emit failure mode where the model produces BOTH a structured
-    function_call AND duplicates it as JSON in message text
+    function_call AND duplicates it as text (JSON or Hermes) in message
+    text
   * empty output (model refused or produced nothing)
-  * function_call items with malformed/missing required fields
-  * backend errors → probe fails closed
+  * function_call items with malformed or missing required fields
+  * backend errors - probe fails closed
 """
-
 from __future__ import annotations
 
 from typing import Any
@@ -195,6 +201,117 @@ def test_function_call_plus_json_text_unrelated_to_tool_call_passes() -> None:
                     {
                         "type": "output_text",
                         "text": 'The expected config shape is {"port": 8765, "host": "127.0.0.1"}.',
+                    }
+                ],
+            },
+        ]
+    }
+    assert response_has_structured_tool_call(response) is True
+
+
+def test_hermes_function_tag_text_only_rejected() -> None:
+    """The model-a0d4 / Hermes-template failure pattern: the model emits
+    its tool call as a function=NAME tag block inside message text instead
+    of as a structured function_call item, because the responses-proxy
+    did not translate the Hermes tag form. The live gate must fail this
+    cell so callosum doesn't route tool-using traffic that Codex CLI
+    renders as tag junk."""
+    response = {
+        "output": [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": '<function=exec_command>{"cmd":"git status"}</function>',
+                    }
+                ],
+            }
+        ]
+    }
+    assert response_has_structured_tool_call(response) is False
+
+
+def test_hermes_function_tag_dual_emit_rejected() -> None:
+    """The Hermes-tag dual-emit case the JSON-only text-leak detector
+    missed: the model emits a structured function_call AND duplicates it
+    as a function=NAME tag block in message text (observed from
+    model-a0d4 via an un-translating responses-proxy). Under the old
+    JSON-only detector this PASSED the live gate because the Hermes text
+    wasn't recognized as a leak, routing tool traffic that Codex CLI
+    rendered as tag junk. The shared format-agnostic detector must now
+    fail it."""
+    response = {
+        "output": [
+            {
+                "type": "function_call",
+                "name": "exec_command",
+                "arguments": '{"cmd":"git status"}',
+                "call_id": "fc_001",
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": '<function=exec_command>{"cmd":"git status"}</function>',
+                    }
+                ],
+            },
+        ]
+    }
+    assert response_has_structured_tool_call(response) is False
+
+
+def test_hermes_tool_call_marker_dual_emit_rejected() -> None:
+    """The tool_call pipe-marker Hermes variant: a structured call plus a
+    tool_call pipe marker in message text. Must fail the live gate."""
+    response = {
+        "output": [
+            {
+                "type": "function_call",
+                "name": "read_file",
+                "arguments": '{"path":"config.json"}',
+                "call_id": "fc_001",
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": '<|tool_call|>{"name":"read_file","arguments":{"path":"config.json"}}',
+                    }
+                ],
+            },
+        ]
+    }
+    assert response_has_structured_tool_call(response) is False
+
+
+def test_bare_function_keyword_in_text_does_not_false_trigger() -> None:
+    """The Hermes function-tag detector constrains NAME to a tool-name-ish
+    token and requires the angle-bracket tag structure, so ordinary prose
+    mentioning 'function=' without the tag must NOT trip the detector. A
+    well-behaved model that names a function in explanatory text should
+    still pass alongside a structured call."""
+    response = {
+        "output": [
+            {
+                "type": "function_call",
+                "name": "exec_command",
+                "arguments": '{"cmd":"git status"}',
+                "call_id": "fc_001",
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "Calling the function=exec_command helper to check git status.",
                     }
                 ],
             },

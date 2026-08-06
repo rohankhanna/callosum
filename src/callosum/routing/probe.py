@@ -34,12 +34,17 @@ The probe is now shaped to resemble realistic Codex CLI requests:
     naturally requires tool use, instead of literally saying "call
     this tool with these arguments". Models that need explicit
     spoon-feeding fail.
-  * **JSON-as-text rejection**. Even if the model emits one structured
-    function_call by accident, if it ALSO emits text content that
-    parses as a tool-call JSON object, the probe fails. Real Codex
-    CLI traffic hits this case when the model is "almost working" —
-    it produces a structured call AND duplicates the call as JSON
-    in its message text, which is the visible failure mode.
+  * **Tool-call-as-text rejection**. Even if the model emits one
+    structured function_call by accident, if it ALSO emits text
+    content that looks like a tool call (a JSON object with
+    `name`+`arguments`, or a Hermes-family tag format such as
+    `<function=NAME>...</function>` / a `<|tool_call|>` block), the
+    probe fails. Real Codex CLI traffic hits this case when the model
+    is "almost working" — it produces a structured call AND duplicates
+    the call as text in its message, which is the visible failure
+    mode. The detector is shared with the capability dimension probes
+    so the live gate and the offline classifier recognize the same
+    text tool-call formats.
 
 # What the probe is NOT testing
 
@@ -55,9 +60,10 @@ The probe is now shaped to resemble realistic Codex CLI requests:
 
 from __future__ import annotations
 
-import json
 from collections.abc import Awaitable, Callable
 from typing import Any
+
+from callosum.capability.dimensions._shape_utils import looks_like_tool_call_text
 
 # Six tools mirroring the shape Codex CLI sends — names and parameter
 # schemas are synthetic but deliberately resemble realistic tools so
@@ -288,61 +294,35 @@ def build_probe_body(model: str) -> dict[str, Any]:
     return body
 
 
-def _text_looks_like_tool_call_json(text: str) -> bool:
-    """Return True when `text` parses as JSON in the shape of an
-    OpenAI tool call, i.e. an object with both a `name` (string) and
-    `arguments` (string or object) key.
-
-    This is the model-a0e5 failure pattern: the model emits a real-
-    looking tool call BUT inside `message.content` as text rather
-    than as a structured `function_call` item. Strict-mode tooling
-    (Codex CLI's parser) drops these, leaving the user with visible
-    JSON junk in the terminal.
-
-    We do a strict parse rather than a regex because regex on JSON
-    is fragile (multi-line content, escaped quotes, etc.) and the
-    probe is a one-shot offline check where parse cost doesn't
-    matter. Non-JSON text returns False quickly via the try.
-    """
-    stripped = text.strip()
-    if not stripped:
-        return False
-    # Cheap pre-check: only attempt JSON parse if the text starts
-    # like a JSON object. Avoids paying full json.loads cost for
-    # the overwhelming majority of normal model responses.
-    if not stripped.startswith("{"):
-        return False
-    try:
-        parsed = json.loads(stripped)
-    except (json.JSONDecodeError, ValueError):
-        return False
-    if not isinstance(parsed, dict):
-        return False
-    if not isinstance(parsed.get("name"), str) or not parsed["name"]:
-        return False
-    args = parsed.get("arguments")
-    return isinstance(args, (str, dict))
-
-
 def response_has_structured_tool_call(response: dict[str, Any]) -> bool:
     """Return True when the response carries at least one structured
     function_call item AND does not also emit a tool-call-shaped
-    JSON object inside message text content.
+    text leak inside message text content.
 
     The dual condition matters: some models (model-a0e5 the canonical
-    example) sometimes emit BOTH a structured function_call AND
-    duplicate the call as JSON in their text content. Codex CLI's
-    parser handles the structured call but renders the duplicate
-    JSON as visible junk. The probe must fail those cells — emitting
-    correct structure isn't enough if the text channel also leaks.
+    JSON example; model-a0d4 and other Hermes-template models the
+    tag-format example) sometimes emit BOTH a structured
+    function_call AND duplicate the call as text in their message
+    content. Codex CLI's parser handles the structured call but
+    renders the duplicate text as visible junk. The probe must fail
+    those cells — emitting correct structure isn't enough if the
+    text channel also leaks.
+
+    The text-leak check is format-agnostic and shared with the
+    capability dimension probes via
+    `callosum.capability.dimensions._shape_utils.looks_like_tool_call_text`
+    so the live gate and the offline classifier recognize the same
+    text tool-call renderings: a JSON object (`{"name": ...,
+    "arguments": ...}`) or a Hermes-family tag format
+    (`<function=NAME>...</function>` / a `<|tool_call|>` block).
 
     Specifically passes when:
       * response.output[] contains at least one item with
           type == "function_call"
           name (non-empty string)
           arguments (string)
-      * AND no message item's text content parses as a tool-call
-        JSON object (`{"name": ..., "arguments": ...}`).
+      * AND no message item's text content looks like a tool call
+        in either recognized text format.
 
     Fails on:
       * empty output[] (refused or produced nothing)
@@ -351,7 +331,7 @@ def response_has_structured_tool_call(response: dict[str, Any]) -> bool:
       * malformed function_call items (missing name/arguments,
         non-string arguments)
       * structured function_call PLUS text that looks like a
-        tool-call JSON (the dual-emit failure mode)
+        tool call (the dual-emit failure mode, JSON or Hermes)
     """
     if not isinstance(response, dict):
         return False
@@ -388,7 +368,7 @@ def response_has_structured_tool_call(response: dict[str, Any]) -> bool:
                 text = part.get("text")
                 if not isinstance(text, str):
                     continue
-                if _text_looks_like_tool_call_json(text):
+                if looks_like_tool_call_text(text):
                     has_text_tool_call_leak = True
 
     return has_structured_call and not has_text_tool_call_leak
@@ -409,8 +389,9 @@ async def probe_supports_tools(
     internals) and hands it in here.
 
     Returns True only when the response contains at least one
-    structured function_call item AND does not also emit tool-call-
-    shaped JSON in message text content. See
+    structured function_call item AND does not also emit a
+    tool-call-shaped text leak (JSON object or Hermes tag format)
+    in message text content. See
     `response_has_structured_tool_call` for the full contract.
 
     Any exception (network, parse, backend rejection) → False.

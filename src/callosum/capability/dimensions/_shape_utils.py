@@ -103,7 +103,7 @@ def classify_response(response: dict[str, Any] | None) -> ResponseClassification
         elif t == "message":
             for text in _text_parts(item):
                 text_excerpts.append(text[:300])
-                if _looks_like_tool_call_text(text):
+                if looks_like_tool_call_text(text):
                     text_tool_call_leaks.append(text[:500])
     return ResponseClassification(
         has_structured_call=has_structured,
@@ -127,7 +127,7 @@ def _text_parts(message_item: dict[str, Any]) -> list[str]:
     return out
 
 
-def _looks_like_tool_call_text(text: str) -> bool:
+def looks_like_tool_call_text(text: str) -> bool:
     """Return True when text looks like a tool call the model
     emitted as message text instead of as a structured function_call
     output item. Recognizes two canonical Hermes-family text tool-call
@@ -141,6 +141,15 @@ def _looks_like_tool_call_text(text: str) -> bool:
     A model emitting either is *attempting* a tool call as text — the
     substrate failed to translate it — so the dimension buckets it as a
     Class-B text-leak, not a refusal.
+
+    This is the canonical format-agnostic text tool-call detector,
+    shared by the offline capability dimension probes (via
+    classify_response) AND the live routing gate
+    (callosum.routing.probe.response_has_structured_tool_call) so a
+    text leak cannot pass the live gate and reach the client as visible
+    junk. Keeping one detector behind both surfaces prevents the
+    JSON-only blind spot that previously mis-bucketed Hermes-tag text
+    leaks.
     """
     return _looks_like_tool_call_json(text) or _looks_like_tool_call_hermes(text)
 
