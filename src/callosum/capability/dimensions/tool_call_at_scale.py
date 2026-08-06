@@ -3,9 +3,10 @@
 Same tool-call shape probe as tool_call_shape but at realistic Codex
 CLI context size (~80K chars ≈ 22K tokens). This is what catches
 cells like model-a0c8 that pass the small-prompt probe but emit
-text-as-JSON under real-traffic-shaped input.
+tool calls as text (JSON object or Hermes tag format) under
+real-traffic-shaped input.
 
-Skips itself when tool_call_shape didn't pass — no point burning
+Skips itself when tool_call_shape didn't pass -- no point burning
 60-300s of GPU time on a cell that can't even pass the small probe.
 """
 
@@ -76,39 +77,44 @@ async def probe(
 
     cls = classify_response(response)
 
-    if cls.has_structured_call and not cls.text_json_leak_examples:
+    if cls.has_structured_call and not cls.text_tool_call_leak_examples:
         return DimensionFinding(
             dimension=DIMENSION_NAME,
             status="pass",
-            summary=(f"structured function_call emitted at ~{_PROMPT_CHARS} char prompt; no JSON-text leak"),
+            summary=(
+                f"structured function_call emitted at ~{_PROMPT_CHARS} char "
+                "prompt; no tool-call-shaped text leak"
+            ),
             evidence={
                 "prompt_chars": _PROMPT_CHARS,
                 "text_excerpts": cls.text_excerpts[:3],
             },
         )
-    if cls.text_json_leak_examples:
+    if cls.text_tool_call_leak_examples:
         return DimensionFinding(
             dimension=DIMENSION_NAME,
             status="fail",
             summary=(
-                "model emits tool-call-shaped JSON in message text at "
+                "model emits tool calls as text (JSON object or Hermes "
+                "tag format) in message text at "
                 f"~{_PROMPT_CHARS}-char prompt size, even though the "
                 "small-prompt probe passed. Real Codex CLI traffic "
                 "will hit this failure mode."
             ),
             evidence={
                 "prompt_chars": _PROMPT_CHARS,
-                "text_json_leak_examples": cls.text_json_leak_examples[:2],
+                "text_tool_call_leak_examples": cls.text_tool_call_leak_examples[:2],
                 "structured_call_also_present": cls.has_structured_call,
             },
             adapter_hint=(
                 "model breaks down at realistic context size. Two "
-                "adapter options: (a) parse tool-call-shaped JSON from "
-                "message text and lift to structured function_call "
-                "items, OR (b) restrict this cell to small-context "
-                "routing only (denied for sessions whose accumulated "
-                "context exceeds N tokens). (b) is simpler; (a) is "
-                "more general but requires careful escaping logic."
+                "adapter options: (a) parse tool-call-shaped text "
+                "(JSON object or Hermes tag format) from message text "
+                "and lift to structured function_call items, OR (b) "
+                "restrict this cell to small-context routing only "
+                "(denied for sessions whose accumulated context "
+                "exceeds N tokens). (b) is simpler; (a) is more "
+                "general but requires careful escaping logic."
             ),
             gap_class="B",
             suggested_action=ContractAction.AUTHOR_TEMPORARY_ADAPTER,
@@ -119,9 +125,9 @@ async def probe(
         dimension=DIMENSION_NAME,
         status="fail",
         summary=(
-            "no structured tool_call AND no JSON-text at scale. Model "
-            "produced text-only or empty output despite passing the "
-            "small-prompt probe."
+            "no structured tool_call AND no tool-call-shaped text at "
+            "scale. Model produced text-only or empty output despite "
+            "passing the small-prompt probe."
         ),
         evidence={
             "prompt_chars": _PROMPT_CHARS,

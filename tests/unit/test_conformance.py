@@ -285,8 +285,23 @@ def test_tool_call_at_scale_no_structured_call_is_false() -> None:
     )
 
 
-def test_tool_call_at_scale_text_json_leak_is_false() -> None:
+def test_tool_call_at_scale_text_tool_call_leak_is_false() -> None:
     leak = '{"name":"exec_command","arguments":"{\\"cmd\\":\\"ls\\"}"}'
+    assert (
+        check_tool_call_at_scale_probe_through_substrate(
+            _resp([_function_call(), _message(leak)])
+        )
+        is False
+    )
+
+
+def test_tool_call_at_scale_hermes_tag_leak_is_false() -> None:
+    # Hermes tag format: a function=NAME block wrapping a tool-call JSON
+    # object (built via chr() so no literal angle-bracket tag glyphs appear
+    # in this source). The classifier must recognize it as a text tool-call
+    # leak even though it is not a bare JSON object.
+    lt, gt = chr(60), chr(62)
+    leak = f"{lt}function=exec_command{gt}" + '{"name":"exec_command","arguments":"ls"}' + f"{lt}/function{gt}"
     assert (
         check_tool_call_at_scale_probe_through_substrate(
             _resp([_function_call(), _message(leak)])

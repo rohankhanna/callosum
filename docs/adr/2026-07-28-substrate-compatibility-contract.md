@@ -253,8 +253,10 @@ Gaps split into two classes:
   normalization, usage shape, tool-call shape). Substrates already own this.
   Callosum stops *duplicating* it.
 - **Class B — model-specific behavioral quirk** (e.g. in-band `<thought>` tag
-  stripping for a model no substrate fronts, text-as-JSON tool calls, a
-  model-specific prompt prefix). No substrate owns the quirk for this cell.
+  stripping for a model no substrate fronts, text-format tool calls emitted as
+  message text — JSON object or Hermes tag form — that the substrate did not
+  lift to structured `function_call` items, a model-specific prompt prefix). No
+  substrate owns the quirk for this cell.
 
 The loop selects the first applicable action:
 

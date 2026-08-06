@@ -220,16 +220,17 @@ def check_tool_call_at_scale_probe_through_substrate(
 ) -> bool | None:
     """Invariant 7: structured tool calls still work at realistic context size
     through the substrate. Pass (True) iff a structured function_call is
-    emitted AND there is no tool-call-shaped JSON leaked into message text —
-    the exact condition the tool_call_at_scale dimension uses. False
-    otherwise (no structured call at scale, or a text-JSON leak). Returns
-    None only when there is no response to inspect; the builder skips this
-    check entirely (leaving the invariant None) when the small tool-call
-    probe did not pass, mirroring tool_call_at_scale.py:46-55."""
+    emitted AND there is no tool-call-shaped text (JSON object or Hermes tag
+    format) leaked into message text -- the exact condition the
+    tool_call_at_scale dimension uses. False otherwise (no structured call
+    at scale, or a text tool-call leak). Returns None only when there is no
+    response to inspect; the builder skips this check entirely (leaving the
+    invariant None) when the small tool-call probe did not pass, mirroring
+    tool_call_at_scale.py:46-55."""
     if not isinstance(response, dict):
         return None
     cls = classify_response(response)
-    return cls.has_structured_call and not cls.text_json_leak_examples
+    return cls.has_structured_call and not cls.text_tool_call_leak_examples
 
 
 # Registry: invariant -> its check. The builder knows which probe body drives
@@ -258,7 +259,7 @@ def _small_tool_call_passed(response: dict[str, Any] | None) -> bool:
     if not isinstance(response, dict):
         return False
     cls = classify_response(response)
-    return cls.has_structured_call and not cls.text_json_leak_examples
+    return cls.has_structured_call and not cls.text_tool_call_leak_examples
 
 
 async def _run_probe(
