@@ -13,7 +13,21 @@ BackendKind = Literal[
     "litellm_gateway",
     "ollama_cloud",
 ]
-HealthReason = Literal["ok", "rate_limited", "auth_invalid", "network", "unknown"]
+HealthReason = Literal[
+    "ok",
+    "rate_limited",
+    "auth_invalid",
+    "network",
+    "unknown",
+    # Local-lane catalog reasons. `catalog_cli_broken` = the shelled-out
+    # local-llm catalog CLI failed to run (missing, hung, or non-zero exit —
+    # e.g. an orphaned pipx venv lost its package). `catalog_empty` = the CLI
+    # is healthy but the local model garage lists zero models. Distinct from
+    # the opaque "unknown" so /status names the real cause and the operator
+    # knows whether to repair the sibling CLI or populate the garage.
+    "catalog_cli_broken",
+    "catalog_empty",
+]
 
 
 @dataclass(frozen=True, slots=True)

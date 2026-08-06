@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import shlex
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -51,6 +52,24 @@ def _configure_logging() -> None:
         logging.Formatter.converter = lambda *args: datetime.now(UTC).timetuple()
 
 
+def _local_llm_cli_command() -> list[str] | None:
+    """Resolve the local-llm catalog CLI argv from the env override.
+
+    CALLOSUM_LOCAL_LLM_CLI, if set and non-blank, is shell-split into an
+    argv list so the operator can point callosum at a known-good binary —
+    e.g. CALLOSUM_LOCAL_LLM_CLI="uv run --directory
+    /home/.../local LLM gateway python -m local.cli" — instead of
+    relying on the local-llm console script on PATH, which silently dies
+    when its pipx venv loses the package (orphaned shebang →
+    ModuleNotFoundError, exit 1). Returns None to use the default
+    ["local-llm"] PATH lookup.
+    """
+    raw = os.environ.get("CALLOSUM_LOCAL_LLM_CLI")
+    if not raw or not raw.strip():
+        return None
+    return shlex.split(raw)
+
+
 def build_runtime_backends(cfg: Config, *, operator_state: OperatorState) -> list[Backend]:
     """Build the same backend set the live server uses.
 
@@ -59,17 +78,32 @@ def build_runtime_backends(cfg: Config, *, operator_state: OperatorState) -> lis
     """
     backends = build_backends(cfg)
     local_added = False
-    if os.environ.get("CALLOSUM_LOCAL_DISABLED") != "1" and LocalModelRegistrySource.is_available():
-        source = LocalModelRegistrySource()
-        backends.append(
-            LocalModelRegistryBackend(
-                id="local LLM gateway",
-                source=source,
-                operator_state=operator_state,
-                usage_log_path=cfg.usage_log.path,
+    local_cli = _local_llm_cli_command()
+    if os.environ.get("CALLOSUM_LOCAL_DISABLED") != "1":
+        # probe_availability classifies the failure (missing / broken / timeout)
+        # rather than collapsing it to a bare bool, so the operator sees the
+        # real cause in the startup log instead of only the downstream
+        # LiteLLM-fallback's opaque reason="network" in /status.
+        available, reason = LocalModelRegistrySource.probe_availability(local_cli)
+        if available:
+            source = LocalModelRegistrySource(cli_command=local_cli)
+            backends.append(
+                LocalModelRegistryBackend(
+                    id="local LLM gateway",
+                    source=source,
+                    operator_state=operator_state,
+                    usage_log_path=cfg.usage_log.path,
+                )
             )
-        )
-        local_added = True
+            local_added = True
+        else:
+            logging.getLogger("callosum.startup").warning(
+                "LocalModelRegistryBackend not registered: local-llm catalog CLI %s "
+                "(probe ran %r). Point CALLOSUM_LOCAL_LLM_CLI at a known-good "
+                "binary to override the PATH lookup.",
+                reason,
+                local_cli if local_cli is not None else ["local-llm", "--help"],
+            )
     litellm_url = os.environ.get("CALLOSUM_LITELLM_GATEWAY_URL", LITELLM_GATEWAY_DEFAULT_BASE_URL)
     if os.environ.get("CALLOSUM_LITELLM_GATEWAY_ENABLED") == "1" and not local_added:
         litellm_timeout_raw = os.environ.get("CALLOSUM_LITELLM_TIMEOUT_S")

@@ -424,6 +424,18 @@ class LocalModelRegistryBackend:
         models = self._source.models()
         if models:
             return HealthStatus(available=True, reason="ok")
+        # No models. Distinguish "catalog CLI broken/unreachable" (the last
+        # fetch failed — missing/broken/timeout) from "catalog empty" (the CLI
+        # is healthy but the local model garage lists 0 models) so /status
+        # names the real cause instead of an opaque "unknown". The source may
+        # be a test stub without last_fetch_reason; default to "unknown" →
+        # catalog_empty is not warranted, so fall back to the legacy "unknown".
+        reason = getattr(self._source, "last_fetch_reason", "unknown")
+        if reason in {"missing", "timeout", "broken"}:
+            return HealthStatus(available=False, reason="catalog_cli_broken")
+        if reason == "ok":
+            # CLI ran clean but listed nothing — the garage is empty.
+            return HealthStatus(available=False, reason="catalog_empty")
         return HealthStatus(available=False, reason="unknown")
 
     async def usage_snapshot(self) -> UsageSnapshot:

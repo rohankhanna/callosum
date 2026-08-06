@@ -814,3 +814,45 @@ def test_vision_request_routes_to_local_vision_cell_through_capability_filter() 
     assert caps_of[text_only].modalities == frozenset({"text"})
     filt_text = CapabilityFilter(capabilities_of=caps_of.__getitem__)
     assert filt_text.filter([text_only], vision_features) == []
+
+
+async def test_health_ok_when_models_present() -> None:
+    src = _FakeSource([_entry("m1", ("responses",))])
+    backend = LocalModelRegistryBackend(id="test", source=src)
+    h = await backend.health()
+    assert h.available is True
+    assert h.reason == "ok"
+    await backend.aclose()
+
+
+async def test_health_catalog_empty_when_cli_healthy_but_garage_empty() -> None:
+    # CLI ran clean (ok) but listed 0 models — the garage is empty, not the CLI.
+    src = _FakeSource([])
+    src.last_fetch_reason = "ok"  # type: ignore[attr-defined]
+    backend = LocalModelRegistryBackend(id="test", source=src)
+    h = await backend.health()
+    assert h.available is False
+    assert h.reason == "catalog_empty"
+    await backend.aclose()
+
+
+async def test_health_catalog_cli_broken_when_fetch_failed() -> None:
+    # The catalog CLI failed (broken) — surface the real cause, not "unknown".
+    src = _FakeSource([])
+    src.last_fetch_reason = "broken"  # type: ignore[attr-defined]
+    backend = LocalModelRegistryBackend(id="test", source=src)
+    h = await backend.health()
+    assert h.available is False
+    assert h.reason == "catalog_cli_broken"
+    await backend.aclose()
+
+
+async def test_health_unknown_when_source_has_no_reason_attr() -> None:
+    # A source stub without last_fetch_reason (legacy/other impls) falls back
+    # to the opaque "unknown" rather than claiming the garage is empty.
+    src = _FakeSource([])
+    backend = LocalModelRegistryBackend(id="test", source=src)
+    h = await backend.health()
+    assert h.available is False
+    assert h.reason == "unknown"
+    await backend.aclose()

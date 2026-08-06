@@ -253,6 +253,11 @@ class _CacheState:
     models: list[ModelEntry] = field(default_factory=list)
     capabilities: dict[str, CapabilityRow] = field(default_factory=dict)
     healthy: bool = False
+    # Why the last fetch landed where it did: "ok" / "missing" / "timeout" /
+    # "broken" / "unknown"(never fetched). Surfaced through health() so /status
+    # names the real cause (broken sibling CLI vs. empty garage) instead of an
+    # opaque "unknown".
+    last_fetch_reason: str = "unknown"
 
 
 class LocalModelRegistrySource:
@@ -291,12 +296,33 @@ class LocalModelRegistrySource:
         self._env = dict(env) if env is not None else None
         self._lock = threading.Lock()
         self._cache = _CacheState()
+        # Transient: the most recent _run_json outcome. _fetch_locked captures
+        # this into the cache snapshot it returns; last_fetch_reason reads
+        # from the cache so it reflects the last *completed* fetch, not an
+        # in-flight capabilities call that may clobber this.
+        self._last_fetch_reason: str = "unknown"
 
     @staticmethod
-    def is_available(cli_command: list[str] | None = None) -> bool:
-        """Quick check: does the CLI command resolve to an executable?
-        Used by __main__.py to decide whether to instantiate this
-        source at all."""
+    def probe_availability(
+        cli_command: list[str] | None = None,
+    ) -> tuple[bool, str]:
+        """Classify whether the catalog CLI is usable. Returns
+        (available, reason) where reason is one of:
+
+        - "ok"      — CLI present and exits 0.
+        - "missing" — binary not on PATH (FileNotFoundError). Install or
+          PATH issue; the sibling repo's console script isn't resolvable.
+        - "broken"  — binary present but exits non-zero. The classic
+          symptom of an orphaned pipx venv that lost its package: the shebang
+          points at a venv whose site-packages no longer contain
+          local, so the interpreter raises ModuleNotFoundError and
+          the CLI exits 1.
+        - "timeout" — CLI hung past the 5s probe window.
+
+        Distinct reasons let the operator diagnose the real failure instead
+        of the downstream fallback backend's opaque reason="network" in
+        /status. Used by __main__.py at registration time.
+        """
         cmd = cli_command if cli_command is not None else ["local-llm"]
         try:
             proc = subprocess.run(
@@ -305,9 +331,34 @@ class LocalModelRegistrySource:
                 text=True,
                 timeout=5.0,
             )
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            return False
-        return proc.returncode == 0
+        except FileNotFoundError:
+            return False, "missing"
+        except subprocess.TimeoutExpired:
+            return False, "timeout"
+        if proc.returncode != 0:
+            return False, "broken"
+        return True, "ok"
+
+    @staticmethod
+    def is_available(cli_command: list[str] | None = None) -> bool:
+        """Quick boolean check: does the CLI resolve and exit 0?
+
+        Thin wrapper over :meth:`probe_availability` retained for callers that
+        only need the go/no-go (tests, the model-probe spawner). Callers that
+        can act on the *reason* (e.g. __main__.py registration logging) should
+        call probe_availability directly.
+        """
+        return LocalModelRegistrySource.probe_availability(cli_command)[0]
+
+    @property
+    def last_fetch_reason(self) -> str:
+        """Why the most recent completed fetch landed where it did.
+
+        Mirrors _CacheState.last_fetch_reason: "ok" / "missing" /
+        "timeout" / "broken" / "unknown" (never fetched). Read by
+        LocalModelRegistryBackend.health() to surface a distinct health reason.
+        """
+        return self._cache.last_fetch_reason
 
     def models(self, *, force: bool = False) -> list[ModelEntry]:
         """Return the parsed model list.
@@ -353,13 +404,30 @@ class LocalModelRegistrySource:
     def _fetch_locked(self) -> _CacheState:
         """Invoke the CLI and parse. Any failure → empty result with
         healthy=False so the next call re-tries on the next refresh tick
-        instead of caching the failure long-term."""
+        instead of caching the failure long-term. The captured
+        last_fetch_reason records *why* the models fetch landed where it
+        did (read before the capabilities sub-fetch, which may clobber the
+        transient self._last_fetch_reason)."""
         payload = self._run_json(["models", "local", "--json"])
         if payload is None:
-            return _CacheState(fetched_at=time.time(), models=[], capabilities={}, healthy=False)
+            return _CacheState(
+                fetched_at=time.time(),
+                models=[],
+                capabilities={},
+                healthy=False,
+                last_fetch_reason=self._last_fetch_reason,
+            )
         entries = payload.get("entries") if isinstance(payload, dict) else None
         if not isinstance(entries, list):
-            return _CacheState(fetched_at=time.time(), models=[], capabilities={}, healthy=False)
+            # CLI ran and emitted a dict, but not the expected shape — treat
+            # as a broken catalog CLI (version skew / wrong subcommand output).
+            return _CacheState(
+                fetched_at=time.time(),
+                models=[],
+                capabilities={},
+                healthy=False,
+                last_fetch_reason="broken",
+            )
         models: list[ModelEntry] = []
         capabilities = self._fetch_capabilities()
         for entry in entries:
@@ -390,7 +458,13 @@ class LocalModelRegistrySource:
                     local_decode_bandwidth_kappa=cap.decode_bandwidth_kappa,
                 )
             models.append(parsed)
-        return _CacheState(fetched_at=time.time(), models=models, capabilities=capabilities, healthy=True)
+        return _CacheState(
+            fetched_at=time.time(),
+            models=models,
+            capabilities=capabilities,
+            healthy=True,
+            last_fetch_reason="ok",
+        )
 
     def _fetch_capabilities(self) -> dict[str, CapabilityRow]:
         payload = self._run_json(["capabilities", "--json"], warn_label="capability matrix")
@@ -420,14 +494,24 @@ class LocalModelRegistrySource:
                 timeout=self._timeout_s,
                 env=self._merged_env(),
             )
-        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        except FileNotFoundError as exc:
+            self._last_fetch_reason = "missing"
             logger.warning(
-                "local LLM gateway: CLI invocation failed (%s); %s unavailable this cycle",
-                type(exc).__name__,
+                "local LLM gateway: CLI not found (%s); %s unavailable this cycle",
+                exc,
+                warn_label,
+            )
+            return None
+        except subprocess.TimeoutExpired:
+            self._last_fetch_reason = "timeout"
+            logger.warning(
+                "local LLM gateway: CLI timed out after %ss reading %s",
+                self._timeout_s,
                 warn_label,
             )
             return None
         if proc.returncode != 0:
+            self._last_fetch_reason = "broken"
             logger.warning(
                 "local LLM gateway: CLI exited %d while reading %s; stderr=%r",
                 proc.returncode,
@@ -438,11 +522,14 @@ class LocalModelRegistrySource:
         try:
             payload = json.loads(proc.stdout)
         except json.JSONDecodeError as exc:
+            self._last_fetch_reason = "broken"
             logger.warning("local LLM gateway: CLI emitted non-JSON %s (%s)", warn_label, exc)
             return None
         if not isinstance(payload, dict):
+            self._last_fetch_reason = "broken"
             logger.warning("local LLM gateway: CLI emitted non-object %s", warn_label)
             return None
+        self._last_fetch_reason = "ok"
         return payload
 
     def _merged_env(self) -> dict[str, str] | None:

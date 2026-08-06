@@ -208,6 +208,86 @@ def test_is_available_returns_true_on_zero_exit(monkeypatch) -> None:
     assert LocalModelRegistrySource.is_available() is True
 
 
+def test_probe_availability_classifies_missing(monkeypatch) -> None:
+    def raise_fnf(*args, **kwargs):
+        raise FileNotFoundError("not installed")
+
+    monkeypatch.setattr("callosum.local.subprocess.run", raise_fnf)
+    available, reason = LocalModelRegistrySource.probe_availability()
+    assert available is False
+    assert reason == "missing"
+
+
+def test_probe_availability_classifies_timeout(monkeypatch) -> None:
+    def raise_timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=["local-llm"], timeout=5.0)
+
+    monkeypatch.setattr("callosum.local.subprocess.run", raise_timeout)
+    available, reason = LocalModelRegistrySource.probe_availability()
+    assert available is False
+    assert reason == "timeout"
+
+
+def test_probe_availability_classifies_broken_on_nonzero_exit(monkeypatch) -> None:
+    # The orphaned-pipx-venv symptom: CLI present, exits 1 with a traceback.
+    _stub_subprocess(monkeypatch, "Traceback ... ModuleNotFoundError", returncode=1)
+    available, reason = LocalModelRegistrySource.probe_availability()
+    assert available is False
+    assert reason == "broken"
+
+
+def test_probe_availability_ok_on_zero_exit(monkeypatch) -> None:
+    _stub_subprocess(monkeypatch, "Usage: local-llm", returncode=0)
+    available, reason = LocalModelRegistrySource.probe_availability()
+    assert available is True
+    assert reason == "ok"
+
+
+def test_probe_availability_uses_cli_command_override(monkeypatch) -> None:
+    calls = _stub_subprocess(monkeypatch, "Usage: local-llm", returncode=0)
+    LocalModelRegistrySource.probe_availability(["uv", "run", "python", "-m", "local.cli"])
+    assert calls
+    assert calls[0] == ["uv", "run", "python", "-m", "local.cli", "--help"]
+
+
+def test_last_fetch_reason_broken_when_cli_exits_nonzero(monkeypatch) -> None:
+    _stub_subprocess(monkeypatch, "Traceback", returncode=1)
+    src = LocalModelRegistrySource()
+    assert src.models() == []
+    assert src.last_fetch_reason == "broken"
+
+
+def test_last_fetch_reason_missing_when_cli_not_found(monkeypatch) -> None:
+    def raise_fnf(*args, **kwargs):
+        raise FileNotFoundError("not installed")
+
+    monkeypatch.setattr("callosum.local.subprocess.run", raise_fnf)
+    src = LocalModelRegistrySource()
+    assert src.models() == []
+    assert src.last_fetch_reason == "missing"
+
+
+def test_last_fetch_reason_ok_on_successful_fetch(monkeypatch) -> None:
+    payload = _make_payload(
+        [
+            {
+                "model": {
+                    "id": "m1",
+                    "endpoint": "http://127.0.0.1:11434",
+                    "runtime": "ollama",
+                    "runtime_model": "m1:1b",
+                    "enabled": True,
+                    "api_surfaces": ["responses"],
+                },
+            },
+        ]
+    )
+    _stub_subprocess(monkeypatch, payload)
+    src = LocalModelRegistrySource()
+    assert len(src.models()) == 1
+    assert src.last_fetch_reason == "ok"
+
+
 def test_model_entry_from_cli_returns_none_when_id_missing() -> None:
     entry = {"model": {"endpoint": "http://x"}}
     assert ModelEntry.from_cli_entry(entry) is None
