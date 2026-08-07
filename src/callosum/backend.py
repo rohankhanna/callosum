@@ -27,6 +27,18 @@ HealthReason = Literal[
     # knows whether to repair the sibling CLI or populate the garage.
     "catalog_cli_broken",
     "catalog_empty",
+    # Ollama-cloud reason under boundary-native proxy custody. `no-key` =
+    # the stand-in token could not be minted or honored: credential proxy unreachable
+    # on `/v1/standin`, returned non-200/non-401, OR `/v1/proxy` returned 503
+    # because the `ollama-cloud` scope is not wired or the `pass` entry
+    # holding the real ollama.com key is missing/empty. The real key NEVER
+    # enters this process. Distinct from "auth_invalid" (credential proxy injected the
+    # key but ollama.com rejected it — operator re-provisions the `pass`
+    # entry, NOT a callosum-side fix) and "network" (credential proxy/ollama.com
+    # transport unreachable) so /status names whether the operator should
+    # wire the scope / provision the key vs. rotate it vs. check network.
+    # See backends/ollama_cloud.py `_ensure_standin` / `_proxy_buffered`.
+    "no-key",
 ]
 
 

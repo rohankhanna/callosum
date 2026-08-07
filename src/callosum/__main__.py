@@ -127,14 +127,20 @@ def build_runtime_backends(cfg: Config, *, operator_state: OperatorState) -> lis
             "entries). Prefer LocalModelRegistryBackend (auto-registered when the "
             "`local-llm` CLI is on PATH) for production use."
         )
-    # Ollama Cloud: cloud models served by the local ollama daemon under
-    # `ollama signin`. The daemon holds the Ollama Cloud auth; callosum holds
-    # NO credential. This is an INDEPENDENT backend (own id, own fleet), not a
-    # local fallback — cloud requests burn real Ollama Cloud quota, so it must
-    # route as remote (BackendKind="ollama_cloud"), not as a free local cell.
-    # Env-gated OFF by default so enabling is a no-op for live routing until the
-    # operator turns it on. See backends/ollama_cloud.py + work tracker
-    #  / .
+    # Ollama Cloud: cloud models served DIRECT by ollama.com via a revocable
+    # API key (created at https://ollama.com/settings/keys). credential proxy (sovereign
+    # sibling) holds the key in its key store and serves it over loopback
+    # (127.0.0.1:7342); callosum fetches the real key value from
+    # `GET /v1/ollama/cloud/key` and holds it IN MEMORY ONLY (never persisted).
+    # This retires the prior architecture where callosum proxied through the
+    # local ollama daemon holding a `ollama signin` browser-session cookie.
+    # credential proxy KEEPS its browser-cookie custody for menubar metering only.
+    # This is an INDEPENDENT backend (own id, own fleet), not a local fallback —
+    # cloud requests burn real Ollama Cloud quota, so it must route as remote
+    # (BackendKind="ollama_cloud"), not as a free local cell. Env-gated OFF by
+    # default so enabling is a no-op for live routing until the operator turns
+    # it on. See backends/ollama_cloud.py + work tracker  /
+    # .
     if os.environ.get("CALLOSUM_OLLAMA_CLOUD_ENABLED") == "1":
         ollama_cloud_url = os.environ.get(
             "CALLOSUM_OLLAMA_CLOUD_URL", OLLAMA_CLOUD_DEFAULT_URL
@@ -143,8 +149,26 @@ def build_runtime_backends(cfg: Config, *, operator_state: OperatorState) -> lis
             "CALLOSUM_OLLAMA_CLOUD_MODEL_SUFFIX", OLLAMA_CLOUD_DEFAULT_MODEL_SUFFIX
         )
 
-        # Optional usage-source wiring (credential proxy loopback). Both flags default
-        # OFF so this block is a no-op for live routing at merge time.
+        # Boundary-native proxy custody: callosum holds NO ollama.com key.
+        # It mints a short-TTL `ollama-cloud`-scoped stand-in at credential proxy and
+        # POSTs ollama.com requests through credential proxy's `/v1/proxy`, which reads
+        # the real key from its `pass` store and injects it on the final hop.
+        # If credential proxy is down or the key/scope is not provisioned, the backend
+        # goes unhealthy with a clear "no-key" reason (the correct failure
+        # mode). CALLOSUM_OLLAMA_CLOUD_CUSTODY_URL (default credential proxy loopback)
+        # + CALLOSUM_OLLAMA_CLOUD_CUSTODY_ACCOUNT (default "primary") point at
+        # the credential proxy boundary that mints the stand-in. Default deployment
+        # needs zero new env (both default to existing constants).
+        custody_url = os.environ.get(
+            "CALLOSUM_OLLAMA_CLOUD_CUSTODY_URL", OLLAMA_CLOUD_DEFAULT_CUSTODY_URL
+        )
+        custody_account = os.environ.get(
+            "CALLOSUM_OLLAMA_CLOUD_CUSTODY_ACCOUNT", "primary"
+        )
+
+        # Optional usage-source wiring (credential proxy loopback, DECOUPLED from the
+        # chat/proxy path — reads the browser-cookie-backed meter). Both flags
+        # default OFF so this block is a no-op for live routing at merge time.
         # CALLOSUM_OLLAMA_CLOUD_USAGE_SOURCE_ENABLED gates source construction;
         # CALLOSUM_OLLAMA_CLOUD_USAGE_LIVE gates whether the backend treats the
         # source as authoritative (vs. shadow-only). See work tracker
@@ -179,6 +203,8 @@ def build_runtime_backends(cfg: Config, *, operator_state: OperatorState) -> lis
                 id="ollama-cloud",
                 ollama_url=ollama_cloud_url,
                 model_suffix=ollama_cloud_suffix,
+                custody_url=custody_url,
+                custody_account=custody_account,
                 usage_source=usage_source,
                 usage_live=usage_live,
             )

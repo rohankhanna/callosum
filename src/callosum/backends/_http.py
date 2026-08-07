@@ -86,14 +86,26 @@ async def stall_guarded(
         yield item
 
 
-def error_from_response(response: httpx.Response) -> BackendError:
+def error_from_response(
+    response: httpx.Response, *, status_code: int | None = None
+) -> BackendError:
     """Build a classified BackendError from an upstream non-2xx response.
 
     Includes a truncated copy of the upstream response body in the message
     so operators can distinguish "model retired" from "rate limited" from
     "auth invalid" etc. without having to enable verbose logging.
+
+    status_code overrides the status used for classification + the
+    returned BackendError.status_code / message. It does NOT change which
+    body/headers are read (those always come from response). This exists
+    for the proxy-custody path: when a proxy returns its own HTTP 200 wrapping
+    an upstream 401, the caller passes status_code=401 so the error
+    classifies as auth_invalid against the *upstream* status rather than
+    being swallowed as a 200. Existing callers pass only response →
+    byte-identical behavior (effective == response.status_code).
     """
-    classification = classify_http_status(response.status_code)
+    effective = status_code if status_code is not None else response.status_code
+    classification = classify_http_status(effective)
     retry_after = response.headers.get("retry-after")
     retry_after_s: float | None = None
     if retry_after is not None:
@@ -102,12 +114,12 @@ def error_from_response(response: httpx.Response) -> BackendError:
         except ValueError:
             retry_after_s = None
     detail = _extract_response_detail(response)
-    message = f"upstream {response.status_code}"
+    message = f"upstream {effective}"
     if detail:
         message = f"{message}: {detail}"
     return BackendError(
         classification=classification,
-        status_code=response.status_code,
+        status_code=effective,
         retry_after_s=retry_after_s,
         message=message,
     )

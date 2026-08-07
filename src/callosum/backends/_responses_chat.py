@@ -24,7 +24,8 @@ rename sweep.
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
+from contextlib import AbstractAsyncContextManager as AsyncContextManager
 from typing import Any
 
 import httpx
@@ -379,6 +380,9 @@ async def chat_to_responses_stream(
     what_label: str,
     on_success: Any,
     on_transport_error: Any,
+    open_chat_stream: Callable[[dict[str, Any], dict[str, str]], AsyncContextManager[httpx.Response]]
+    | None = None,
+    upstream_status_of: Callable[[httpx.Response], int] | None = None,
 ) -> AsyncIterator[bytes]:
     """Translate a streamed Chat-Completions response into Responses-API SSE.
 
@@ -397,6 +401,15 @@ async def chat_to_responses_stream(
         applies to any streamed backend).
       * `on_success()` / `on_transport_error()` — health hooks called on
         clean completion vs an httpx transport error (before re-raising).
+      * `open_chat_stream(out_body, headers)` / `upstream_status_of(response)`
+        — optional (default `None`) hooks that replace the hardcoded
+        direct-POST open + the bare `response.status_code` read. A backend
+        that routes its upstream through a credential proxy (ollama_cloud via
+        credential proxy) passes both so the generator opens the proxy stream instead
+        of a direct upstream POST and classifies the *upstream* status from a
+        proxy header rather than the proxy's own HTTP status. `None` reproduces
+        the original `client.stream("POST", chat_url, json=out_body, headers=headers)` +
+        `response.status_code` exactly (litellm local lane is byte-identical).
 
     `body` is the ORIGINAL Responses-API request body; the generator uses
     `body["model"]` (the cell id, before any runtime rewrite) to load the
@@ -558,19 +571,32 @@ async def chat_to_responses_stream(
         return evs
 
     try:
-        stream_ctx = client.stream(
-            "POST",
-            chat_url,
-            json=out_body,
-            headers=headers,
-        )
+        if open_chat_stream is not None:
+            # Proxy-custody path (ollama_cloud via credential proxy): the backend opens
+            # the upstream through a credential proxy, so the POST target,
+            # auth, and body envelope are backend-controlled. The generator
+            # stays shape-agnostic — it still parses `data:` SSE lines from
+            # whatever the proxy forwards, regardless of media type.
+            stream_ctx = open_chat_stream(out_body, headers)
+        else:
+            stream_ctx = client.stream(
+                "POST",
+                chat_url,
+                json=out_body,
+                headers=headers,
+            )
         async with stream_ctx as response:
+            upstream_status = (
+                upstream_status_of(response)
+                if upstream_status_of is not None
+                else response.status_code
+            )
             if handle is not None:
-                handle.upstream_status = response.status_code
+                handle.upstream_status = upstream_status
                 handle.upstream_headers = dict(response.headers)
-            if response.status_code >= 400:
+            if upstream_status >= 400:
                 await response.aread()
-                raise error_from_response(response)
+                raise error_from_response(response, status_code=upstream_status)
             # Emit response.created early so clients show progress.
             base_response = {
                 "id": resp_id,
