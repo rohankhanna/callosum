@@ -142,12 +142,8 @@ def build_runtime_backends(cfg: Config, *, operator_state: OperatorState) -> lis
     # it on. See backends/ollama_cloud.py + work tracker  /
     # .
     if os.environ.get("CALLOSUM_OLLAMA_CLOUD_ENABLED") == "1":
-        ollama_cloud_url = os.environ.get(
-            "CALLOSUM_OLLAMA_CLOUD_URL", OLLAMA_CLOUD_DEFAULT_URL
-        )
-        ollama_cloud_suffix = os.environ.get(
-            "CALLOSUM_OLLAMA_CLOUD_MODEL_SUFFIX", OLLAMA_CLOUD_DEFAULT_MODEL_SUFFIX
-        )
+        ollama_cloud_url = os.environ.get("CALLOSUM_OLLAMA_CLOUD_URL", OLLAMA_CLOUD_DEFAULT_URL)
+        ollama_cloud_suffix = os.environ.get("CALLOSUM_OLLAMA_CLOUD_MODEL_SUFFIX", OLLAMA_CLOUD_DEFAULT_MODEL_SUFFIX)
 
         # Boundary-native proxy custody: callosum holds NO ollama.com key.
         # It mints a short-TTL `ollama-cloud`-scoped stand-in at credential proxy and
@@ -159,12 +155,8 @@ def build_runtime_backends(cfg: Config, *, operator_state: OperatorState) -> lis
         # + CALLOSUM_OLLAMA_CLOUD_CUSTODY_ACCOUNT (default "primary") point at
         # the credential proxy boundary that mints the stand-in. Default deployment
         # needs zero new env (both default to existing constants).
-        custody_url = os.environ.get(
-            "CALLOSUM_OLLAMA_CLOUD_CUSTODY_URL", OLLAMA_CLOUD_DEFAULT_CUSTODY_URL
-        )
-        custody_account = os.environ.get(
-            "CALLOSUM_OLLAMA_CLOUD_CUSTODY_ACCOUNT", "primary"
-        )
+        custody_url = os.environ.get("CALLOSUM_OLLAMA_CLOUD_CUSTODY_URL", OLLAMA_CLOUD_DEFAULT_CUSTODY_URL)
+        custody_account = os.environ.get("CALLOSUM_OLLAMA_CLOUD_CUSTODY_ACCOUNT", "primary")
 
         # Optional usage-source wiring (credential proxy loopback, DECOUPLED from the
         # chat/proxy path — reads the browser-cookie-backed meter). Both flags
@@ -176,16 +168,10 @@ def build_runtime_backends(cfg: Config, *, operator_state: OperatorState) -> lis
         usage_source = None
         usage_live = False
         if os.environ.get("CALLOSUM_OLLAMA_CLOUD_USAGE_SOURCE_ENABLED") == "1":
-            usage_custody_url = os.environ.get(
-                "CALLOSUM_OLLAMA_CLOUD_USAGE_URL", OLLAMA_CLOUD_DEFAULT_CUSTODY_URL
-            )
-            usage_account = os.environ.get(
-                "CALLOSUM_OLLAMA_CLOUD_USAGE_ACCOUNT", "primary"
-            )
+            usage_custody_url = os.environ.get("CALLOSUM_OLLAMA_CLOUD_USAGE_URL", OLLAMA_CLOUD_DEFAULT_CUSTODY_URL)
+            usage_account = os.environ.get("CALLOSUM_OLLAMA_CLOUD_USAGE_ACCOUNT", "primary")
             try:
-                usage_standin_ttl = int(
-                    os.environ.get("CALLOSUM_OLLAMA_CLOUD_STANDIN_TTL", "1800")
-                )
+                usage_standin_ttl = int(os.environ.get("CALLOSUM_OLLAMA_CLOUD_STANDIN_TTL", "1800"))
             except ValueError:
                 logging.getLogger("callosum.startup").warning(
                     "CALLOSUM_OLLAMA_CLOUD_STANDIN_TTL not an int; falling back to 1800"

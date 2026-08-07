@@ -132,9 +132,7 @@ def build_local_performance_model(
     edge_slack_tokens: int = 8_192,
 ) -> LocalPerformanceModel:
     decode_tps = (
-        estimated_tokens_per_second
-        if estimated_tokens_per_second and estimated_tokens_per_second > 0
-        else 10.0
+        estimated_tokens_per_second if estimated_tokens_per_second and estimated_tokens_per_second > 0 else 10.0
     )
     effective_edge_slack_tokens = edge_slack_tokens
     if fit_limit_tokens is not None and fit_limit_tokens > 0:

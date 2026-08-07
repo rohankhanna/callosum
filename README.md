@@ -520,7 +520,7 @@ To distribute load across multiple backends, declare multiple `[[backends]]` ent
 Not every backend is a `[[backends]]` TOML entry. Two local-process backends and one remote-band backend are registered programmatically in `__main__.build_runtime_backends` and are NOT configured via `[[backends]]`:
 
 - **Local lane** (`LocalModelRegistryBackend`, preferred; `LiteLLMGatewayBackend`, fallback) — local models served by local LLM gateway / a LiteLLM gateway. The two are mutually exclusive; the preferred one is registered whenever the `local-llm` CLI is on PATH. See `ARCHITECTURE.md`.
-- **Ollama Cloud** (`OllamaCloudBackend`, `BackendKind="ollama_cloud"`) — cloud models served by the local ollama daemon under `ollama signin`. Callosum holds NO credential; the daemon does. It is registered only when `CALLOSUM_OLLAMA_CLOUD_ENABLED=1` (default off), catalogs `/api/tags` filtered to `:cloud`-suffixed models, and dispatches via the daemon's OpenAI-compatible `/v1/chat/completions` with no `Authorization` header. It sits in the remote band (`CLOUD_PRIORITY_OFFSET=1_000`). Because it is a distinct `BackendKind` (not a `litellm_gateway` model-name predicate), cloud cells land in remote lanes and stay out of local-only/probing paths by omission. Its `usage_snapshot()` is honest-advisory by default; real 5h/7d usage meters can be read from credential proxy (the credential-custody sibling) when operator-gated via `CALLOSUM_OLLAMA_CLOUD_USAGE_*` (defaults OFF). Enable it durably via a systemd drop-in — see `docs/operations/runtime_deploy.md`.
+- **Ollama Cloud** (`OllamaCloudBackend`, `BackendKind="ollama_cloud"`) — cloud models served by ollama.com through credential proxy's boundary-native proxy custody. Callosum mints a short-TTL `ollama-cloud`-scoped stand-in token at credential proxy's `POST /v1/standin` and POSTs every ollama.com call (chat, catalog, capabilities) through credential proxy's `POST /v1/proxy` (buffered) or `POST /v1/proxy/stream` (streaming) with the stand-in as bearer; credential proxy reads the real ollama.com API key from its `pass` store and injects it on the final hop, so the real key NEVER enters callosum's process — callosum holds only the revocable stand-in. This retires the prior local-ollama-daemon `ollama signin` chat path. It is registered only when `CALLOSUM_OLLAMA_CLOUD_ENABLED=1` (default off), catalogs `/api/tags` (via the credential proxy proxy) with a `:cloud`-suffix name filter, and dispatches to ollama.com's OpenAI-compatible `/v1/chat/completions` (via the credential proxy proxy). It sits in the remote band (`CLOUD_PRIORITY_OFFSET=1_000`). Because it is a distinct `BackendKind` (not a `litellm_gateway` model-name predicate), cloud cells land in remote lanes and stay out of local-only/probing paths by omission. Its `usage_snapshot()` is honest-advisory by default; advisory usage metering can be read from credential proxy (the credential-custody sibling) via its `/v1/ollama/usage` loopback when operator-gated via `CALLOSUM_OLLAMA_CLOUD_USAGE_*` (defaults OFF). Enable it durably via a systemd drop-in — see `docs/operations/runtime_deploy.md`.
 
 ## Endpoints
 
@@ -783,18 +783,24 @@ quota data.
 When `[usage_log] path = "..."` is set, every backend call is recorded as a row in a SQLite database. Combined with `capture_bodies = true` (default during the modeling phase), this is the data corpus for figuring out how `(model, reasoning_effort, token counts)` translate into the opaque "usage percent" Codex Plus accounts decrement against.
 
 Peer-quality capture is stored separately from live routing decisions.
-Nonce-validated `<<qop ...>>` opinions are persisted in
-`peer_quality_opinions`; new rows include an exact subject request id
-when the judging model returns it, while older rows fall back to the
-latest prior same-session subject-cell match. The shadow label job can
-write conservative `quality_score` candidates with
+The primary capture path is a synchronous post-completion sidecar judge
+that reads the captured request/response from the usage log and writes
+an opinion out-of-band; the legacy in-band `<<qop ...>>` injection path
+is retired as the default and is opt-in behind
+`CALLOSUM_PEER_QUALITY_INBAND_ENABLED` (default off). Opinions are
+persisted in `peer_quality_opinions`; new rows include an exact subject
+request id when the judging model returns it, while older rows fall
+back to the latest prior same-session subject-cell match. The shadow
+label job can write conservative `quality_score` candidates with
 `quality_label_method='peer_quality_v1'`. These labels feed the
 configured quality predictor (currently `cell_majority_prior`); the
 job does not switch live routing by itself.
 
-Capture is opt-in. Set `CALLOSUM_PEER_QUALITY_CAPTURE_RATE` to a value
-above `0` before expecting new peer opinions or capture metrics. `/status`
-reports the current setting under `router.peer_quality_capture`. For a
+The sidecar judge is ON by default
+(`CALLOSUM_PEER_QUALITY_SIDECAR_ENQUEUE_RATE`, default `0.1`); setting
+`CALLOSUM_PEER_QUALITY_CAPTURE_RATE` alone does NOT enable capture.
+`/status` reports the sidecar under `router.peer_quality_sidecar_enqueue`
+and the legacy in-band path under `router.peer_quality_capture`. For a
 managed service, use the reversible capture-window flow in
 `docs/operations/dispatch.md` rather than editing the unit file directly.
 

@@ -54,9 +54,7 @@ def _usage(input_tokens: int = 10) -> dict[str, Any]:
     return {"input_tokens": input_tokens, "output_tokens": 5}
 
 
-def _function_call(
-    name: str = "exec_command", arguments: str = '{"cmd":"ls"}'
-) -> dict[str, Any]:
+def _function_call(name: str = "exec_command", arguments: str = '{"cmd":"ls"}') -> dict[str, Any]:
     return {
         "type": "function_call",
         "id": "fc",
@@ -161,19 +159,11 @@ def test_ordering_pass_in_order() -> None:
 
 
 def test_ordering_pass_message_only_vacuously() -> None:
-    assert (
-        check_ordering_reasoning_then_function_call_then_message(_resp([_message()]))
-        is True
-    )
+    assert check_ordering_reasoning_then_function_call_then_message(_resp([_message()])) is True
 
 
 def test_ordering_violation_message_before_function_call() -> None:
-    assert (
-        check_ordering_reasoning_then_function_call_then_message(
-            _resp([_message(), _function_call()])
-        )
-        is False
-    )
+    assert check_ordering_reasoning_then_function_call_then_message(_resp([_message(), _function_call()])) is False
 
 
 def test_ordering_non_dict_is_none() -> None:
@@ -214,18 +204,13 @@ def test_finish_reason_mapping_completed_pass() -> None:
 
 def test_finish_reason_mapping_incomplete_with_reason_pass() -> None:
     assert (
-        check_finish_reason_mapping(
-            _resp([_message()], status="incomplete", incomplete_reason="max_output_tokens")
-        )
+        check_finish_reason_mapping(_resp([_message()], status="incomplete", incomplete_reason="max_output_tokens"))
         is True
     )
 
 
 def test_finish_reason_mapping_incomplete_without_reason_is_false() -> None:
-    assert (
-        check_finish_reason_mapping(_resp([_message()], status="incomplete"))
-        is False
-    )
+    assert check_finish_reason_mapping(_resp([_message()], status="incomplete")) is False
 
 
 def test_finish_reason_mapping_missing_status_is_false() -> None:
@@ -240,21 +225,11 @@ def test_finish_reason_mapping_non_dict_is_none() -> None:
 
 
 def test_reasoning_alias_unification_native_pass() -> None:
-    assert (
-        check_reasoning_alias_unification(
-            _resp([_reasoning_item(), _message("answer")])
-        )
-        is True
-    )
+    assert check_reasoning_alias_unification(_resp([_reasoning_item(), _message("answer")])) is True
 
 
 def test_reasoning_alias_unification_inband_tags_is_false() -> None:
-    assert (
-        check_reasoning_alias_unification(
-            _resp([_message("<thought>thinking</thought>answer")])
-        )
-        is False
-    )
+    assert check_reasoning_alias_unification(_resp([_message("<thought>thinking</thought>answer")])) is False
 
 
 def test_reasoning_alias_unification_none_channel_is_none() -> None:
@@ -270,29 +245,16 @@ def test_reasoning_alias_unification_non_dict_is_none() -> None:
 
 
 def test_tool_call_at_scale_pass_structured_no_leak() -> None:
-    assert (
-        check_tool_call_at_scale_probe_through_substrate(
-            _resp([_function_call(), _message()])
-        )
-        is True
-    )
+    assert check_tool_call_at_scale_probe_through_substrate(_resp([_function_call(), _message()])) is True
 
 
 def test_tool_call_at_scale_no_structured_call_is_false() -> None:
-    assert (
-        check_tool_call_at_scale_probe_through_substrate(_resp([_message("no tool call")]))
-        is False
-    )
+    assert check_tool_call_at_scale_probe_through_substrate(_resp([_message("no tool call")])) is False
 
 
 def test_tool_call_at_scale_text_tool_call_leak_is_false() -> None:
     leak = '{"name":"exec_command","arguments":"{\\"cmd\\":\\"ls\\"}"}'
-    assert (
-        check_tool_call_at_scale_probe_through_substrate(
-            _resp([_function_call(), _message(leak)])
-        )
-        is False
-    )
+    assert check_tool_call_at_scale_probe_through_substrate(_resp([_function_call(), _message(leak)])) is False
 
 
 def test_tool_call_at_scale_hermes_tag_leak_is_false() -> None:
@@ -302,12 +264,7 @@ def test_tool_call_at_scale_hermes_tag_leak_is_false() -> None:
     # leak even though it is not a bare JSON object.
     lt, gt = chr(60), chr(62)
     leak = f"{lt}function=exec_command{gt}" + '{"name":"exec_command","arguments":"ls"}' + f"{lt}/function{gt}"
-    assert (
-        check_tool_call_at_scale_probe_through_substrate(
-            _resp([_function_call(), _message(leak)])
-        )
-        is False
-    )
+    assert check_tool_call_at_scale_probe_through_substrate(_resp([_function_call(), _message(leak)])) is False
 
 
 def test_tool_call_at_scale_non_dict_is_none() -> None:
@@ -422,9 +379,7 @@ async def test_builder_at_scale_skipped_when_small_probe_failed() -> None:
         call_responses=transport,
     )
     assert transport.call_count == 3  # A, B, C — D skipped
-    inv7 = profile.conformance[Surface.RESPONSES].invariant_results[
-        Inv.TOOL_CALL_AT_SCALE_PROBE_THROUGH_SUBSTRATE
-    ]
+    inv7 = profile.conformance[Surface.RESPONSES].invariant_results[Inv.TOOL_CALL_AT_SCALE_PROBE_THROUGH_SUBSTRATE]
     assert inv7 is None
 
 
@@ -558,9 +513,7 @@ def test_contract_profile_from_dict_drops_unknown_surfaces() -> None:
 @pytest.fixture(autouse=True)
 def _redirect_contract_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Isolate contract-profile persistence to a tmp dir per test."""
-    monkeypatch.setattr(
-        "callosum.capability.conformance.DEFAULT_CONTRACT_DIR", tmp_path
-    )
+    monkeypatch.setattr("callosum.capability.conformance.DEFAULT_CONTRACT_DIR", tmp_path)
     yield
 
 

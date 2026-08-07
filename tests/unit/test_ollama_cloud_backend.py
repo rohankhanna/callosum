@@ -58,6 +58,12 @@ from callosum.errors import BackendError
 credential proxy = "http://credential proxy.test"
 # ollama_url defaults to https://ollama.com inside the backend; the envelope
 # `url` field therefore carries https://ollama.com/<path>.
+# Far-future ABSOLUTE Unix epoch (~year 2286) used for stand-in mocks so the
+# token stays fresh across multiple _ensure_standin calls within a test (no
+# spurious re-mint). credential proxy returns expires_at as an ABSOLUTE epoch, so a
+# raw value of 300 would mean 1970 (already expired) and force a re-mint on
+# every call — see test_standin_expires_at_absolute_epoch_* for the guard.
+_FAR_FUTURE_EXPIRES_AT = 9_999_999_999
 
 # ---------- canned upstream payloads (ollama.com shapes) -------------------
 
@@ -166,7 +172,7 @@ def _proxy_handler(
                 raise standin_error
             if standin_status != 200:
                 return httpx.Response(standin_status)
-            return httpx.Response(200, json={"token": "test-standin", "expires_at": 300})
+            return httpx.Response(200, json={"token": "test-standin", "expires_at": _FAR_FUTURE_EXPIRES_AT})
         if path == "/v1/proxy":
             rec.proxy.append(request)
             envelope = json.loads(request.content)
@@ -179,9 +185,7 @@ def _proxy_handler(
                 return httpx.Response(custody_status[target])
             if target == "/api/tags":
                 payload = tags_default() if callable(tags_default) else tags_default
-                return _wrap_upstream(
-                    200, json.dumps(payload).encode(), {"content-type": "application/json"}
-                )
+                return _wrap_upstream(200, json.dumps(payload).encode(), {"content-type": "application/json"})
             if target == "/api/show":
                 name = json.loads(_unb64(envelope["body_b64"])).get("name")
                 if name in shows:
@@ -264,9 +268,7 @@ async def test_suffix_filter_keeps_only_cloud_models() -> None:
     """With the `:cloud` suffix override, only `:cloud`-suffixed models are
     cloud-metered; bare local models stay on the LocalModelRegistry / litellm_gateway
     path and must NOT appear in this backend's catalog."""
-    handler, _ = _proxy_handler(
-        tags=_tags_payload("model-a0d2:cloud", "model-a0b4", "model-a0f3:cloud", "model-a0d5")
-    )
+    handler, _ = _proxy_handler(tags=_tags_payload("model-a0d2:cloud", "model-a0b4", "model-a0f3:cloud", "model-a0d5"))
     backend = _backend(handler, model_suffix=":cloud")
     await backend.health()
     assert backend.advertised_models == frozenset({"model-a0d2:cloud", "model-a0f3:cloud"})
@@ -402,6 +404,7 @@ async def test_quota_snapshot_is_none() -> None:
 async def test_health_reports_network_when_custody_unreachable() -> None:
     """A transport error reaching credential proxy (on /v1/standin during catalog
     refresh) flips health to "network" — health() MUST NOT raise."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection refused")
 
@@ -448,7 +451,7 @@ async def test_health_unhealthy_after_poll_sets_cooldown() -> None:
         if not state["up"]:
             raise httpx.ConnectError("down")
         if path == "/v1/standin":
-            return httpx.Response(200, json={"token": "t", "expires_at": 300})
+            return httpx.Response(200, json={"token": "t", "expires_at": _FAR_FUTURE_EXPIRES_AT})
         if path == "/v1/proxy":
             return _wrap_upstream(200, json.dumps(tags).encode(), {"content-type": "application/json"})
         return httpx.Response(404)
@@ -506,6 +509,43 @@ async def test_standin_mint_sends_explicit_ollama_cloud_scope() -> None:
     assert mint_body["account"] == "primary"
     assert mint_body["ttl_seconds"] == OLLAMA_CLOUD_STANDIN_TTL_S
     assert mint_body["ttl_seconds"] <= 1800  # credential proxy MAX_STANDIN_TTL_SECONDS
+    await backend.aclose()
+
+
+async def test_standin_expires_at_absolute_epoch_far_future_is_reused() -> None:
+    """credential proxy returns expires_at as an ABSOLUTE Unix epoch. A far-future
+    epoch keeps the token fresh: two _ensure_standin calls mint ONCE (the
+    cached token is reused). Pins the absolute-epoch interpretation."""
+    handler, rec = _proxy_handler(tags=_tags_payload("model-a0d2:cloud"))
+    backend = _backend(handler)
+    t1 = await backend._ensure_standin()
+    t2 = await backend._ensure_standin()
+    assert t1 == t2 == "test-standin"
+    assert len(rec.standin) == 1  # reused, not re-minted
+    await backend.aclose()
+
+
+async def test_standin_expires_at_absolute_epoch_past_re_mints() -> None:
+    """CRITICAL regression guard for the absolute-epoch fix. credential proxy's
+    expires_at is an ABSOLUTE epoch, so a small value (1000 = 1970-01-01,
+    long in the past) means the token is ALREADY EXPIRED → the second
+    _ensure_standin re-mints (stand-in count 2). Under the OLD
+    relative-seconds bug, 1000 would mean "expires 1000s from now" → the token
+    would be reused (count 1). This test FAILS if the interpretation reverts
+    to relative, so it locks the correction in."""
+    standin_calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/standin":
+            standin_calls.append(request)
+            return httpx.Response(200, json={"token": "past-token", "expires_at": 1000})
+        return httpx.Response(404)
+
+    backend = _backend(handler)
+    t1 = await backend._ensure_standin()
+    t2 = await backend._ensure_standin()
+    assert t1 == t2 == "past-token"
+    assert len(standin_calls) == 2  # past epoch (1970) → expired → re-minted
     await backend.aclose()
 
 
@@ -673,9 +713,7 @@ async def test_responses_stream_emits_responses_sse() -> None:
     backend = _backend(handler)
     handle = CallHandle()
     events: list[dict[str, Any]] = []
-    async for raw in backend.responses_stream(
-        {"model": "model-a0d2:cloud", "input": "say hi", "stream": True}, handle
-    ):
+    async for raw in backend.responses_stream({"model": "model-a0d2:cloud", "input": "say hi", "stream": True}, handle):
         for ev_chunk in raw.split(b"\n\n"):
             for line in ev_chunk.split(b"\n"):
                 if line.startswith(b"data:"):
@@ -714,9 +752,7 @@ async def test_responses_stream_upstream_401_is_auth_invalid() -> None:
     handle = CallHandle()
     with pytest.raises(BackendError) as exc_info:
         # Drain the generator so the upstream-401 raise surfaces.
-        async for _ in backend.responses_stream(
-            {"model": "model-a0d2:cloud", "input": "say hi", "stream": True}, handle
-        ):
+        async for _ in backend.responses_stream({"model": "model-a0d2:cloud", "input": "say hi", "stream": True}, handle):
             pass
     assert exc_info.value.classification == "auth_invalid"
     assert handle.upstream_status == 401
@@ -781,9 +817,7 @@ async def test_transport_error_marks_unhealthy() -> None:
 # ---------- default-OFF registration ----------------------------------------
 
 
-def test_backend_absent_from_build_when_env_unset(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_backend_absent_from_build_when_env_unset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """CALLOSUM_OLLAMA_CLOUD_ENABLED unset → build_runtime_backends does NOT
     append the backend. Default-OFF is a no-op for live routing."""
     from callosum.__main__ import build_runtime_backends

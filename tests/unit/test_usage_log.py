@@ -110,9 +110,7 @@ def test_record_extracts_previous_response_id_from_client_request(tmp_path: Path
     logged with used=1 and the raw id, so one real session answers off the
     log whether the codex CLI emits previous_response_id."""
     log = UsageLog(tmp_path / "u.sqlite")
-    rowid = log.record(
-        _entry(client_request={"input": [], "previous_response_id": "resp_abc123"})
-    )
+    rowid = log.record(_entry(client_request={"input": [], "previous_response_id": "resp_abc123"}))
     conn = sqlite3.connect(tmp_path / "u.sqlite")
     used, prev = conn.execute(
         "SELECT used_previous_response_id, previous_response_id FROM requests WHERE id = ?",
@@ -159,9 +157,7 @@ def test_record_persists_cache_creation_tokens(tmp_path: Path) -> None:
     log = UsageLog(tmp_path / "u.sqlite")
     rowid = log.record(_entry(cache_creation_tokens=42))
     conn = sqlite3.connect(tmp_path / "u.sqlite")
-    (cct,) = conn.execute(
-        "SELECT cache_creation_tokens FROM requests WHERE id = ?", (rowid,)
-    ).fetchone()
+    (cct,) = conn.execute("SELECT cache_creation_tokens FROM requests WHERE id = ?", (rowid,)).fetchone()
     assert cct == 42
     log.close()
 
@@ -279,6 +275,29 @@ def test_record_writes_compressed_bodies_round_trip(tmp_path: Path) -> None:
     assert roundtripped_headers is not None
     assert json.loads(roundtripped_headers) == headers
     log.close()
+
+
+def test_decompress_returns_none_on_corrupt_blob() -> None:
+    """A corrupt zlib blob must return None rather than raise
+    zlib.error — a single bad row in requests.sqlite must not crash a
+    whole read-only diagnostic/report job that iterates rows. Pins fix
+    642b721 ("fix(probe+reports): assistant output_text + ... + sidecar cost
+    reuse") which wrapped zlib.decompress in a try/except.
+
+    Reverting the fix (return zlib.decompress(blob) without the try/except)
+    makes decompress(b"not valid zlib") raise zlib.error → this test
+    errors red instead of asserting is None.
+    """
+    # Missing blob → None (the pre-existing None guard, preserved by the fix).
+    assert decompress(None) is None
+    # Corrupt blob → None, NOT a raised zlib.error. The core regression.
+    assert decompress(b"\x00\x01\x02 not valid zlib") is None
+    # A truncated-but-valid-header blob is also corrupt → None.
+    assert decompress(b"\x78\x9c") is None
+    # Positive control: a real compressed blob round-trips.
+    import zlib
+
+    assert decompress(zlib.compress(b"hello")) == b"hello"
 
 
 def test_capture_bodies_off_drops_blobs(tmp_path: Path) -> None:

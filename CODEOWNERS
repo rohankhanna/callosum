@@ -1,0 +1,9 @@
+# CODEOWNERS
+# https://docs.github.com/en/repositories/managing-your-repositories-settings/customizing-your-repository/about-code-owners
+#
+# Callosum currently has a single maintainer. Every path defaults to that
+# owner so all changes require maintainer review. As the project grows
+# maintainers, split these out by subsystem (src/callosum/backends/,
+# src/callosum/routing/, tests/, docs/, ...).
+
+*           @rohankhanna

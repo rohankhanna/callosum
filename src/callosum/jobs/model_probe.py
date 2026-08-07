@@ -52,11 +52,7 @@ def _probe_candidates(source: LocalModelRegistrySource) -> list[ModelEntry]:
     one-time and harmless; filtering to precision-admitted candidates only is a
     deferred refinement (see work tracker).
     """
-    return [
-        m
-        for m in source.models()
-        if m.enabled and m.runtime == "vllm" and "responses" in m.api_surfaces
-    ]
+    return [m for m in source.models() if m.enabled and m.runtime == "vllm" and "responses" in m.api_surfaces]
 
 
 def run(

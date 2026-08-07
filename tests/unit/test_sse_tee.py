@@ -226,12 +226,20 @@ def test_namespaced_tool_names_from_request_collects_namespaced_tools() -> None:
     body = {
         "tools": [{"type": "function", "name": "top_ns", "namespace": "grp"}],
         "input": [
-            {"type": "additional_tools", "role": "developer", "tools": [
-                {"type": "custom", "name": "exec"},  # flat, no namespace
-                {"type": "namespace", "name": "collaboration", "tools": [
-                    {"type": "function", "name": "followup_task"},
-                ]},
-            ]},
+            {
+                "type": "additional_tools",
+                "role": "developer",
+                "tools": [
+                    {"type": "custom", "name": "exec"},  # flat, no namespace
+                    {
+                        "type": "namespace",
+                        "name": "collaboration",
+                        "tools": [
+                            {"type": "function", "name": "followup_task"},
+                        ],
+                    },
+                ],
+            },
         ],
     }
     assert namespaced_tool_names_from_request(body) == {"top_ns", "followup_task"}
@@ -249,13 +257,13 @@ async def test_strip_namespace_stream_drops_bogus_namespace_for_unnamespaced_too
     body = {"input": [{"type": "additional_tools", "tools": [{"type": "custom", "name": "exec"}]}]}
     namespaced = namespaced_tool_names_from_request(body)
     added_event = (
-        'event: response.output_item.added\n'
+        "event: response.output_item.added\n"
         'data: {"type":"response.output_item.added","item":{"id":"ctc_1",'
         '"type":"custom_tool_call","call_id":"call_x","name":"exec",'
         '"namespace":"exec","input":"await tools.exec_command({})"}}\n\n'
     )
     delta_event = (
-        'event: response.custom_tool_call_input.delta\n'
+        "event: response.custom_tool_call_input.delta\n"
         'data: {"type":"response.custom_tool_call_input.delta","delta":"await",'
         '"item_id":"ctc_1","obfuscation":"Z9","sequence_number":21}\n\n'
     )
@@ -285,14 +293,25 @@ async def test_strip_namespace_stream_preserves_legitimately_namespaced_tools() 
     response — the strip targets only tools the client declared flat."""
     from callosum.sse_tee import namespaced_tool_names_from_request, strip_namespace_stream
 
-    body = {"input": [{"type": "additional_tools", "tools": [
-        {"type": "namespace", "name": "collaboration", "tools": [
-            {"type": "function", "name": "followup_task"},
-        ]},
-    ]}]}
+    body = {
+        "input": [
+            {
+                "type": "additional_tools",
+                "tools": [
+                    {
+                        "type": "namespace",
+                        "name": "collaboration",
+                        "tools": [
+                            {"type": "function", "name": "followup_task"},
+                        ],
+                    },
+                ],
+            }
+        ]
+    }
     namespaced = namespaced_tool_names_from_request(body)
     added_event = (
-        'event: response.output_item.added\n'
+        "event: response.output_item.added\n"
         'data: {"type":"response.output_item.added","item":{"id":"fc_1",'
         '"type":"custom_tool_call","call_id":"call_y","name":"followup_task",'
         '"namespace":"collaboration","input":"{}"}}\n\n'

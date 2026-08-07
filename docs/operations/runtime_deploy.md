@@ -103,9 +103,14 @@ Environment`. To disable: remove the file (or set the value to `0`),
 ### Ollama Cloud enable (live example)
 
 `CALLOSUM_OLLAMA_CLOUD_ENABLED=1` registers the `OllamaCloudBackend`
-(`BackendKind="ollama_cloud"`) — cloud models served by the local
-ollama daemon under `ollama signin`. Callosum holds NO credential; the
-daemon does. The durable drop-in is
+(`BackendKind="ollama_cloud"`) — cloud models served by ollama.com
+through credential proxy's boundary-native proxy custody. Callosum mints a
+short-TTL `ollama-cloud`-scoped stand-in token at credential proxy's
+`POST /v1/standin` and POSTs each ollama.com call through credential proxy's
+`POST /v1/proxy`(`/stream`); credential proxy injects the real ollama.com API
+key on the final hop, so the real key never enters callosum (it holds
+only the stand-in). This retires the prior local-ollama-daemon `ollama
+signin` chat path. The durable drop-in is
 `~/.config/systemd/user/system-dependency-callosum.service.d/ollama-cloud.conf`:
 
 ```ini
@@ -120,9 +125,9 @@ curl -s http://127.0.0.1:8765/status | jq '.backends[] | select(.id=="ollama-clo
 curl -s http://127.0.0.1:8765/models | jq '.data[] | select(.id|test(":cloud")) | .id'
 ```
 
-`:cloud`-suffixed models catalog from the daemon's `/api/tags` and are
-classified `callosum:remote/...` (e.g.
-`callosum:remote/glm-5.1:cloud:default`). The local lane catalogs from
+`:cloud`-suffixed models catalog from ollama.com's `/api/tags` (reached
+through the credential proxy proxy, not the local daemon) and are classified
+`callosum:remote/...` (e.g. `callosum:remote/glm-5.1:cloud:default`). The local lane catalogs from
 local LLM gateway's `/v1/models` serving endpoint, which excludes unmanaged
 `:cloud` models, so there is no double-list. Cloud cells enter the
 per-cell minimum-coverage grid, so the quota may route some real

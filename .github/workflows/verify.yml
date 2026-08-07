@@ -40,13 +40,20 @@ jobs:
         run: uv python install
 
       - name: Sync dependencies
-        # `uv sync --all-extras` installs both the base + the
-        # `embeddings` optional group so the full test surface
-        # (including any embedding-related tests) is runnable.
-        run: uv sync --all-extras --dev
+        # `uv sync --dev` installs the base + dev group so the full
+        # test surface is runnable. No optional extras remain (the
+        # former `embeddings` group was removed with the BGE/KNN
+        # predictor subsystem), so --all-extras is a no-op and is
+        # omitted.
+        run: uv sync --dev
 
       - name: ruff
         run: uv run ruff check src/ tests/
+
+      - name: ruff format
+        # Matches `make verify`'s format-check step: reject unformatted
+        # code. CI must run the same canonical path as the local gate.
+        run: uv run ruff format --check .
 
       - name: mypy
         run: uv run mypy src/callosum

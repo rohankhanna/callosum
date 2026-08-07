@@ -12,6 +12,7 @@ functional capability.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -596,9 +597,7 @@ def test_cell_capabilities_tier2_off_mode_ignores_stopgap(monkeypatch: pytest.Mo
     monkeypatch.setenv("CALLOSUM_LOCAL_CAPABILITIES_STOPGAP", "off")
     src = _FakeSource([_catalog_entry("m", throughput=25.0)])
     backend = LocalModelRegistryBackend(id="test", source=src)
-    backend._capabilities_cache["m"] = _ollama_stopgap(
-        modalities=frozenset({"text", "image"}), supports_tools=False
-    )
+    backend._capabilities_cache["m"] = _ollama_stopgap(modalities=frozenset({"text", "image"}), supports_tools=False)
     caps = backend.cell_capabilities("m")
     assert caps.modalities == frozenset({"text"})
     assert caps.supports_tools is True
@@ -642,9 +641,7 @@ def test_cell_capabilities_tier1_hub_canonical_wins_per_field_over_stopgap() -> 
         caps={"m": _hub_row("m", modalities=frozenset({"text"}), supports_tools=False)},
     )
     backend = LocalModelRegistryBackend(id="test", source=src)
-    backend._capabilities_cache["m"] = _ollama_stopgap(
-        modalities=frozenset({"text", "image"}), supports_tools=True
-    )
+    backend._capabilities_cache["m"] = _ollama_stopgap(modalities=frozenset({"text", "image"}), supports_tools=True)
     caps = backend.cell_capabilities("m")
     assert caps.modalities == frozenset({"text"})
     assert caps.supports_tools is False
@@ -660,9 +657,7 @@ def test_cell_capabilities_tier1_hub_silent_field_falls_through_to_stopgap(monke
         caps={"m": _hub_row("m", modalities=frozenset({"text"}), supports_tools=None)},
     )
     backend = LocalModelRegistryBackend(id="test", source=src)
-    backend._capabilities_cache["m"] = _ollama_stopgap(
-        modalities=frozenset({"text", "image"}), supports_tools=True
-    )
+    backend._capabilities_cache["m"] = _ollama_stopgap(modalities=frozenset({"text", "image"}), supports_tools=True)
     caps = backend.cell_capabilities("m")
     assert caps.modalities == frozenset({"text"})  # hub canonical
     assert caps.supports_tools is True  # tier-2 stopgap fills the hub-silent field
@@ -676,9 +671,7 @@ def test_cell_capabilities_preserves_local_perf_fields_across_tiers() -> None:
         caps={"m": _hub_row("m", modalities=frozenset({"text"}), supports_tools=False)},
     )
     backend = LocalModelRegistryBackend(id="test", source=src)
-    backend._capabilities_cache["m"] = _ollama_stopgap(
-        modalities=frozenset({"text", "image"}), supports_tools=False
-    )
+    backend._capabilities_cache["m"] = _ollama_stopgap(modalities=frozenset({"text", "image"}), supports_tools=False)
     caps = backend.cell_capabilities("m")
     assert caps.local_throughput_tps == 25.0
     assert caps.local_gpu_seconds_per_token == 0.04
@@ -792,9 +785,7 @@ def test_vision_request_routes_to_local_vision_cell_through_capability_filter() 
     additive: zero regression for the text-only routing that works today."""
     src = _FakeSource([_catalog_entry("vision-cell", throughput=25.0)])
     backend = LocalModelRegistryBackend(id="test", source=src)
-    backend._capabilities_cache["vision-cell"] = _ollama_stopgap(
-        modalities=frozenset({"text", "image"})
-    )
+    backend._capabilities_cache["vision-cell"] = _ollama_stopgap(modalities=frozenset({"text", "image"}))
     cell = Cell(model="vision-cell", reasoning_effort="default")
 
     capabilities_of = {cell: backend.cell_capabilities(cell.model)}
@@ -855,4 +846,142 @@ async def test_health_unknown_when_source_has_no_reason_attr() -> None:
     h = await backend.health()
     assert h.available is False
     assert h.reason == "unknown"
+    await backend.aclose()
+
+
+# --------------------------------------------------------------------------- #
+# Regression for commit d295876 — the responses-native chat-stream sub-path
+# must be wrapped in stall_guarded (mid-stream stall -> transient; idle_gap
+# captured onto the handle). The existing translation test above stays green
+# if that wrap is removed; these two turn red. See logs/2026-08-13.md.
+# --------------------------------------------------------------------------- #
+
+
+def _streaming_transport(upstream_factory: Any) -> httpx.MockTransport:
+    """Build a MockTransport whose /v1/responses body is a lazily-streamed
+    async generator (so aiter_lines waits on the upstream, letting
+    stall_guarded observe real inter-chunk idle). Probe-confirmed: httpx
+    MockTransport streams an async-iterable content lazily."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=upstream_factory(),
+        )
+
+    return httpx.MockTransport(handler)
+
+
+async def test_chat_native_responses_stream_stall_guarded_raises_transient(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A responses-native model hit via POST /v1/chat/completions stream
+    that stalls MID-STREAM must raise BackendError(transient) fast, not
+    hang to the transport timeout. Pins the stall_guarded wrap d295876
+    added to this sub-path; reverting it leaves aiter_lines unguarded, so
+    the stall hangs past the outer wait_for and this test fails with
+    TimeoutError instead of BackendError."""
+    import callosum.backends.local_direct as local_direct
+
+    monkeypatch.setattr(local_direct, "LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S", 1.0)
+    monkeypatch.setattr(local_direct, "LOCAL_STREAM_IDLE_TIMEOUT_S", 0.3)
+
+    src = _FakeSource([_entry("responses-capable", ("responses", "chat"))])
+
+    async def upstream() -> Any:
+        # First event arrives immediately (first byte seen), then the
+        # upstream stalls far beyond the patched 0.3s idle timeout.
+        yield _responses_event(
+            "response.created",
+            {"response": {"id": "r1", "model": "runtime-model"}},
+        )
+        await asyncio.sleep(10.0)
+        yield _responses_event("response.output_text.delta", {"delta": "never"})
+
+    backend = LocalModelRegistryBackend(
+        id="test",
+        source=src,
+        transport=_streaming_transport(upstream),
+    )
+    handle = CallHandle()
+
+    async def consume() -> None:
+        async for _ in backend.chat_completions_stream(
+            {
+                "model": "responses-capable",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+            },
+            handle,
+        ):
+            pass
+
+    with pytest.raises(BackendError) as exc_info:
+        # Outer wait_for is the red-when-reverted tripwire: with the guard,
+        # BackendError fires at ~0.3s (well inside 2.5s); without the guard
+        # the stall hangs and wait_for raises TimeoutError, not BackendError.
+        await asyncio.wait_for(consume(), timeout=2.5)
+    assert exc_info.value.classification == "transient"
+    assert "mid-stream" in exc_info.value.message
+    await backend.aclose()
+
+
+async def test_chat_native_responses_stream_records_idle_gap_onto_handle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A responses-native chat-stream with a measurable inter-chunk idle
+    records handle.max_idle_gap_s (the instrumentation d295876 wired onto
+    this sub-path). Only stall_guarded writes max_idle_gap_s, so reverting
+    the wrap leaves the handle's gap unset and this turns red.
+
+    The upstream deliberately ends WITHOUT a response.completed event:
+    _responses_sse_to_chat_sse returns early on completed (closing
+    stall_guarded via GeneratorExit, before its StopAsyncIteration branch
+    can record the gap). Ending the stream short of completed lets
+    stall_guarded exhaust cleanly and run its gap-recording branch — the
+    one path that actually captures idle_gap for this sub-path on
+    non-stalled traffic."""
+    import callosum.backends.local_direct as local_direct
+
+    monkeypatch.setattr(local_direct, "LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S", 2.0)
+    monkeypatch.setattr(local_direct, "LOCAL_STREAM_IDLE_TIMEOUT_S", 2.0)
+
+    src = _FakeSource([_entry("responses-capable", ("responses", "chat"))])
+
+    async def upstream() -> Any:
+        # Two deltas with a ~0.08s inter-chunk gap, then the upstream ends
+        # (StopAsyncIteration) — no response.completed, so the translator
+        # falls through to its tail and stall_guarded exhausts cleanly.
+        yield _responses_event(
+            "response.created",
+            {"response": {"id": "r1", "model": "runtime-model"}},
+        )
+        await asyncio.sleep(0.08)
+        yield _responses_event("response.output_text.delta", {"delta": "Hel"})
+        await asyncio.sleep(0.08)
+        yield _responses_event("response.output_text.delta", {"delta": "lo"})
+
+    backend = LocalModelRegistryBackend(
+        id="test",
+        source=src,
+        transport=_streaming_transport(upstream),
+    )
+    handle = CallHandle()
+
+    chunks = [
+        c
+        async for c in backend.chat_completions_stream(
+            {
+                "model": "responses-capable",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+            },
+            handle,
+        )
+    ]
+
+    assert chunks  # translation produced output
+    assert handle.max_idle_gap_s is not None
+    assert handle.max_idle_gap_s >= 0.05  # the 0.08s inter-chunk gap was captured
     await backend.aclose()

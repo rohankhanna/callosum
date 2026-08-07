@@ -276,7 +276,7 @@ class OllamaCloudUsageSource:
             return self._cached
 
         # Ensure a fresh stand-in token (60s safety margin before expiry).
-        if self._token is None or time.monotonic() >= (self._token_expires_at - 60.0):
+        if self._token is None or time.time() >= (self._token_expires_at - 60.0):
             try:
                 resp = await self._client.post(
                     f"{self._custody_url}/v1/standin",
@@ -300,14 +300,15 @@ class OllamaCloudUsageSource:
             self._token = token
             expires_raw = standin_body.get("expires_at") if isinstance(standin_body, dict) else None
             try:
-                # credential proxy returns expires_at as an epoch/ts number (relative
-                # seconds until expiry). Fall back to monotonic + standin TTL
-                # if missing/unparseable. The `or` short-circuit handles a
-                # falsy/zero/missing value just like the spec formula.
-                expires_at = float(expires_raw) if expires_raw else float(self._standin_ttl_s)
+                # credential proxy returns expires_at as an ABSOLUTE Unix epoch
+                # timestamp (issued_at + ttl_seconds). Store it directly and
+                # compare against wall-clock time.time() (credential proxy mints with
+                # int(time.time()), not monotonic). The `or` short-circuit
+                # handles a falsy/zero/missing value; fall back to now + TTL.
+                expires_at = float(expires_raw) if expires_raw else time.time() + float(self._standin_ttl_s)
             except (TypeError, ValueError):
-                expires_at = float(self._standin_ttl_s)
-            self._token_expires_at = time.monotonic() + expires_at
+                expires_at = time.time() + float(self._standin_ttl_s)
+            self._token_expires_at = expires_at
 
         # Fetch the usage payload with the stand-in token.
         try:
@@ -439,8 +440,10 @@ class OllamaCloudBackend:
         # short-TTL `ollama-cloud`-scoped stand-in token (never the real key).
         # Minted lazily by `_ensure_standin`, cached with a 60s pre-expiry slop,
         # and invalidated on an credential proxy-level 401 (stand-in rejected) so the
-        # next call re-mints. `expires_at` is a `time.monotonic()` deadline
-        # (credential proxy returns relative seconds; see OllamaCloudUsageSource).
+        # next call re-mints. `expires_at` is an ABSOLUTE Unix epoch timestamp
+        # (credential proxy returns issued_at + ttl_seconds); compared against
+        # wall-clock `time.time()` (not monotonic, since credential proxy mints with
+        # `int(time.time())`).
         self._custody_url = custody_url.rstrip("/")
         self._custody_account = custody_account
         self._standin_token: str | None = None
@@ -548,11 +551,7 @@ class OllamaCloudBackend:
                 payload = None
             if payload is not None and math.isfinite(payload.session.percent_used):
                 session_used = payload.session.percent_used
-                weekly_used = (
-                    payload.weekly.percent_used
-                    if math.isfinite(payload.weekly.percent_used)
-                    else 0.0
-                )
+                weekly_used = payload.weekly.percent_used if math.isfinite(payload.weekly.percent_used) else 0.0
                 return UsageSnapshot(
                     remaining_fraction=max(0.0, (100.0 - session_used) / 100.0),
                     cooldown_until_ts=None,
@@ -606,16 +605,16 @@ class OllamaCloudBackend:
         credential_proxy, which omits scope and gets the default
         provider-upstream; the ollama-cloud scope routes credential proxy to the
         ollama.com key in its pass store). Caches with a 60s pre-expiry
-        slop; expires_at is treated as relative seconds added to
-        time.monotonic() (mirroring OllamaCloudUsageSource). Uses the
-        SAME self._client (no second client).
+        slop; expires_at is an ABSOLUTE Unix epoch timestamp (credential proxy
+        returns issued_at + ttl_seconds), compared against wall-clock
+        time.time(). Uses the SAME self._client (no second client).
 
         Failures: network error → _mark_unhealthy + BackendError(transient);
         credential proxy 401 on mint → invalidate + BackendError(transient); credential proxy
         non-200/non-401 → _healthy=False, _last_health_reason="no-key" +
         BackendError(transient); malformed/no-token → "no-key" + transient.
         """
-        if self._standin_token is not None and time.monotonic() < (self._standin_expires_at - 60.0):
+        if self._standin_token is not None and time.time() < (self._standin_expires_at - 60.0):
             return self._standin_token
         try:
             resp = await self._client.post(
@@ -665,13 +664,15 @@ class OllamaCloudBackend:
         self._standin_token = token
         expires_raw = standin_body.get("expires_at") if isinstance(standin_body, dict) else None
         try:
-            # credential proxy returns expires_at as relative seconds until expiry
-            # (mirroring OllamaCloudUsageSource's interpretation). Fall back to
-            # the requested TTL if missing/unparseable.
-            expires_at = float(expires_raw) if expires_raw else float(OLLAMA_CLOUD_STANDIN_TTL_S)
+            # credential proxy returns expires_at as an ABSOLUTE Unix epoch timestamp
+            # (UTC) — issued_at + ttl_seconds, same as its StandInTokenLedger.
+            # Store it directly and compare against wall-clock time.time()
+            # (credential proxy mints with int(time.time()), not monotonic). Fall back
+            # to now + the requested TTL if missing/unparseable.
+            expires_at = float(expires_raw) if expires_raw else time.time() + float(OLLAMA_CLOUD_STANDIN_TTL_S)
         except (TypeError, ValueError):
-            expires_at = float(OLLAMA_CLOUD_STANDIN_TTL_S)
-        self._standin_expires_at = time.monotonic() + expires_at
+            expires_at = time.time() + float(OLLAMA_CLOUD_STANDIN_TTL_S)
+        self._standin_expires_at = expires_at
         return self._standin_token
 
     def _invalidate_standin(self) -> None:
@@ -830,9 +831,7 @@ class OllamaCloudBackend:
         return base64.b64decode(data) if data else b""
 
     @contextlib.asynccontextmanager
-    async def _proxy_stream_cm(
-        self, out_body: dict[str, Any]
-    ) -> AsyncIterator[httpx.Response]:
+    async def _proxy_stream_cm(self, out_body: dict[str, Any]) -> AsyncIterator[httpx.Response]:
         """Open a streaming /v1/proxy/stream call to ollama.com through
         credential proxy, yielding the raw httpx.Response for the generator to parse.
 
@@ -884,9 +883,7 @@ class OllamaCloudBackend:
             # auth_invalid; the stand-in is innocent — do NOT re-mint). The
             # CALLER classifies via the real upstream status; build a
             # synthetic response so error_from_response reads the body/headers.
-            synthetic = httpx.Response(
-                upstream_status, headers=upstream_headers, content=upstream_body
-            )
+            synthetic = httpx.Response(upstream_status, headers=upstream_headers, content=upstream_body)
             raise error_from_response(synthetic, status_code=upstream_status)
         return cast(dict[str, Any], json.loads(upstream_body))
 
@@ -984,9 +981,8 @@ class OllamaCloudBackend:
         stand-in re-mint (matches credential_proxy's streaming behavior);
         a transient stand-in rejection self-heals on the next request.
         """
-        def open_chat_stream(
-            out_body: dict[str, Any], _headers: dict[str, str]
-        ) -> AsyncContextManager[httpx.Response]:
+
+        def open_chat_stream(out_body: dict[str, Any], _headers: dict[str, str]) -> AsyncContextManager[httpx.Response]:
             # `_headers` (the generator's default auth headers) is ignored —
             # credential proxy builds the final-hop headers from the envelope + the
             # real key. The stand-in is minted inside `_proxy_stream_cm`.
@@ -1066,14 +1062,12 @@ class OllamaCloudBackend:
         # proxy helper already set `_healthy=False` + a concrete reason
         # (network / no-key) before raising, so a bare `return` suffices.
         try:
-            upstream_status, _upstream_headers, upstream_body = (
-                await self._proxy_buffered(
-                    method="GET",
-                    url=f"{self._ollama_url}/api/tags",
-                    app_headers=self._app_request_headers(stream=False),
-                    body=b"",
-                    timeout=DEFAULT_HEALTH_TIMEOUT_S,
-                )
+            upstream_status, _upstream_headers, upstream_body = await self._proxy_buffered(
+                method="GET",
+                url=f"{self._ollama_url}/api/tags",
+                app_headers=self._app_request_headers(stream=False),
+                body=b"",
+                timeout=DEFAULT_HEALTH_TIMEOUT_S,
             )
         except BackendError:
             return
@@ -1140,14 +1134,12 @@ class OllamaCloudBackend:
         """
         for name in self._catalog:
             try:
-                upstream_status, _upstream_headers, upstream_body = (
-                    await self._proxy_buffered(
-                        method="POST",
-                        url=f"{self._ollama_url}/api/show",
-                        app_headers=self._app_request_headers(stream=False),
-                        body=json.dumps({"name": name}).encode("utf-8"),
-                        timeout=DEFAULT_HEALTH_TIMEOUT_S,
-                    )
+                upstream_status, _upstream_headers, upstream_body = await self._proxy_buffered(
+                    method="POST",
+                    url=f"{self._ollama_url}/api/show",
+                    app_headers=self._app_request_headers(stream=False),
+                    body=json.dumps({"name": name}).encode("utf-8"),
+                    timeout=DEFAULT_HEALTH_TIMEOUT_S,
                 )
             except BackendError:
                 # Stand-in mint / credential proxy transport failure — no point

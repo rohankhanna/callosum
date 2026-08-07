@@ -23,9 +23,7 @@ from callosum.substrate_contract import (
     ConformanceInvariant as Inv,
 )
 
-ALL_INVARIANTS_PASS = {
-    inv: True for inv in Inv
-}
+ALL_INVARIANTS_PASS = {inv: True for inv in Inv}
 
 
 def _conf(surface: Surface, **overrides: bool) -> SurfaceConformance:
@@ -48,9 +46,7 @@ def _profile(
         cell_id=cell_id,
         advertised_surfaces=advertised,
         conformance=conformance or {},
-        capability_fields=capability_fields
-        if capability_fields is not None
-        else frozenset(REQUIRED_CAPABILITY_FIELDS),
+        capability_fields=capability_fields if capability_fields is not None else frozenset(REQUIRED_CAPABILITY_FIELDS),
         residual_translation=residual,
     )
 
@@ -160,14 +156,8 @@ def test_dual_surface_cell_routes_native_on_each_advertised_surface():
             Surface.RESPONSES: _conf(Surface.RESPONSES),
         },
     )
-    assert (
-        classify_contract(profile, Surface.CHAT).action
-        is ContractAction.ROUTE_NATIVE
-    )
-    assert (
-        classify_contract(profile, Surface.RESPONSES).action
-        is ContractAction.ROUTE_NATIVE
-    )
+    assert classify_contract(profile, Surface.CHAT).action is ContractAction.ROUTE_NATIVE
+    assert classify_contract(profile, Surface.RESPONSES).action is ContractAction.ROUTE_NATIVE
 
 
 def test_surface_conformance_is_conformant_only_when_all_probed_pass():

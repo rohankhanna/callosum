@@ -73,6 +73,7 @@ def _sse_lines() -> bytes:
 def _client_serving_sse() -> httpx.AsyncClient:
     """An httpx client whose MockTransport serves the canned SSE for any POST
     to CHAT_URL — the shape the default (no-hook) path hits."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=_sse_lines(), headers={"content-type": "text/event-stream"})
 
@@ -87,7 +88,7 @@ async def _drain(gen: AsyncIterator[bytes]) -> list[dict[str, Any]]:
         for ev_block in chunk.split(b"\n\n"):
             for line in ev_block.split(b"\n"):
                 if line.startswith(b"data:"):
-                    payload = line[len(b"data:"):].strip().decode()
+                    payload = line[len(b"data:") :].strip().decode()
                     if payload and payload != "[DONE]":
                         with contextlib.suppress(json.JSONDecodeError):
                             events.append(json.loads(payload))
@@ -190,9 +191,7 @@ def test_upstream_status_header_non_integer_falls_back_to_custody_status() -> No
     back to the credential proxy status (200 here → no error). Defensive: credential proxy is a
     sibling and its header shape is not contractually guaranteed forever."""
     backend = _backend_for_status_test()
-    response = httpx.Response(
-        200, content=b"ok", headers={CUSTODY_UPSTREAM_STATUS_HEADER: "not-a-number"}
-    )
+    response = httpx.Response(200, content=b"ok", headers={CUSTODY_UPSTREAM_STATUS_HEADER: "not-a-number"})
     assert backend._ollama_upstream_status(response) == 200
 
 
@@ -248,14 +247,10 @@ async def test_open_chat_stream_hook_replaces_direct_post() -> None:
     served: dict[str, Any] = {}
 
     @contextlib.asynccontextmanager
-    async def open_chat_stream(
-        out_body: dict[str, Any], _headers: dict[str, str]
-    ) -> AsyncIterator[httpx.Response]:
+    async def open_chat_stream(out_body: dict[str, Any], _headers: dict[str, str]) -> AsyncIterator[httpx.Response]:
         served["out_body"] = out_body
         # Synthetic credential proxy stream response: HTTP 200 + SSE bytes.
-        yield httpx.Response(
-            200, content=_sse_lines(), headers={"content-type": "text/event-stream"}
-        )
+        yield httpx.Response(200, content=_sse_lines(), headers={"content-type": "text/event-stream"})
 
     gen = chat_to_responses_stream(
         client=client,
@@ -293,9 +288,7 @@ async def test_upstream_status_of_hook_classifies_proxy_upstream_401() -> None:
     client = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(404)))
 
     @contextlib.asynccontextmanager
-    async def open_chat_stream(
-        out_body: dict[str, Any], _headers: dict[str, str]
-    ) -> AsyncIterator[httpx.Response]:
+    async def open_chat_stream(out_body: dict[str, Any], _headers: dict[str, str]) -> AsyncIterator[httpx.Response]:
         yield httpx.Response(
             200,
             content=b'{"error":{"message":"invalid api key"}}',
@@ -341,14 +334,10 @@ async def test_upstream_status_of_hook_custody_401_maps_to_transient() -> None:
     applies the 502 mapping (mirroring OllamaCloudBackend._ollama_upstream_status),
     so the generator surfaces a transient error rather than auth_invalid."""
     client = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(404)))
-    backend = OllamaCloudBackend(
-        id="ollama-cloud", transport=httpx.MockTransport(lambda r: httpx.Response(404))
-    )
+    backend = OllamaCloudBackend(id="ollama-cloud", transport=httpx.MockTransport(lambda r: httpx.Response(404)))
 
     @contextlib.asynccontextmanager
-    async def open_chat_stream(
-        out_body: dict[str, Any], _headers: dict[str, str]
-    ) -> AsyncIterator[httpx.Response]:
+    async def open_chat_stream(out_body: dict[str, Any], _headers: dict[str, str]) -> AsyncIterator[httpx.Response]:
         yield httpx.Response(401, content=b"stand-in rejected")
 
     handle = CallHandle()
@@ -398,9 +387,7 @@ async def test_on_transport_error_fires_on_httpx_failure() -> None:
     on_transport_error = MagicMock()
 
     @contextlib.asynccontextmanager
-    async def open_chat_stream(
-        out_body: dict[str, Any], _headers: dict[str, str]
-    ) -> AsyncIterator[httpx.Response]:
+    async def open_chat_stream(out_body: dict[str, Any], _headers: dict[str, str]) -> AsyncIterator[httpx.Response]:
         # httpx-level failure opening the stream.
         raise httpx.ConnectError("credential proxy down")
         yield  # pragma: no cover  # unreachable; keeps the generator a CM
