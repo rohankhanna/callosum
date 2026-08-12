@@ -189,3 +189,53 @@ def test_routable_backends_excludes_meter_blocked_backend() -> None:
     )
     routable = asyncio.run(_routable_backends([backend]))
     assert [b.id for b in routable] == ["meter-blocked"]
+
+
+def test_periodic_prober_probes_immediately_at_startup_before_first_interval(monkeypatch) -> None:
+    """The prober MUST fire one forced probe immediately at startup, BEFORE
+    the first interval tick. Pins the immediate-startup pass in 4f2d45f
+    (app.py:5037 — await self._probe_cooldowned() before the
+    while loop). After a cold boot (e.g. overnight host shutdown) the
+    persisted cooldown/exhaustion snapshot is stale — quota windows reset
+    while the machine was off — but the startup smoke test skips cooldown'd
+    backends by design, so without this first pass nothing re-validates the
+    lockout until a full interval_s (default 1h) elapses. That
+    hour-after-every-boot window is exactly the "works last night, 503 every
+    morning" failure mode.
+
+    The sibling tests above use interval_s=0.01 + sleep(0.05), under
+    which the immediate startup pass is INDISTINGUISHABLE from the first
+    periodic tick (both fire within 0.05s) — so they do NOT pin this seam
+    (they pin the b11a03e meter-dead-zone check instead). This test uses
+    interval_s=3600 so the first periodic tick CANNOT fire within the
+    0.2s sleep — any recorded probe MUST be the immediate startup pass.
+
+    Reverting app.py:5037 (removing the pre-loop
+    await self._probe_cooldowned()) → calls stays empty within the
+    sleep → this assertion fails.
+    """
+    backend = _MeterBlockedBackend(id="meter-blocked")
+    calls: list[tuple[str, bool]] = []
+
+    async def fake_diagnose_backend(probed_backend, *, force=False):  # noqa: ANN001 ANN201
+        calls.append((probed_backend.id, force))
+        return {"ok": True, "skipped": False}
+
+    async def run_once() -> None:
+        monkeypatch.setattr(app_module, "_diagnose_backend", fake_diagnose_backend)
+        # interval_s=3600 → the first periodic tick is 1h out, so within the
+        # 0.2s sleep the ONLY possible probe is the immediate startup pass.
+        prober = _PeriodicCooldownProber(backends=[backend], interval_s=3600)
+        prober.start()
+        await asyncio.sleep(0.2)
+        await prober.stop()
+
+    asyncio.run(run_once())
+
+    assert calls, (
+        "prober did not probe at startup — the immediate startup pass "
+        "(app.py:5037) was removed; the cold-boot stale-lockout window "
+        "regressed (4f2d45f)"
+    )
+    # The startup pass is a forced probe of the meter-blocked backend.
+    assert all(c == ("meter-blocked", True) for c in calls)
