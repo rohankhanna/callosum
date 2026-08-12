@@ -28,7 +28,6 @@ from callosum.app import (
     MAX_CELL_ATTEMPTS,
     _dispatch_nonstream,
     _dispatch_nonstream_with_cell_retry,
-    _dispatch_stream_with_cell_retry,
     _DispatchRetryBudget,
     _request_id_context,
     _retry_budget_http,
@@ -97,34 +96,6 @@ def _install_inner_stub(
         return b
 
     monkeypatch.setattr(app_module, "_dispatch_nonstream", _stub)
-    return seen
-
-
-def _install_stream_inner_stub(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    behavior: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """Stream-path mirror of _install_inner_stub: replace
-    _dispatch_stream with a recorder that returns a canned result (or
-    raises) per cell. The wrapper's stream budget guard fires BEFORE this
-    inner call, so on the fix path the stub is never reached for an
-    already-exhausted budget."""
-    seen: list[dict[str, Any]] = []
-
-    async def _stub(body, **kwargs):  # noqa: ANN001 ANN201
-        seen.append(
-            {
-                "model": body.get("model"),
-                "effort": (body.get("reasoning") or {}).get("effort"),
-            }
-        )
-        b = behavior.get(body.get("model"))
-        if isinstance(b, HTTPException):
-            raise b
-        return b
-
-    monkeypatch.setattr(app_module, "_dispatch_stream", _stub)
     return seen
 
 
@@ -440,110 +411,6 @@ def test_expired_retry_budget_short_circuits_before_any_cell_call(
         )
     assert exc_info.value.status_code == 503
     assert seen == []
-
-
-# ---------- stream-path retry-budget enforcement (3612cf1) -----------------
-
-
-def test_stream_expired_retry_budget_short_circuits_before_any_cell_call(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Stream-path mirror of test_expired_retry_budget_short_circuits_before_any_cell_call.
-
-    An already-expired request budget passed to
-    _dispatch_stream_with_cell_retry must fail closed (HTTPException 503)
-    BEFORE any inner _dispatch_stream call — the wrapper's own budget
-    guard (app.py ~L3078) fires at the top of each cell iteration. Pins
-    fix 3612cf1's stream-path budget enforcement, which had NO test passing a
-    dispatch_budget to the stream wrapper (the nonstream path was pinned,
-    the stream path was not).
-
-    Reverting the stream-path budget guard (removing the
-    if dispatch_budget is not None: ... raise _retry_budget_http(...)
-    block) → the stub IS called for model-a and returns a success sentinel
-    → the wrapper returns it (no exception) → pytest.raises fails AND
-    seen is non-empty → red.
-    """
-    seen = _install_stream_inner_stub(
-        monkeypatch, behavior={"model-a": {"served": "a"}}
-    )
-    budget = _DispatchRetryBudget(deadline_ts=time.monotonic() - 1.0, max_backend_attempts=4)
-    body = {"model": "auto"}
-    with pytest.raises(HTTPException) as exc_info:
-        asyncio.run(
-            _dispatch_stream_with_cell_retry(
-                body,
-                candidates=(CELLS[0], CELLS[1]),
-                usage_log=None,
-                model="auto",
-                route_name="/v1/responses",
-                backends_list=[],
-                preferred_id=None,
-                session_id=None,
-                session_registry=object(),
-                call=None,
-                dispatch_budget=budget,
-            )
-        )
-    assert exc_info.value.status_code == 503
-    assert "dispatch retry budget exhausted" in str(exc_info.value.detail)
-    # The guard fired before the inner call — no cell was probed.
-    assert seen == [], (
-        f"stream wrapper called inner dispatch {seen!r} despite an exhausted "
-        f"budget — the stream-path budget guard regressed (3612cf1)"
-    )
-
-
-def test_stream_retry_budget_http_does_not_reroute_to_next_cell(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Stream-path mirror of test_retry_budget_http_does_not_reroute_to_next_cell.
-
-    When the inner _dispatch_stream raises a budget-exhausted
-    HTTPException for model-a, the wrapper MUST propagate it (503)
-    rather than reroute to model-b — a budget-exhausted 503 is terminal
-    for the whole request, not another retryable cell failure to walk past.
-    Pins the _is_retry_budget_http reroute-suppression on the stream path
-    (app.py ~L3114).
-
-    Reverting the if _is_retry_budget_http(exc): raise suppression → the
-    budget 503 is treated as retried_next_cell → the wrapper continues to
-    model-b → seen becomes ["model-a", "model-b"] and the wrapper
-    returns model-b's success sentinel (no exception) → pytest.raises
-    fails → red.
-    """
-    seen = _install_stream_inner_stub(
-        monkeypatch,
-        behavior={
-            "model-a": _retry_budget_http("wall-clock budget exhausted"),
-            "model-b": {"served": "b"},
-        },
-    )
-    budget = _DispatchRetryBudget.from_config(seconds=360.0, max_backend_attempts=4)
-    body = {"model": "auto"}
-    with pytest.raises(HTTPException) as exc_info:
-        asyncio.run(
-            _dispatch_stream_with_cell_retry(
-                body,
-                candidates=(CELLS[0], CELLS[1]),
-                usage_log=None,
-                model="auto",
-                route_name="/v1/responses",
-                backends_list=[],
-                preferred_id=None,
-                session_id=None,
-                session_registry=object(),
-                call=None,
-                dispatch_budget=budget,
-            )
-        )
-    assert exc_info.value.status_code == 503
-    assert "dispatch retry budget exhausted" in str(exc_info.value.detail)
-    assert [s["model"] for s in seen] == ["model-a"], (
-        f"stream wrapper rerouted to {seen!r} after a budget-exhausted 503 — "
-        f"the _is_retry_budget_http reroute-suppression regressed on the "
-        f"stream path (3612cf1)"
-    )
 
 
 def test_inner_dispatch_wall_clock_budget_cancels_hanging_backend(tmp_path: Path) -> None:

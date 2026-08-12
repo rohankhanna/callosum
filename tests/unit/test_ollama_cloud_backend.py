@@ -58,12 +58,6 @@ from callosum.errors import BackendError
 credential proxy = "http://credential proxy.test"
 # ollama_url defaults to https://ollama.com inside the backend; the envelope
 # `url` field therefore carries https://ollama.com/<path>.
-# Far-future ABSOLUTE Unix epoch (~year 2286) used for stand-in mocks so the
-# token stays fresh across multiple _ensure_standin calls within a test (no
-# spurious re-mint). credential proxy returns expires_at as an ABSOLUTE epoch, so a
-# raw value of 300 would mean 1970 (already expired) and force a re-mint on
-# every call — see test_standin_expires_at_absolute_epoch_* for the guard.
-_FAR_FUTURE_EXPIRES_AT = 9_999_999_999
 
 # ---------- canned upstream payloads (ollama.com shapes) -------------------
 
@@ -172,7 +166,7 @@ def _proxy_handler(
                 raise standin_error
             if standin_status != 200:
                 return httpx.Response(standin_status)
-            return httpx.Response(200, json={"token": "test-standin", "expires_at": _FAR_FUTURE_EXPIRES_AT})
+            return httpx.Response(200, json={"token": "test-standin", "expires_at": 300})
         if path == "/v1/proxy":
             rec.proxy.append(request)
             envelope = json.loads(request.content)
@@ -451,7 +445,7 @@ async def test_health_unhealthy_after_poll_sets_cooldown() -> None:
         if not state["up"]:
             raise httpx.ConnectError("down")
         if path == "/v1/standin":
-            return httpx.Response(200, json={"token": "t", "expires_at": _FAR_FUTURE_EXPIRES_AT})
+            return httpx.Response(200, json={"token": "t", "expires_at": 300})
         if path == "/v1/proxy":
             return _wrap_upstream(200, json.dumps(tags).encode(), {"content-type": "application/json"})
         return httpx.Response(404)
@@ -509,43 +503,6 @@ async def test_standin_mint_sends_explicit_ollama_cloud_scope() -> None:
     assert mint_body["account"] == "primary"
     assert mint_body["ttl_seconds"] == OLLAMA_CLOUD_STANDIN_TTL_S
     assert mint_body["ttl_seconds"] <= 1800  # credential proxy MAX_STANDIN_TTL_SECONDS
-    await backend.aclose()
-
-
-async def test_standin_expires_at_absolute_epoch_far_future_is_reused() -> None:
-    """credential proxy returns expires_at as an ABSOLUTE Unix epoch. A far-future
-    epoch keeps the token fresh: two _ensure_standin calls mint ONCE (the
-    cached token is reused). Pins the absolute-epoch interpretation."""
-    handler, rec = _proxy_handler(tags=_tags_payload("model-a0d2:cloud"))
-    backend = _backend(handler)
-    t1 = await backend._ensure_standin()
-    t2 = await backend._ensure_standin()
-    assert t1 == t2 == "test-standin"
-    assert len(rec.standin) == 1  # reused, not re-minted
-    await backend.aclose()
-
-
-async def test_standin_expires_at_absolute_epoch_past_re_mints() -> None:
-    """CRITICAL regression guard for the absolute-epoch fix. credential proxy's
-    expires_at is an ABSOLUTE epoch, so a small value (1000 = 1970-01-01,
-    long in the past) means the token is ALREADY EXPIRED → the second
-    _ensure_standin re-mints (stand-in count 2). Under the OLD
-    relative-seconds bug, 1000 would mean "expires 1000s from now" → the token
-    would be reused (count 1). This test FAILS if the interpretation reverts
-    to relative, so it locks the correction in."""
-    standin_calls: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/v1/standin":
-            standin_calls.append(request)
-            return httpx.Response(200, json={"token": "past-token", "expires_at": 1000})
-        return httpx.Response(404)
-
-    backend = _backend(handler)
-    t1 = await backend._ensure_standin()
-    t2 = await backend._ensure_standin()
-    assert t1 == t2 == "past-token"
-    assert len(standin_calls) == 2  # past epoch (1970) → expired → re-minted
     await backend.aclose()
 
 

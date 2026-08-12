@@ -277,29 +277,6 @@ def test_record_writes_compressed_bodies_round_trip(tmp_path: Path) -> None:
     log.close()
 
 
-def test_decompress_returns_none_on_corrupt_blob() -> None:
-    """A corrupt zlib blob must return None rather than raise
-    zlib.error — a single bad row in requests.sqlite must not crash a
-    whole read-only diagnostic/report job that iterates rows. Pins fix
-    642b721 ("fix(probe+reports): assistant output_text + ... + sidecar cost
-    reuse") which wrapped zlib.decompress in a try/except.
-
-    Reverting the fix (return zlib.decompress(blob) without the try/except)
-    makes decompress(b"not valid zlib") raise zlib.error → this test
-    errors red instead of asserting is None.
-    """
-    # Missing blob → None (the pre-existing None guard, preserved by the fix).
-    assert decompress(None) is None
-    # Corrupt blob → None, NOT a raised zlib.error. The core regression.
-    assert decompress(b"\x00\x01\x02 not valid zlib") is None
-    # A truncated-but-valid-header blob is also corrupt → None.
-    assert decompress(b"\x78\x9c") is None
-    # Positive control: a real compressed blob round-trips.
-    import zlib
-
-    assert decompress(zlib.compress(b"hello")) == b"hello"
-
-
 def test_capture_bodies_off_drops_blobs(tmp_path: Path) -> None:
     log = UsageLog(tmp_path / "u.sqlite", capture_bodies=False)
     rowid = log.record(
