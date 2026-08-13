@@ -131,6 +131,6 @@ the code.
 
 ## Reporting issues / security
 
-This project does not yet publish a separate security policy. If you
-believe you have found a security-sensitive issue, do not open a public
-issue — contact the maintainer directly through a private channel.
+For security-sensitive issues, see [`SECURITY.md`](SECURITY.md) — do not
+open a public issue. Report vulnerabilities privately via GitHub's
+Private Security Advisory feature on this repository.
