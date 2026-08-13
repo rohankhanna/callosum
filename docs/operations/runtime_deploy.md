@@ -125,9 +125,9 @@ curl -s http://127.0.0.1:8765/status | jq '.backends[] | select(.id=="ollama-clo
 curl -s http://127.0.0.1:8765/models | jq '.data[] | select(.id|test(":cloud")) | .id'
 ```
 
-`:cloud`-suffixed models catalog from the daemon's `/api/tags` and are
-classified `callosum:remote/...` (e.g.
-`callosum:remote/glm-5.1:cloud:default`). The local lane catalogs from
+`:cloud`-suffixed models catalog from ollama.com's `/api/tags` (reached
+through the credential proxy proxy, not the local daemon) and are classified
+`callosum:remote/...` (e.g. `callosum:remote/glm-5.1:cloud:default`). The local lane catalogs from
 local LLM gateway's `/v1/models` serving endpoint, which excludes unmanaged
 `:cloud` models, so there is no double-list. Cloud cells enter the
 per-cell minimum-coverage grid, so the quota may route some real

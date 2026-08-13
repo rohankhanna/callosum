@@ -783,18 +783,24 @@ quota data.
 When `[usage_log] path = "..."` is set, every backend call is recorded as a row in a SQLite database. Combined with `capture_bodies = true` (default during the modeling phase), this is the data corpus for figuring out how `(model, reasoning_effort, token counts)` translate into the opaque "usage percent" Codex Plus accounts decrement against.
 
 Peer-quality capture is stored separately from live routing decisions.
-Nonce-validated `<<qop ...>>` opinions are persisted in
-`peer_quality_opinions`; new rows include an exact subject request id
-when the judging model returns it, while older rows fall back to the
-latest prior same-session subject-cell match. The shadow label job can
-write conservative `quality_score` candidates with
+The primary capture path is a synchronous post-completion sidecar judge
+that reads the captured request/response from the usage log and writes
+an opinion out-of-band; the legacy in-band `<<qop ...>>` injection path
+is retired as the default and is opt-in behind
+`CALLOSUM_PEER_QUALITY_INBAND_ENABLED` (default off). Opinions are
+persisted in `peer_quality_opinions`; new rows include an exact subject
+request id when the judging model returns it, while older rows fall
+back to the latest prior same-session subject-cell match. The shadow
+label job can write conservative `quality_score` candidates with
 `quality_label_method='peer_quality_v1'`. These labels feed the
 configured quality predictor (currently `cell_majority_prior`); the
 job does not switch live routing by itself.
 
-Capture is opt-in. Set `CALLOSUM_PEER_QUALITY_CAPTURE_RATE` to a value
-above `0` before expecting new peer opinions or capture metrics. `/status`
-reports the current setting under `router.peer_quality_capture`. For a
+The sidecar judge is ON by default
+(`CALLOSUM_PEER_QUALITY_SIDECAR_ENQUEUE_RATE`, default `0.1`); setting
+`CALLOSUM_PEER_QUALITY_CAPTURE_RATE` alone does NOT enable capture.
+`/status` reports the sidecar under `router.peer_quality_sidecar_enqueue`
+and the legacy in-band path under `router.peer_quality_capture`. For a
 managed service, use the reversible capture-window flow in
 `docs/operations/dispatch.md` rather than editing the unit file directly.
 
