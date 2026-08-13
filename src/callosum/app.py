@@ -366,9 +366,9 @@ async def _sidecar_judge_task(
         )
         if not subjects:
             return
-        subject_request_id, subject_model, subject_reasoning_effort, user_prompt_text, subject_response_text = (
-            subjects[0]
-        )
+        subject_request_id, subject_model, subject_reasoning_effort, user_prompt_text, subject_response_text = subjects[
+            0
+        ]
         candidate = SidecarJudgeCandidate(
             id=None,
             request_id=None,
@@ -1592,9 +1592,7 @@ def create_app(
     # are NOT cached and stay fresh; the routing-enforcement uses of
     # cell_sample_counts (the effort-cap / quota coverage checks further down)
     # are also NOT cached and stay live. TTL is env-tunable.
-    _status_obs_cache = TtlCache(
-        float(os.environ.get("CALLOSUM_STATUS_OBS_TTL_S", "120"))
-    )
+    _status_obs_cache = TtlCache(float(os.environ.get("CALLOSUM_STATUS_OBS_TTL_S", "120")))
 
     def _compute_status_obs(log: UsageLog) -> dict[str, Any]:
         report: dict[str, Any] = {}
@@ -3634,9 +3632,7 @@ _PARTIAL_TAG_PREFIX_RE = re.compile(r"<[</]?[A-Za-z0-9._-]*(?:\|[A-Za-z0-9._-]*)
 # reassemble it. This second pattern holds such a partial, but ONLY when the
 # provenance shape (slug|[slug|]digits) is fully present up front — so ordinary
 # "x < y" prose (no pipe|digits) is still emitted immediately, never buffered.
-_PARTIAL_PROVENANCE_ATTRS_RE = re.compile(
-    r"<[</]?[A-Za-z0-9._-]+\|(?:[A-Za-z0-9._-]+\|)?\d+(?:\s[^>]*)?$"
-)
+_PARTIAL_PROVENANCE_ATTRS_RE = re.compile(r"<[</]?[A-Za-z0-9._-]+\|(?:[A-Za-z0-9._-]+\|)?\d+(?:\s[^>]*)?$")
 
 # Final / accumulated-text events. These carry the FULL response text after
 # streaming completes, and Hermes / codex-cli often read from them for the

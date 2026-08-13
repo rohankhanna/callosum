@@ -25,6 +25,7 @@ from callosum.usage_log import UsageLog, UsageLogEntry
 # scrub_snippet
 # ---------------------------------------------------------------------------
 
+
 def test_scrub_redacts_openai_api_key() -> None:
     out = scrub_snippet("the key is sk-abcdefghijklmnopqrstuvwxyz0123 and done")
     assert "sk-abcdefghijklmnopqrstuvwxyz0123" not in out
@@ -77,6 +78,7 @@ def test_scrub_empty_returns_empty() -> None:
 # ---------------------------------------------------------------------------
 # format_feedback_redirect / build_redirect_message
 # ---------------------------------------------------------------------------
+
 
 def test_format_feedback_redirect_scrubs_and_formats() -> None:
     msg = format_feedback_redirect(
@@ -140,6 +142,7 @@ def test_build_redirect_message_uses_prescrubbed_input() -> None:
 # reserved auto-send switch (scoped-A4, OFF, not wired)
 # ---------------------------------------------------------------------------
 
+
 def test_auto_send_disabled_by_default(monkeypatch) -> None:
     monkeypatch.delenv("CALLOSUM_FEEDBACK_AUTO_SEND_ENABLED", raising=False)
     assert feedback_auto_send_enabled() is False
@@ -168,6 +171,7 @@ def test_auto_send_not_wired_error_is_raised_for_future_guard() -> None:
 # UsageLog feedback-suggestion audit methods
 # ---------------------------------------------------------------------------
 
+
 def _entry(**overrides: object) -> UsageLogEntry:
     base: dict[str, object] = dict(
         ts_start=1000.0,
@@ -192,9 +196,17 @@ def _entry(**overrides: object) -> UsageLogEntry:
     return UsageLogEntry(**base)  # type: ignore[arg-type]
 
 
-def _flag(log: UsageLog, *, prompt: str, response: str, detector: str = "user",
-          session_id: str = "sess-1", model: str = "gpt-x", effort: str = "medium",
-          ts_start: float = 1000.0) -> int:
+def _flag(
+    log: UsageLog,
+    *,
+    prompt: str,
+    response: str,
+    detector: str = "user",
+    session_id: str = "sess-1",
+    model: str = "gpt-x",
+    effort: str = "medium",
+    ts_start: float = 1000.0,
+) -> int:
     """Insert a request row, then flag it quality_score=-1 with snippet text."""
     rid = log.record(
         _entry(
@@ -216,8 +228,7 @@ def _flag(log: UsageLog, *, prompt: str, response: str, detector: str = "user",
     return rid
 
 
-def _good(log: UsageLog, *, prompt: str = "ok prompt", response: str = "ok response",
-          ts_start: float = 1000.0) -> int:
+def _good(log: UsageLog, *, prompt: str = "ok prompt", response: str = "ok response", ts_start: float = 1000.0) -> int:
     """Insert a request row with a +1 quality score (not a bad output)."""
     rid = log.record(_entry(ts_start=ts_start, ts_end=ts_start + 0.25))
     conn = sqlite3.connect(log.path)
@@ -347,9 +358,7 @@ def test_feedback_suggestions_table_created_on_fresh_db(tmp_path: Path) -> None:
     # on a fresh DB so the methods work without a separate migration.
     log = UsageLog(tmp_path / "u.sqlite")
     conn = sqlite3.connect(tmp_path / "u.sqlite")
-    row = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='feedback_suggestions'"
-    ).fetchone()
+    row = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='feedback_suggestions'").fetchone()
     conn.close()
     assert row is not None
     # And the count method works (returns 0, not a "no such table" error).

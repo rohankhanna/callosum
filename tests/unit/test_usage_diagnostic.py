@@ -232,7 +232,9 @@ def test_token_time_series_groups_by_traffic_kind(tmp_path: Path) -> None:
     db = tmp_path / "u.sqlite"
     log = UsageLog(db, capture_bodies=True)
     log.record(_entry(ts_start=1_000.0, prompt_tokens=40, req_payload={"input": "a"}, traffic_kind="operator"))
-    log.record(_entry(ts_start=1_100.0, prompt_tokens=60, req_payload={"input": "b"}, traffic_kind="min_coverage_quota"))
+    log.record(
+        _entry(ts_start=1_100.0, prompt_tokens=60, req_payload={"input": "b"}, traffic_kind="min_coverage_quota")
+    )
     log.record(
         _entry(ts_start=1_200.0, prompt_tokens=20, req_payload={"input": "c"}, traffic_kind="peer_quality_capture")
     )
@@ -419,9 +421,7 @@ def test_on_arm_responses_segments_into_four_kinds(tmp_path: Path) -> None:
     segs = {s.kind: s for s in turns[0].segment_summaries}
     assert set(segs) == {"stable_front", "provenance_mutated_history", "live_tail", "peer_opinion_suffix"}
     # Tag overhead is counted inside the mutated-history segment (bytes sent).
-    assert segs["provenance_mutated_history"].chars == len(
-        "<model-a0e7|medium|42>did the thing</model-a0e7|medium|42>"
-    )
+    assert segs["provenance_mutated_history"].chars == len("<model-a0e7|medium|42>did the thing</model-a0e7|medium|42>")
     assert segs["peer_opinion_suffix"].chars == len(_AUDIT_INSTRUCTION)
     assert segs["live_tail"].chars == len("now do this")
     # Char-share apportionment is conserved within rounding drift (4 segments).
@@ -525,7 +525,10 @@ def test_has_peer_quality_signature_truth_table() -> None:
     assert has_peer_quality_signature({}) is False
     assert has_peer_quality_signature({"messages": [{"role": "user", "content": "hi"}]}) is False
     assert has_peer_quality_signature({"input": [{"role": "assistant", "content": "plain text"}]}) is False
-    assert has_peer_quality_signature({"messages": [{"role": "assistant", "content": "<model-a0e7|42>x</model-a0e7|42>"}]}) is True
+    assert (
+        has_peer_quality_signature({"messages": [{"role": "assistant", "content": "<model-a0e7|42>x</model-a0e7|42>"}]})
+        is True
+    )
     assert has_peer_quality_signature({"messages": [{"role": "developer", "content": _AUDIT_INSTRUCTION}]}) is True
     assert has_peer_quality_signature({"instructions": _AUDIT_INSTRUCTION}) is True
 
@@ -547,12 +550,7 @@ def test_is_tool_turn_truth_table() -> None:
     # Chat Completions: a tool-result message -> True.
     assert is_tool_turn({"messages": [{"role": "tool", "content": "42"}]}) is True
     # Chat Completions: an assistant turn carrying tool_calls -> True.
-    assert (
-        is_tool_turn(
-            {"messages": [{"role": "assistant", "content": "", "tool_calls": [{"id": "call_1"}]}]}
-        )
-        is True
-    )
+    assert is_tool_turn({"messages": [{"role": "assistant", "content": "", "tool_calls": [{"id": "call_1"}]}]}) is True
     # Responses API: function_call_output -> True.
     assert is_tool_turn({"input": [{"type": "function_call_output", "output": "42"}]}) is True
     # Responses API: function_call -> True.

@@ -55,8 +55,7 @@ _INBAND_UPSTREAM_OWNER = (
     "(contingent on the compatibility branch branch merging)"
 )
 _INBAND_CLOSE_CONDITION = (
-    "substrate fronts this cell's responses surface and strips in-band "
-    "reasoning tags (stream + non-stream)"
+    "substrate fronts this cell's responses surface and strips in-band reasoning tags (stream + non-stream)"
 )
 
 # Candidate in-band tag pairs the probe looks for in message content.

@@ -405,14 +405,10 @@ def cmd_usage_ollama_cloud(args: argparse.Namespace) -> int:
     # Read-only fetch from the credential proxy loopback; no DB, no daemon required.
     # Env vars mirror __main__.py's usage-source wiring so the CLI and the
     # daemon agree on which credential proxy/account to query.
-    custody_url = os.environ.get(
-        "CALLOSUM_OLLAMA_CLOUD_USAGE_URL", "http://127.0.0.1:7342"
-    )
+    custody_url = os.environ.get("CALLOSUM_OLLAMA_CLOUD_USAGE_URL", "http://127.0.0.1:7342")
     account = os.environ.get("CALLOSUM_OLLAMA_CLOUD_USAGE_ACCOUNT", "primary")
     try:
-        standin_ttl = int(
-            os.environ.get("CALLOSUM_OLLAMA_CLOUD_STANDIN_TTL", "1800")
-        )
+        standin_ttl = int(os.environ.get("CALLOSUM_OLLAMA_CLOUD_STANDIN_TTL", "1800"))
     except ValueError:
         standin_ttl = 1800
     text = asyncio.run(

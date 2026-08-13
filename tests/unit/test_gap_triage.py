@@ -45,6 +45,7 @@ def _finding(
 
 # --- structured-field path -------------------------------------------------
 
+
 def test_structured_author_temporary_adapter_is_returned() -> None:
     cls = classify_gap(
         _finding(
@@ -89,18 +90,12 @@ def test_structured_verify_fix_is_returned() -> None:
 def test_structured_file_upstream_gap_is_not_actionable() -> None:
     # file_upstream_gap is metadata on the step-2 adapter, not a loop
     # action; classify_gap does not produce it from a single finding.
-    assert (
-        classify_gap(_finding(suggested_action=ContractAction.FILE_UPSTREAM_GAP))
-        is None
-    )
+    assert classify_gap(_finding(suggested_action=ContractAction.FILE_UPSTREAM_GAP)) is None
 
 
 def test_structured_residual_translate_is_not_actionable() -> None:
     # residual_translate needs registry/substrate state (P4/P5).
-    assert (
-        classify_gap(_finding(suggested_action=ContractAction.RESIDUAL_TRANSLATE))
-        is None
-    )
+    assert classify_gap(_finding(suggested_action=ContractAction.RESIDUAL_TRANSLATE)) is None
 
 
 def test_unknown_suggested_action_falls_back_to_hint() -> None:
@@ -114,6 +109,7 @@ def test_unknown_suggested_action_falls_back_to_hint() -> None:
 
 # --- backward-compat fallback path (old-shape findings) -------------------
 
+
 def test_old_shape_non_sentinel_hint_authors_temporary_adapter() -> None:
     cls = classify_gap(
         {"dimension": "tool_call_shape", "status": "fail", "adapter_hint": "parse tool-call JSON from message text"}
@@ -124,9 +120,7 @@ def test_old_shape_non_sentinel_hint_authors_temporary_adapter() -> None:
 
 def test_old_shape_sentinel_hint_quarantines() -> None:
     for sentinel in NO_FEASIBLE_ADAPTER_HINT_SUBSTRINGS:
-        cls = classify_gap(
-            {"dimension": "tool_call_shape", "status": "fail", "adapter_hint": f"{sentinel} here"}
-        )
+        cls = classify_gap({"dimension": "tool_call_shape", "status": "fail", "adapter_hint": f"{sentinel} here"})
         assert cls is not None
         assert cls.action is ContractAction.QUARANTINE_CELL, sentinel
 
@@ -139,12 +133,11 @@ def test_old_shape_no_hint_is_not_actionable() -> None:
 
 # --- non-fail statuses are never actionable --------------------------------
 
+
 def test_pass_error_skipped_are_not_actionable() -> None:
     for status in ("pass", "error", "skipped"):
         assert (
-            classify_gap(
-                {"dimension": "tool_call_shape", "status": status, "adapter_hint": "no feasible adapter"}
-            )
+            classify_gap({"dimension": "tool_call_shape", "status": status, "adapter_hint": "no feasible adapter"})
             is None
         ), status
 

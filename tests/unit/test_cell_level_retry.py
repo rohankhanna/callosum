@@ -491,9 +491,7 @@ def test_inner_dispatch_backend_attempt_cap_stops_before_second_backend(
     assert "backend attempt cap reached" in str(exc_info.value.detail)
 
 
-def test_stops_when_aggregate_retry_budget_is_exhausted(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_stops_when_aggregate_retry_budget_is_exhausted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A single request should not stack multiple slow retries once the
     aggregate per-cell-retry budget is spent."""
     log = UsageLog(tmp_path / "u.sqlite")

@@ -596,9 +596,7 @@ def test_cell_capabilities_tier2_off_mode_ignores_stopgap(monkeypatch: pytest.Mo
     monkeypatch.setenv("CALLOSUM_LOCAL_CAPABILITIES_STOPGAP", "off")
     src = _FakeSource([_catalog_entry("m", throughput=25.0)])
     backend = LocalModelRegistryBackend(id="test", source=src)
-    backend._capabilities_cache["m"] = _ollama_stopgap(
-        modalities=frozenset({"text", "image"}), supports_tools=False
-    )
+    backend._capabilities_cache["m"] = _ollama_stopgap(modalities=frozenset({"text", "image"}), supports_tools=False)
     caps = backend.cell_capabilities("m")
     assert caps.modalities == frozenset({"text"})
     assert caps.supports_tools is True
@@ -642,9 +640,7 @@ def test_cell_capabilities_tier1_hub_canonical_wins_per_field_over_stopgap() -> 
         caps={"m": _hub_row("m", modalities=frozenset({"text"}), supports_tools=False)},
     )
     backend = LocalModelRegistryBackend(id="test", source=src)
-    backend._capabilities_cache["m"] = _ollama_stopgap(
-        modalities=frozenset({"text", "image"}), supports_tools=True
-    )
+    backend._capabilities_cache["m"] = _ollama_stopgap(modalities=frozenset({"text", "image"}), supports_tools=True)
     caps = backend.cell_capabilities("m")
     assert caps.modalities == frozenset({"text"})
     assert caps.supports_tools is False
@@ -660,9 +656,7 @@ def test_cell_capabilities_tier1_hub_silent_field_falls_through_to_stopgap(monke
         caps={"m": _hub_row("m", modalities=frozenset({"text"}), supports_tools=None)},
     )
     backend = LocalModelRegistryBackend(id="test", source=src)
-    backend._capabilities_cache["m"] = _ollama_stopgap(
-        modalities=frozenset({"text", "image"}), supports_tools=True
-    )
+    backend._capabilities_cache["m"] = _ollama_stopgap(modalities=frozenset({"text", "image"}), supports_tools=True)
     caps = backend.cell_capabilities("m")
     assert caps.modalities == frozenset({"text"})  # hub canonical
     assert caps.supports_tools is True  # tier-2 stopgap fills the hub-silent field
@@ -676,9 +670,7 @@ def test_cell_capabilities_preserves_local_perf_fields_across_tiers() -> None:
         caps={"m": _hub_row("m", modalities=frozenset({"text"}), supports_tools=False)},
     )
     backend = LocalModelRegistryBackend(id="test", source=src)
-    backend._capabilities_cache["m"] = _ollama_stopgap(
-        modalities=frozenset({"text", "image"}), supports_tools=False
-    )
+    backend._capabilities_cache["m"] = _ollama_stopgap(modalities=frozenset({"text", "image"}), supports_tools=False)
     caps = backend.cell_capabilities("m")
     assert caps.local_throughput_tps == 25.0
     assert caps.local_gpu_seconds_per_token == 0.04
@@ -792,9 +784,7 @@ def test_vision_request_routes_to_local_vision_cell_through_capability_filter() 
     additive: zero regression for the text-only routing that works today."""
     src = _FakeSource([_catalog_entry("vision-cell", throughput=25.0)])
     backend = LocalModelRegistryBackend(id="test", source=src)
-    backend._capabilities_cache["vision-cell"] = _ollama_stopgap(
-        modalities=frozenset({"text", "image"})
-    )
+    backend._capabilities_cache["vision-cell"] = _ollama_stopgap(modalities=frozenset({"text", "image"}))
     cell = Cell(model="vision-cell", reasoning_effort="default")
 
     capabilities_of = {cell: backend.cell_capabilities(cell.model)}

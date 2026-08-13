@@ -110,9 +110,7 @@ def test_record_extracts_previous_response_id_from_client_request(tmp_path: Path
     logged with used=1 and the raw id, so one real session answers off the
     log whether the codex CLI emits previous_response_id."""
     log = UsageLog(tmp_path / "u.sqlite")
-    rowid = log.record(
-        _entry(client_request={"input": [], "previous_response_id": "resp_abc123"})
-    )
+    rowid = log.record(_entry(client_request={"input": [], "previous_response_id": "resp_abc123"}))
     conn = sqlite3.connect(tmp_path / "u.sqlite")
     used, prev = conn.execute(
         "SELECT used_previous_response_id, previous_response_id FROM requests WHERE id = ?",
@@ -159,9 +157,7 @@ def test_record_persists_cache_creation_tokens(tmp_path: Path) -> None:
     log = UsageLog(tmp_path / "u.sqlite")
     rowid = log.record(_entry(cache_creation_tokens=42))
     conn = sqlite3.connect(tmp_path / "u.sqlite")
-    (cct,) = conn.execute(
-        "SELECT cache_creation_tokens FROM requests WHERE id = ?", (rowid,)
-    ).fetchone()
+    (cct,) = conn.execute("SELECT cache_creation_tokens FROM requests WHERE id = ?", (rowid,)).fetchone()
     assert cct == 42
     log.close()
 
