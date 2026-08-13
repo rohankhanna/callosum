@@ -25,7 +25,9 @@ DIMENSION_NAME = "tool_call_at_scale"
 # Class-B at-scale tool-call gaps share the tool-call-shape upstream owner;
 # the substrate owns generic tool-call shape translation for cells it fronts.
 _TOOL_CALL_UPSTREAM_OWNER = "local LLM gateway / LiteLLM tool-call shape translation"
-_TOOL_CALL_CLOSE_CONDITION = "substrate fronting this cell translates tool-call shape both directions"
+_TOOL_CALL_CLOSE_CONDITION = (
+    "substrate fronting this cell translates tool-call shape both directions"
+)
 
 # 80K chars ≈ 22K tokens. Substantial enough to expose context-
 # sensitive failures but well under the 200K-token real-Codex extremes
@@ -80,7 +82,8 @@ async def probe(
             dimension=DIMENSION_NAME,
             status="pass",
             summary=(
-                f"structured function_call emitted at ~{_PROMPT_CHARS} char prompt; no tool-call-shaped text leak"
+                f"structured function_call emitted at ~{_PROMPT_CHARS} char "
+                "prompt; no tool-call-shaped text leak"
             ),
             evidence={
                 "prompt_chars": _PROMPT_CHARS,

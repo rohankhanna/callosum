@@ -61,7 +61,9 @@ def build_predictor(predictor_id: str) -> QualityPredictor:
     try:
         predictor_cls = _PREDICTOR_IMPLS[predictor_id]
     except KeyError as e:
-        raise ValueError(f"unknown quality_predictor {predictor_id!r}; available: {sorted(_PREDICTOR_IMPLS)}") from e
+        raise ValueError(
+            f"unknown quality_predictor {predictor_id!r}; available: {sorted(_PREDICTOR_IMPLS)}"
+        ) from e
     return predictor_cls()
 
 

@@ -404,16 +404,13 @@ class LocalModelRegistryBackend:
         if not ollama_entries:
             return
         tasks = [
-            (
-                m.id,
-                asyncio.create_task(
-                    fetch_ollama_capabilities(
-                        self._client,
-                        endpoint=m.endpoint,
-                        runtime_model=m.runtime_model,
-                    )
-                ),
-            )
+            (m.id, asyncio.create_task(
+                fetch_ollama_capabilities(
+                    self._client,
+                    endpoint=m.endpoint,
+                    runtime_model=m.runtime_model,
+                )
+            ))
             for m in ollama_entries
         ]
         results = await asyncio.gather(*(t for _, t in tasks), return_exceptions=True)

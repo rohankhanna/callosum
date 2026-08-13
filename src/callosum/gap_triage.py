@@ -109,7 +109,9 @@ def classify_gap(finding: Mapping[str, Any]) -> ContractClassification | None:
     upstream_owner = finding.get("upstream_owner")
     close_condition = finding.get("close_condition")
     upstream_owner_str = upstream_owner if isinstance(upstream_owner, str) and upstream_owner else None
-    close_condition_str = close_condition if isinstance(close_condition, str) and close_condition else None
+    close_condition_str = (
+        close_condition if isinstance(close_condition, str) and close_condition else None
+    )
 
     if action is ContractAction.QUARANTINE_CELL:
         reason = (

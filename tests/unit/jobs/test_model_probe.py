@@ -90,9 +90,7 @@ def test_preflight_admits_blocks_when_weights_too_big() -> None:
 def test_preflight_admits_when_headroom_ok(monkeypatch) -> None:
     monkeypatch.setattr(mp, "_read_memavailable_bytes", lambda: 80 * 1024**3)
     admitted, _ = mp.preflight_admits(
-        pool_bytes=100 * 1024**3,
-        weight_bytes=20 * 1024**3,
-        utilization_fraction=0.8,
+        pool_bytes=100 * 1024**3, weight_bytes=20 * 1024**3, utilization_fraction=0.8,
         activation_margin_bytes=2 * 1024**3,
     )
     assert admitted is True
@@ -105,7 +103,9 @@ def test_kv_budget_subtracts_weights_and_margin() -> None:
     )
     assert budget == int(200 * gib * 0.8) - 50 * gib - 4 * gib  # 106 GiB
     # floored at DEFAULT_KV_FLOOR_BYTES when the computed budget would be tiny
-    small = mp._kv_budget_bytes(pool_bytes=100, weight_bytes=90, utilization_fraction=0.8, activation_margin_bytes=5)
+    small = mp._kv_budget_bytes(
+        pool_bytes=100, weight_bytes=90, utilization_fraction=0.8, activation_margin_bytes=5
+    )
     assert small == mp.DEFAULT_KV_FLOOR_BYTES
 
 

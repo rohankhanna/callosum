@@ -186,9 +186,7 @@ async def test_effort_cap_removes_top_effort_from_auto_candidates(tmp_path: Path
         conn.commit()
     finally:
         conn.close()
-    cfg = AutoRouterConfig(
-        effort_cap_enabled=True, effort_cap_pct=0.01, effort_cap_top_n=2, effort_cap_window_seconds=604_800
-    )
+    cfg = AutoRouterConfig(effort_cap_enabled=True, effort_cap_pct=0.01, effort_cap_top_n=2, effort_cap_window_seconds=604_800)
     async with _client(backends=[backend], usage_log=log, auto_router_config=cfg) as client:
         r = await client.post("/v1/responses", json={"model": "auto-learning", "input": []})
         assert r.status_code == 200
@@ -249,7 +247,9 @@ async def test_quota_forces_tool_turns_too(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_quota_skips_infeasible_under_floor_cell(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_quota_skips_infeasible_under_floor_cell(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Quota forcing should not redirect onto an under-floor cell the latency
     guard already considers structurally too slow for this request."""
     from callosum.config import AutoRouterConfig
@@ -294,9 +294,7 @@ async def test_quota_skips_infeasible_under_floor_cell(monkeypatch: pytest.Monke
     finally:
         conn.close()
     assert rows
-    quota_rows = [
-        (model, reasoning) for effective_mode, model, reasoning in rows if effective_mode == "min_coverage_quota"
-    ]
+    quota_rows = [(model, reasoning) for effective_mode, model, reasoning in rows if effective_mode == "min_coverage_quota"]
     assert all(model != "model-a0c3" for model, _reasoning in quota_rows)
 
 

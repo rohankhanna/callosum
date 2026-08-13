@@ -238,21 +238,19 @@ def test_cold_start_estimate_is_still_verifiable(tmp_path: Path) -> None:
 def test_local_performance_model_overrides_generic_local_prior(tmp_path: Path) -> None:
     est = TimeUsageEstimator(
         TimeModelProvider(tmp_path / "missing.sqlite"),
-        local_performance_model=lambda cell: (
-            build_local_performance_model(
-                model_id=cell.model,
-                quantization="bf16",
-                pool_bytes=121 * 1024**3,
-                free_bytes=94 * 1024**3,
-                weight_bytes=40 * 1024**3,
-                kv_bytes_per_token=2 * 1024**2,
-                activation_bytes=2 * 1024**3,
-                estimated_tokens_per_second=20.0,
-                prefill_ms_per_token=1.5,
-            )
-            if cell.model == "model-a0b6"
-            else None
-        ),
+        local_performance_model=lambda cell: build_local_performance_model(
+            model_id=cell.model,
+            quantization="bf16",
+            pool_bytes=121 * 1024**3,
+            free_bytes=94 * 1024**3,
+            weight_bytes=40 * 1024**3,
+            kv_bytes_per_token=2 * 1024**2,
+            activation_bytes=2 * 1024**3,
+            estimated_tokens_per_second=20.0,
+            prefill_ms_per_token=1.5,
+        )
+        if cell.model == "model-a0b6"
+        else None,
     )
     inp = EstimateInput(cell=Cell("model-a0b6", "medium"), input_tokens=1000, output=_forecast(1000, 2000))
     out = est.estimate(inp)

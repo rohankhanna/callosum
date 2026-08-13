@@ -86,7 +86,9 @@ async def stall_guarded(
         yield item
 
 
-def error_from_response(response: httpx.Response, *, status_code: int | None = None) -> BackendError:
+def error_from_response(
+    response: httpx.Response, *, status_code: int | None = None
+) -> BackendError:
     """Build a classified BackendError from an upstream non-2xx response.
 
     Includes a truncated copy of the upstream response body in the message

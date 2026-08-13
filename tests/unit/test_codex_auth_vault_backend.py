@@ -537,14 +537,8 @@ async def test_responses_strips_custom_tool_call_namespace(tmp_path: Path) -> No
     request_body = {
         "model": "model-a0d0",
         "input": [
-            {
-                "type": "custom_tool_call",
-                "status": "completed",
-                "call_id": "call_n",
-                "name": "exec",
-                "namespace": "exec",
-                "input": "await tools.exec_command({})",
-            },
+            {"type": "custom_tool_call", "status": "completed", "call_id": "call_n",
+             "name": "exec", "namespace": "exec", "input": "await tools.exec_command({})"},
         ],
     }
     try:
@@ -583,7 +577,8 @@ async def test_responses_stream_strips_custom_tool_call_namespace(tmp_path: Path
     request_body = {
         "model": "model-a0d0",
         "input": [
-            {"type": "custom_tool_call", "call_id": "call_s", "name": "exec", "namespace": "exec", "input": "x"},
+            {"type": "custom_tool_call", "call_id": "call_s", "name": "exec",
+             "namespace": "exec", "input": "x"},
         ],
     }
     try:
@@ -607,11 +602,11 @@ async def test_responses_stream_strips_bogus_custom_tool_call_namespace(tmp_path
     auth_path = tmp_path / "auth.json"
     _write_auth_json(auth_path)
     sse = (
-        b"event: response.output_item.added\n"
+        b'event: response.output_item.added\n'
         b'data: {"type":"response.output_item.added","item":{"id":"ctc_1",'
         b'"type":"custom_tool_call","call_id":"call_e","name":"exec",'
         b'"namespace":"exec","input":"await tools.exec_command({})"}}\n\n'
-        b"event: response.output_item.added\n"
+        b'event: response.output_item.added\n'
         b'data: {"type":"response.output_item.added","item":{"id":"ctc_2",'
         b'"type":"custom_tool_call","call_id":"call_f","name":"followup_task",'
         b'"namespace":"collaboration","input":"{}"}}\n\n'
@@ -629,27 +624,17 @@ async def test_responses_stream_strips_bogus_custom_tool_call_namespace(tmp_path
     )
     try:
         chunks: list[bytes] = []
-        async for chunk in backend.responses_stream(
-            {
-                "model": "model-a0d0",
-                "input": [
-                    {
-                        "type": "additional_tools",
-                        "role": "developer",
-                        "tools": [
-                            {"type": "custom", "name": "exec"},
-                            {
-                                "type": "namespace",
-                                "name": "collaboration",
-                                "tools": [
-                                    {"type": "function", "name": "followup_task"},
-                                ],
-                            },
-                        ],
-                    },
-                ],
-            }
-        ):
+        async for chunk in backend.responses_stream({
+            "model": "model-a0d0",
+            "input": [
+                {"type": "additional_tools", "role": "developer", "tools": [
+                    {"type": "custom", "name": "exec"},
+                    {"type": "namespace", "name": "collaboration", "tools": [
+                        {"type": "function", "name": "followup_task"},
+                    ]},
+                ]},
+            ],
+        }):
             chunks.append(chunk)
         out = b"".join(chunks).decode("utf-8")
         items = []

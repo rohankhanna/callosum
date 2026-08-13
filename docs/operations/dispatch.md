@@ -80,10 +80,9 @@ The job:
   request. New opinion rows prefer exact `subject_request_id`; legacy
   rows fall back to the latest prior same-session subject-cell request.
 - Requires peer-quality capture to have produced source rows first.
-  Check `/status` at `router.peer_quality_sidecar_enqueue` (the primary
-  capture path, on by default at rate `0.1`) and
-  `router.peer_quality_capture` (the legacy in-band path, off unless
-  `CALLOSUM_PEER_QUALITY_INBAND_ENABLED=1`).
+  Check `/status` at `router.peer_quality_capture`; the configured
+  `CALLOSUM_PEER_QUALITY_CAPTURE_RATE` must be above `0` for new
+  capture attempts.
 - With `--dry-run`, resolves and reports candidate progress through the
   same path but does not update request rows or checkpoint state.
 - Writes only rows where `quality_score IS NULL`, using
@@ -105,32 +104,23 @@ EXAMPLE_ONLY python -m callosum.jobs.peer_quality_shadow_report \
 
 ## Run a bounded peer-quality capture window
 
-The sidecar judge is the primary capture path and is ON by default
-(`CALLOSUM_PEER_QUALITY_SIDECAR_ENQUEUE_RATE`, default `0.1` = judge
-~1 in 10 eligible turns, out-of-band after the response completes).
-The legacy in-band `<<qop>>` injection path is RETIRED as the default
-and is opt-in behind `CALLOSUM_PEER_QUALITY_INBAND_ENABLED` (default
-off); setting `CALLOSUM_PEER_QUALITY_CAPTURE_RATE` alone does NOT
-enable capture.
-
-For a managed user service, raise the sidecar enqueue rate via a
-temporary systemd user-manager environment rather than editing the
-unit file:
+For a managed user service, use a temporary systemd user-manager
+environment rather than editing the unit file:
 
 ```
-systemctl --user set-environment CALLOSUM_PEER_QUALITY_SIDECAR_ENQUEUE_RATE=1
+systemctl --user set-environment CALLOSUM_PEER_QUALITY_CAPTURE_RATE=1
 callosum service restart
-curl -s http://127.0.0.1:8765/status | jq '.router.peer_quality_sidecar_enqueue, .router.peer_quality_shadow'
+curl -s http://127.0.0.1:8765/status | jq '.router.peer_quality_capture, .router.peer_quality_shadow'
 ```
 
 Then send normal multi-turn traffic through the proxy. Peer opinions need
 same-session prior assistant turns from a different cell; single-turn
 traffic and tool-only turns do not produce useful source rows.
 
-When the window is over, restore the default rate and restart:
+When the window is over, disable capture and restart:
 
 ```
-systemctl --user unset-environment CALLOSUM_PEER_QUALITY_SIDECAR_ENQUEUE_RATE
+systemctl --user unset-environment CALLOSUM_PEER_QUALITY_CAPTURE_RATE
 callosum service restart
 ```
 

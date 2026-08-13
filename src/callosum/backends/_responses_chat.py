@@ -380,7 +380,8 @@ async def chat_to_responses_stream(
     what_label: str,
     on_success: Any,
     on_transport_error: Any,
-    open_chat_stream: Callable[[dict[str, Any], dict[str, str]], AsyncContextManager[httpx.Response]] | None = None,
+    open_chat_stream: Callable[[dict[str, Any], dict[str, str]], AsyncContextManager[httpx.Response]]
+    | None = None,
     upstream_status_of: Callable[[httpx.Response], int] | None = None,
 ) -> AsyncIterator[bytes]:
     """Translate a streamed Chat-Completions response into Responses-API SSE.
@@ -585,7 +586,11 @@ async def chat_to_responses_stream(
                 headers=headers,
             )
         async with stream_ctx as response:
-            upstream_status = upstream_status_of(response) if upstream_status_of is not None else response.status_code
+            upstream_status = (
+                upstream_status_of(response)
+                if upstream_status_of is not None
+                else response.status_code
+            )
             if handle is not None:
                 handle.upstream_status = upstream_status
                 handle.upstream_headers = dict(response.headers)

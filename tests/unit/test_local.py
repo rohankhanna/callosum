@@ -342,7 +342,7 @@ def test_models_enrich_entries_with_capability_matrix(monkeypatch) -> None:
                         "ceiling_search_completion_tokens_per_second": 10.0,
                     },
                 }
-            ],
+            ]
         }
     )
     calls = []

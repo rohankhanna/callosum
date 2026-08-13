@@ -179,7 +179,9 @@ def _proxy_handler(
                 return httpx.Response(custody_status[target])
             if target == "/api/tags":
                 payload = tags_default() if callable(tags_default) else tags_default
-                return _wrap_upstream(200, json.dumps(payload).encode(), {"content-type": "application/json"})
+                return _wrap_upstream(
+                    200, json.dumps(payload).encode(), {"content-type": "application/json"}
+                )
             if target == "/api/show":
                 name = json.loads(_unb64(envelope["body_b64"])).get("name")
                 if name in shows:
@@ -262,7 +264,9 @@ async def test_suffix_filter_keeps_only_cloud_models() -> None:
     """With the `:cloud` suffix override, only `:cloud`-suffixed models are
     cloud-metered; bare local models stay on the LocalModelRegistry / litellm_gateway
     path and must NOT appear in this backend's catalog."""
-    handler, _ = _proxy_handler(tags=_tags_payload("model-a0d2:cloud", "model-a0b4", "model-a0f3:cloud", "model-a0d5"))
+    handler, _ = _proxy_handler(
+        tags=_tags_payload("model-a0d2:cloud", "model-a0b4", "model-a0f3:cloud", "model-a0d5")
+    )
     backend = _backend(handler, model_suffix=":cloud")
     await backend.health()
     assert backend.advertised_models == frozenset({"model-a0d2:cloud", "model-a0f3:cloud"})
@@ -398,7 +402,6 @@ async def test_quota_snapshot_is_none() -> None:
 async def test_health_reports_network_when_custody_unreachable() -> None:
     """A transport error reaching credential proxy (on /v1/standin during catalog
     refresh) flips health to "network" — health() MUST NOT raise."""
-
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection refused")
 
@@ -670,7 +673,9 @@ async def test_responses_stream_emits_responses_sse() -> None:
     backend = _backend(handler)
     handle = CallHandle()
     events: list[dict[str, Any]] = []
-    async for raw in backend.responses_stream({"model": "model-a0d2:cloud", "input": "say hi", "stream": True}, handle):
+    async for raw in backend.responses_stream(
+        {"model": "model-a0d2:cloud", "input": "say hi", "stream": True}, handle
+    ):
         for ev_chunk in raw.split(b"\n\n"):
             for line in ev_chunk.split(b"\n"):
                 if line.startswith(b"data:"):
@@ -709,7 +714,9 @@ async def test_responses_stream_upstream_401_is_auth_invalid() -> None:
     handle = CallHandle()
     with pytest.raises(BackendError) as exc_info:
         # Drain the generator so the upstream-401 raise surfaces.
-        async for _ in backend.responses_stream({"model": "model-a0d2:cloud", "input": "say hi", "stream": True}, handle):
+        async for _ in backend.responses_stream(
+            {"model": "model-a0d2:cloud", "input": "say hi", "stream": True}, handle
+        ):
             pass
     assert exc_info.value.classification == "auth_invalid"
     assert handle.upstream_status == 401
@@ -774,7 +781,9 @@ async def test_transport_error_marks_unhealthy() -> None:
 # ---------- default-OFF registration ----------------------------------------
 
 
-def test_backend_absent_from_build_when_env_unset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_backend_absent_from_build_when_env_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """CALLOSUM_OLLAMA_CLOUD_ENABLED unset → build_runtime_backends does NOT
     append the backend. Default-OFF is a no-op for live routing."""
     from callosum.__main__ import build_runtime_backends

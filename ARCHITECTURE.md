@@ -80,10 +80,8 @@ All paths are under `src/callosum/`.
   filters cells against modality and tool-support requirements.
   `predictor/` predicts quality per cell (`cell_majority_prior` — a
   per-cell majority-baseline prior that deliberately ignores prompt
-  embeddings; `cell_mean_prior` — a shadow-only per-cell mean prior that
-  preserves outcome magnitude, not the default; the embedding/KNN
-  predictor was evaluated and removed. `uniform` returns 0.5 and is the
-  cold-start fallback). `selector/`
+  embeddings; the embedding/KNN predictor was evaluated and removed.
+  `uniform` returns 0.5 and is the cold-start fallback). `selector/`
   picks one cell from the predicted-and-scored candidate set
   (cost-weighted today). `router.py` orchestrates the pipeline.
   `cost_model.py` derives each remote model's compatibility `cost_rank`

@@ -46,12 +46,16 @@ def test_expected_tests_and_models_populate() -> None:
 
 
 def test_model_weight_identity_parsed() -> None:
-    cfg = _tier2_config_from_args(_args(tier2_models=["model-a0b5:default", "model-a0c7:"]))
+    cfg = _tier2_config_from_args(
+        _args(tier2_models=["model-a0b5:default", "model-a0c7:"])
+    )
     assert cfg.models == (("model-a0b5", "default"), ("model-a0c7", None))
 
 
 def test_threshold_and_min_samples_override() -> None:
-    cfg = _tier2_config_from_args(_args(tier2_min_samples=50, tier2_threshold=0.75, tier2_suite_version="behavior-v2"))
+    cfg = _tier2_config_from_args(
+        _args(tier2_min_samples=50, tier2_threshold=0.75, tier2_suite_version="behavior-v2")
+    )
     assert cfg.min_samples == 50
     assert cfg.threshold == 0.75
     assert cfg.suite_version == "behavior-v2"

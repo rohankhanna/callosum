@@ -71,12 +71,14 @@ DEFAULT_KV_FLOOR_BYTES = 1 * 1024**3  # never request less than 1 GiB KV
 # artifact change" philosophy while still giving a broken combo enough chances.
 # Env-tunable: CALLOSUM_MODEL_PROBE_FAILURE_BACKOFF_S,
 # CALLOSUM_MODEL_PROBE_FAILURE_CONFIRMATIONS.
-DEFAULT_FAILURE_BACKOFF_S = 86400.0  # 24h between confirmation attempts
-DEFAULT_FAILURE_CONFIRMATIONS = 3  # consecutive failures -> confirmed broken
+DEFAULT_FAILURE_BACKOFF_S = 86400.0       # 24h between confirmation attempts
+DEFAULT_FAILURE_CONFIRMATIONS = 3         # consecutive failures -> confirmed broken
 
 _RE_MAX_SEQ_LEN = re.compile(r"max_seq_len=(\d+)")
 _RE_KV_CACHE_TOKENS = re.compile(r"GPU KV cache size:\s*([\d,]+)\s*tokens")
-_RE_MAX_CONCURRENCY = re.compile(r"Maximum concurrency for\s*([\d,]+)\s*tokens per request:\s*([\d.]+)x")
+_RE_MAX_CONCURRENCY = re.compile(
+    r"Maximum concurrency for\s*([\d,]+)\s*tokens per request:\s*([\d.]+)x"
+)
 _RE_TARGET = re.compile(r"target=(\S+)")
 
 
@@ -295,13 +297,8 @@ def _write_backoff_state(path: Path, state: dict[str, dict[str, Any]]) -> None:
 
 
 def _record_backoff_failure(
-    path: Path | None,
-    model_id: str,
-    content_hash: str,
-    lane_hash: str,
-    reason: str,
-    ts: float,
-    confirmations: int,
+    path: Path | None, model_id: str, content_hash: str, lane_hash: str,
+    reason: str, ts: float, confirmations: int,
 ) -> None:
     """Record a probe failure for the (model, weights, lane) combo.
 
@@ -321,7 +318,10 @@ def _record_backoff_failure(
         return
     state = _read_backoff_state(path)
     entry = state.get(model_id, {})
-    same_combo = entry.get("content_hash") == content_hash and entry.get("lane_hash") == lane_hash
+    same_combo = (
+        entry.get("content_hash") == content_hash
+        and entry.get("lane_hash") == lane_hash
+    )
     failures = (int(entry.get("consecutive_failures", 0)) + 1) if same_combo else 1
     state[model_id] = {
         "content_hash": content_hash,
@@ -380,9 +380,7 @@ def _stack_versions(cli_command: list[str]) -> str:
         try:
             proc = subprocess.run(
                 [py, "-c", "import vllm,transformers;print(vllm.__version__,transformers.__version__)"],
-                capture_output=True,
-                text=True,
-                timeout=8,
+                capture_output=True, text=True, timeout=8,
             )
         except (OSError, subprocess.TimeoutExpired):
             continue
@@ -446,25 +444,20 @@ def execute_model_probe(
     content_hash = _content_hash(artifact_dir) if artifact_dir else None
 
     # Dedup: skip if we already have a result for this exact artifact.
-    if (
-        content_hash is not None
-        and usage_log.get_model_fit_probe_for_hash(model_id=model.id, content_hash=content_hash) is not None
-    ):
+    if content_hash is not None and usage_log.get_model_fit_probe_for_hash(
+        model_id=model.id, content_hash=content_hash
+    ) is not None:
         logger.info("model_probe: %s already probed for content_hash=%s; skipping", model.id, content_hash[:12])
         return None
 
     # Two-tier failure backoff (lane-aware). Compute the lane identity and the
     # resolved knobs once; they are reused at every failure-return below.
     bo_path = backoff_state_path if backoff_state_path is not None else _backoff_state_path(usage_log)
-    backoff_s = (
-        failure_backoff_s
-        if failure_backoff_s is not None
-        else float(os.environ.get("CALLOSUM_MODEL_PROBE_FAILURE_BACKOFF_S", str(DEFAULT_FAILURE_BACKOFF_S)))
+    backoff_s = failure_backoff_s if failure_backoff_s is not None else float(
+        os.environ.get("CALLOSUM_MODEL_PROBE_FAILURE_BACKOFF_S", str(DEFAULT_FAILURE_BACKOFF_S))
     )
-    confirmations = (
-        failure_confirmations
-        if failure_confirmations is not None
-        else int(os.environ.get("CALLOSUM_MODEL_PROBE_FAILURE_CONFIRMATIONS", str(DEFAULT_FAILURE_CONFIRMATIONS)))
+    confirmations = failure_confirmations if failure_confirmations is not None else int(
+        os.environ.get("CALLOSUM_MODEL_PROBE_FAILURE_CONFIRMATIONS", str(DEFAULT_FAILURE_CONFIRMATIONS))
     )
     lane_hash = _lane_hash(model.id, cli) if content_hash is not None else ""
     if content_hash is not None and bo_path is not None:
@@ -475,20 +468,16 @@ def execute_model_probe(
                 logger.info(
                     "model_probe: %s confirmed broken (lane=%s artifact=%s); "
                     "skipping until the lane or model artifact changes",
-                    model.id,
-                    lane_hash[:8],
-                    content_hash[:8],
+                    model.id, lane_hash[:8], content_hash[:8],
                 )
                 return None
             age = ts - float(bo.get("last_failed_at", 0.0))
             if age < backoff_s:
                 logger.info(
-                    "model_probe: %s last failed %.0fs ago (< confirm-backoff %.0fs, attempt %d/%d); skipping",
-                    model.id,
-                    age,
-                    backoff_s,
-                    int(bo.get("consecutive_failures", 0)),
-                    confirmations,
+                    "model_probe: %s last failed %.0fs ago (< confirm-backoff %.0fs, "
+                    "attempt %d/%d); skipping",
+                    model.id, age, backoff_s,
+                    int(bo.get("consecutive_failures", 0)), confirmations,
                 )
                 return None
             # Backoff expired -> fall through for another confirmation attempt.
@@ -511,13 +500,8 @@ def execute_model_probe(
     if not admitted:
         logger.info("model_probe: %s deferred by preflight (%s)", model.id, reason)
         _record_backoff_failure(
-            bo_path,
-            model.id,
-            content_hash or "",
-            lane_hash,
-            f"preflight: {reason}",
-            ts,
-            confirmations,
+            bo_path, model.id, content_hash or "", lane_hash,
+            f"preflight: {reason}", ts, confirmations,
         )
         return None
 
@@ -542,25 +526,15 @@ def execute_model_probe(
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
         logger.warning("model_probe: serve invocation failed for %s (%s)", model.id, exc)
         _record_backoff_failure(
-            bo_path,
-            model.id,
-            content_hash or "",
-            lane_hash,
-            f"serve invocation failed: {exc}",
-            ts,
-            confirmations,
+            bo_path, model.id, content_hash or "", lane_hash,
+            f"serve invocation failed: {exc}", ts, confirmations,
         )
         return None
     if proc.returncode != 0:
         logger.warning("model_probe: serve returned rc=%s for %s: %s", proc.returncode, model.id, proc.stderr[:300])
         _record_backoff_failure(
-            bo_path,
-            model.id,
-            content_hash or "",
-            lane_hash,
-            f"serve rc={proc.returncode}: {proc.stderr[:200]}",
-            ts,
-            confirmations,
+            bo_path, model.id, content_hash or "", lane_hash,
+            f"serve rc={proc.returncode}: {proc.stderr[:200]}", ts, confirmations,
         )
         return None
     try:
@@ -568,13 +542,8 @@ def execute_model_probe(
     except json.JSONDecodeError:
         logger.warning("model_probe: serve emitted non-JSON for %s", model.id)
         _record_backoff_failure(
-            bo_path,
-            model.id,
-            content_hash or "",
-            lane_hash,
-            "serve emitted non-JSON",
-            ts,
-            confirmations,
+            bo_path, model.id, content_hash or "", lane_hash,
+            "serve emitted non-JSON", ts, confirmations,
         )
         return None
 
@@ -585,13 +554,8 @@ def execute_model_probe(
             tail = serve_payload.get("log_tail") or proc.stderr
             logger.warning("model_probe: %s did not reach readiness: %s", model.id, str(tail)[:300])
             _record_backoff_failure(
-                bo_path,
-                model.id,
-                content_hash or "",
-                lane_hash,
-                f"not ready: {str(tail)[:200]}",
-                ts,
-                confirmations,
+                bo_path, model.id, content_hash or "", lane_hash,
+                f"not ready: {str(tail)[:200]}", ts, confirmations,
             )
             return None
         with open(log_file, encoding="utf-8", errors="replace") as fh:
@@ -599,13 +563,8 @@ def execute_model_probe(
     except OSError as exc:
         logger.warning("model_probe: could not read log_file %s: %s", log_file, exc)
         _record_backoff_failure(
-            bo_path,
-            model.id,
-            content_hash or "",
-            lane_hash,
-            f"log read failed: {exc}",
-            ts,
-            confirmations,
+            bo_path, model.id, content_hash or "", lane_hash,
+            f"log read failed: {exc}", ts, confirmations,
         )
         return None
     finally:
@@ -620,12 +579,8 @@ def execute_model_probe(
             fit.max_concurrency,
         )
         _record_backoff_failure(
-            bo_path,
-            model.id,
-            content_hash or "",
-            lane_hash,
-            f"log missing fit lines (max_seq_len={fit.max_seq_len} concurrency={fit.max_concurrency})",
-            ts,
+            bo_path, model.id, content_hash or "", lane_hash,
+            f"log missing fit lines (max_seq_len={fit.max_seq_len} concurrency={fit.max_concurrency})", ts,
             confirmations,
         )
         return None

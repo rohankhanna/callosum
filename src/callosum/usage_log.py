@@ -48,7 +48,6 @@ def _model_fit_probe_from_row(row: tuple[Any, ...]) -> ModelFitProbe:
         probed_at=float(row[6]),
     )
 
-
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1556,7 +1555,11 @@ class UsageLog:
                 " achievable_context_tokens, max_concurrency, fits_full_context, probed_at"
                 " FROM model_fit_probes"
             ).fetchall()
-        return {probe.model_id: probe for probe in (_model_fit_probe_from_row(r) for r in rows) if probe is not None}
+        return {
+            probe.model_id: probe
+            for probe in (_model_fit_probe_from_row(r) for r in rows)
+            if probe is not None
+        }
 
     def last_request_end_ts(self) -> float | None:
         """Most recent request completion timestamp, or None if no requests.

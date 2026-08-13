@@ -43,7 +43,8 @@ def _is_training_precision(quant: str | None, family: str) -> bool:
         return True
     fam = family.lower()
     return any(
-        fam.startswith(prefix) and q == native.lower() for prefix, native in _NATIVE_TRAINING_QUANT_PREFIX.items()
+        fam.startswith(prefix) and q == native.lower()
+        for prefix, native in _NATIVE_TRAINING_QUANT_PREFIX.items()
     )
 
 
@@ -86,7 +87,9 @@ def curate_local_models(
             reasons.append("not-runnable-on-host")
         if model.local_status and model.local_status not in {"working", "unmeasured", "unknown"}:
             reasons.append(f"status:{model.local_status}")
-        if model.local_quantization is not None and not _is_training_precision(model.local_quantization, model.family):
+        if model.local_quantization is not None and not _is_training_precision(
+            model.local_quantization, model.family
+        ):
             reasons.append(f"non-training-precision:{model.local_quantization}")
         if probe_results is not None:
             probe = probe_results.get(model.id)

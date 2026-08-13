@@ -48,11 +48,15 @@ class Surface(StrEnum):
 class ConformanceInvariant(StrEnum):
     USAGE_INPUT_TOKENS_PRESENT = "usage_input_tokens_present"
     OUTPUT_NEVER_EMPTY = "output_never_empty"
-    ORDERING_REASONING_THEN_FUNCTION_CALL_THEN_MESSAGE = "ordering_reasoning_then_function_call_then_message"
+    ORDERING_REASONING_THEN_FUNCTION_CALL_THEN_MESSAGE = (
+        "ordering_reasoning_then_function_call_then_message"
+    )
     PARALLEL_TOOL_CALL_COLLAPSE = "parallel_tool_call_collapse"
     FINISH_REASON_MAPPING = "finish_reason_mapping"
     REASONING_ALIAS_UNIFICATION = "reasoning_alias_unification"
-    TOOL_CALL_AT_SCALE_PROBE_THROUGH_SUBSTRATE = "tool_call_at_scale_probe_through_substrate"
+    TOOL_CALL_AT_SCALE_PROBE_THROUGH_SUBSTRATE = (
+        "tool_call_at_scale_probe_through_substrate"
+    )
 
 
 @dataclass(frozen=True)
@@ -72,7 +76,11 @@ class SurfaceConformance:
         return all(v is True for v in self.invariant_results.values())
 
     def violations(self) -> tuple[ConformanceInvariant, ...]:
-        return tuple(inv for inv, v in self.invariant_results.items() if v is False)
+        return tuple(
+            inv
+            for inv, v in self.invariant_results.items()
+            if v is False
+        )
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-safe dict. Surface and
@@ -82,7 +90,9 @@ class SurfaceConformance:
         so the module purity promise holds)."""
         return {
             "surface": self.surface.value,
-            "invariant_results": {inv.value: val for inv, val in self.invariant_results.items()},
+            "invariant_results": {
+                inv.value: val for inv, val in self.invariant_results.items()
+            },
         }
 
     @classmethod
@@ -156,7 +166,9 @@ class CellContractProfile:
         return {
             "cell_id": self.cell_id,
             "advertised_surfaces": sorted(s.value for s in self.advertised_surfaces),
-            "conformance": {s.value: sc.to_dict() for s, sc in self.conformance.items()},
+            "conformance": {
+                s.value: sc.to_dict() for s, sc in self.conformance.items()
+            },
             "capability_fields": sorted(self.capability_fields),
             "residual_translation": self.residual_translation,
         }
@@ -233,7 +245,9 @@ class ContractClassification:
     close_condition: str | None = None
 
 
-def classify_contract(profile: CellContractProfile, requested: Surface) -> ContractClassification:
+def classify_contract(
+    profile: CellContractProfile, requested: Surface
+) -> ContractClassification:
     """Classify a cell against the substrate contract for requested.
 
     Decision order (ADR section 5):
@@ -270,7 +284,9 @@ def classify_contract(profile: CellContractProfile, requested: Surface) -> Contr
             reason=f"surface {requested.value} not advertised and no residual translator",
         )
 
-    missing = tuple(sorted(REQUIRED_CAPABILITY_FIELDS - profile.capability_fields))
+    missing = tuple(
+        sorted(REQUIRED_CAPABILITY_FIELDS - profile.capability_fields)
+    )
     if missing:
         return ContractClassification(
             action=ContractAction.FILE_UPSTREAM_GAP,
@@ -294,7 +310,10 @@ def classify_contract(profile: CellContractProfile, requested: Surface) -> Contr
         return ContractClassification(
             action=ContractAction.QUARANTINE_CELL,
             surface=requested,
-            reason=(f"surface {requested.value} advertised but {len(violations)} conformance invariant(s) violated"),
+            reason=(
+                f"surface {requested.value} advertised but "
+                f"{len(violations)} conformance invariant(s) violated"
+            ),
             violated_invariants=violations,
         )
 

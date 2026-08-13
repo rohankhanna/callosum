@@ -48,7 +48,7 @@ database "autonomy.sqlite\nlevel + audit log" as Autonomy
 package "scheduled auto-dev loop" as AutoDev {
   component "systemd timer\ncallosum-dev-loop.timer" as Timer
   component "Perception snapshot\nprofiles + canary + failures\n+ transform commits" as Perception
-  component "Pre-filter gate\ngap-triage action / canary divergence\n/ recent transform failures" as Gate
+  component "Pre-filter gate\nadapter hint / canary divergence\n/ recent transform failures" as Gate
   component "External coding agent\nCALLOSUM_DEV_LOOP_AGENT" as Agent
   component "Scope + test gate\ntransforms only\nruff + pytest" as Verify
   folder "auto/dev-loop-*\nreview branches" as Branches
@@ -70,7 +70,7 @@ API --> UsageLog : record request,\nstatus, tokens
 
 Harness --> Dispatch : direct cell probes
 Harness --> OperatorState : read/write probe cache
-Harness --> Profiles : write findings\nand gap-triage actions
+Harness --> Profiles : write findings\nand adapter hints
 Canary --> UsageLog : failure observations\nand mode stats
 
 Timer --> Perception : every 6h

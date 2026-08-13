@@ -19,7 +19,6 @@ Quirks the probe MUST catch:
   * function_call items with malformed or missing required fields
   * backend errors - probe fails closed
 """
-
 from __future__ import annotations
 
 from typing import Any

@@ -51,7 +51,9 @@ def has_peer_quality_signature(payload: dict[str, Any]) -> bool:
     tag wrapping assistant text. Pure and regex-only; safe on any payload shape.
     """
     instructions = _collapse_text(payload.get("instructions"))
-    if isinstance(instructions, str) and (_AUDIT_SENTINEL in instructions or _QOP_MARKER_PREFIX in instructions):
+    if isinstance(instructions, str) and (
+        _AUDIT_SENTINEL in instructions or _QOP_MARKER_PREFIX in instructions
+    ):
         return True
     for role, text in _iter_message_items(payload):
         if not text:
@@ -87,7 +89,9 @@ def extract_peer_quality_segments(payload: dict[str, Any]) -> list[tuple[str, st
 
     items = _iter_message_items(payload)
     tagged_idxs = [
-        i for i, (role, text) in enumerate(items) if role == "assistant" and bool(_PROVENANCE_TAG_RE.search(text or ""))
+        i
+        for i, (role, text) in enumerate(items)
+        if role == "assistant" and bool(_PROVENANCE_TAG_RE.search(text or ""))
     ]
     audit_idx = next(
         (i for i, (role, text) in enumerate(items) if role == "developer" and _AUDIT_SENTINEL in (text or "")),
@@ -887,7 +891,10 @@ async def render_ollama_cloud_usage_text(
 
 def _format_ollama_usage(payload: OllamaUsage | None) -> str:
     if payload is None:
-        return "ollama-cloud usage: unavailable (credential proxy down, cookies expired, or not configured)"
+        return (
+            "ollama-cloud usage: unavailable "
+            "(credential proxy down, cookies expired, or not configured)"
+        )
     plan = payload.plan or "<unknown plan>"
     lines = [
         "ollama-cloud usage:",

@@ -150,7 +150,11 @@ def check_ordering_reasoning_then_function_call_then_message(
     if not isinstance(response, dict):
         return None
     cls = classify_response(response)
-    ranks = [_ORDERING_RANK[t] for t in cls.output_item_types if t in _ORDERING_RANK]
+    ranks = [
+        _ORDERING_RANK[t]
+        for t in cls.output_item_types
+        if t in _ORDERING_RANK
+    ]
     return ranks == sorted(ranks)
 
 
@@ -231,7 +235,9 @@ def check_tool_call_at_scale_probe_through_substrate(
 
 # Registry: invariant -> its check. The builder knows which probe body drives
 # each check (the check itself only inspects the response).
-CHECKS: Mapping[ConformanceInvariant, Callable[[dict[str, Any] | None], bool | None]] = {
+CHECKS: Mapping[
+    ConformanceInvariant, Callable[[dict[str, Any] | None], bool | None]
+] = {
     ConformanceInvariant.USAGE_INPUT_TOKENS_PRESENT: check_usage_input_tokens_present,
     ConformanceInvariant.OUTPUT_NEVER_EMPTY: check_output_never_empty,
     ConformanceInvariant.ORDERING_REASONING_THEN_FUNCTION_CALL_THEN_MESSAGE: (
@@ -240,7 +246,9 @@ CHECKS: Mapping[ConformanceInvariant, Callable[[dict[str, Any] | None], bool | N
     ConformanceInvariant.PARALLEL_TOOL_CALL_COLLAPSE: check_parallel_tool_call_collapse,
     ConformanceInvariant.FINISH_REASON_MAPPING: check_finish_reason_mapping,
     ConformanceInvariant.REASONING_ALIAS_UNIFICATION: check_reasoning_alias_unification,
-    ConformanceInvariant.TOOL_CALL_AT_SCALE_PROBE_THROUGH_SUBSTRATE: (check_tool_call_at_scale_probe_through_substrate),
+    ConformanceInvariant.TOOL_CALL_AT_SCALE_PROBE_THROUGH_SUBSTRATE: (
+        check_tool_call_at_scale_probe_through_substrate
+    ),
 }
 
 
@@ -318,7 +326,9 @@ async def build_contract_profile(
     """
     conformance: dict[Surface, SurfaceConformance] = {}
     for surface in advertised_surfaces & PROBEABLE_SURFACES:
-        results: dict[ConformanceInvariant, bool | None] = {inv: None for inv in ConformanceInvariant}
+        results: dict[ConformanceInvariant, bool | None] = {
+            inv: None for inv in ConformanceInvariant
+        }
         # Probe A — small tool-call: invariants 1, 2, 5 (+ the at-scale gate).
         resp_small = await _run_probe(
             call_responses,
@@ -350,7 +360,9 @@ async def build_contract_profile(
             call_responses,
             parallel_tool_call_probe_body(),
             cell_id,
-            ((ConformanceInvariant.PARALLEL_TOOL_CALL_COLLAPSE, check_parallel_tool_call_collapse),),
+            (
+                (ConformanceInvariant.PARALLEL_TOOL_CALL_COLLAPSE, check_parallel_tool_call_collapse),
+            ),
             results,
         )
         # Probe D — at-scale tool-call: invariant 7, gated on the small probe.
@@ -427,9 +439,9 @@ def contract_inputs_from_catalog(
     for obj in (entry, cap_row):
         if obj is None:
             continue
-        attrs: Mapping[str, Any] = (
-            obj if isinstance(obj, Mapping) else {a: getattr(obj, a, None) for a in dir(obj) if not a.startswith("_")}
-        )
+        attrs: Mapping[str, Any] = obj if isinstance(obj, Mapping) else {
+            a: getattr(obj, a, None) for a in dir(obj) if not a.startswith("_")
+        }
         for field_name in REQUIRED_CAPABILITY_FIELDS:
             if field_name in attrs and attrs[field_name] is not None:
                 present.add(field_name)
@@ -441,7 +453,9 @@ def contract_inputs_from_catalog(
 # Mirrors capability/profile.py's atomic tmp+replace pattern.
 # --------------------------------------------------------------------
 
-DEFAULT_CONTRACT_DIR = Path(__file__).resolve().parents[3] / "logs" / "contract_profiles"
+DEFAULT_CONTRACT_DIR = (
+    Path(__file__).resolve().parents[3] / "logs" / "contract_profiles"
+)
 
 
 def contract_profile_path(cell_id: str, base: Path | None = None) -> Path:

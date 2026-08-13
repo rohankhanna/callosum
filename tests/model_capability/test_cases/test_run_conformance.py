@@ -55,7 +55,9 @@ def test_run_conformance_per_cell(
     per-cell classify_contract verdict is logged, not asserted."""
     for cell in cells_to_probe:
 
-        async def _call_responses(body: dict[str, Any], _cell: str = cell) -> dict[str, Any]:
+        async def _call_responses(
+            body: dict[str, Any], _cell: str = cell
+        ) -> dict[str, Any]:
             """Closure over the httpx client and the current cell. Posts to
             /admin/cell-call (which bypasses the router) so each probe lands
             on the intended cell deterministically."""
@@ -90,7 +92,9 @@ def test_run_conformance_per_cell(
         path = save_contract_profile(profile)
         verdict = classify_contract(profile, Surface.RESPONSES)
         conf = profile.conformance.get(Surface.RESPONSES)
-        violated = ", ".join(inv.value for inv in conf.violations()) if conf else "n/a"
+        violated = (
+            ", ".join(inv.value for inv in conf.violations()) if conf else "n/a"
+        )
         _log.info(
             "conformance baseline %s -> %s (violations: %s) saved to %s",
             cell,
@@ -107,6 +111,6 @@ def test_run_conformance_per_cell(
                 ConformanceInvariant.OUTPUT_NEVER_EMPTY,
                 ConformanceInvariant.FINISH_REASON_MAPPING,
             ):
-                assert conf.invariant_results[inv] is not None, (
-                    f"{cell}: always-applicable invariant {inv.value} was left None"
-                )
+                assert (
+                    conf.invariant_results[inv] is not None
+                ), f"{cell}: always-applicable invariant {inv.value} was left None"

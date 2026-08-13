@@ -143,9 +143,15 @@ class CapabilityProfile:
                         adapter_hint=payload.get("adapter_hint"),
                         latency_ms=payload.get("latency_ms"),
                         gap_class=_parse_gap_class(payload.get("gap_class")),
-                        suggested_action=_parse_suggested_action(payload.get("suggested_action")),
-                        upstream_owner=_parse_optional_str(payload.get("upstream_owner")),
-                        close_condition=_parse_optional_str(payload.get("close_condition")),
+                        suggested_action=_parse_suggested_action(
+                            payload.get("suggested_action")
+                        ),
+                        upstream_owner=_parse_optional_str(
+                            payload.get("upstream_owner")
+                        ),
+                        close_condition=_parse_optional_str(
+                            payload.get("close_condition")
+                        ),
                     )
                 except (TypeError, ValueError):
                     continue

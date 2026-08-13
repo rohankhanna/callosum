@@ -370,7 +370,9 @@ class LiteLLMGatewayBackend:
                 chat_url=f"{self._base_url}/v1/chat/completions",
                 body=body,
                 handle=handle,
-                prep_body=lambda b: self._apply_inference_params(_strip_codex_only_fields({**b, "stream": True})),
+                prep_body=lambda b: self._apply_inference_params(
+                    _strip_codex_only_fields({**b, "stream": True})
+                ),
                 headers=self._build_headers(),
                 first_item_timeout_s=LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S,
                 idle_timeout_s=LOCAL_STREAM_IDLE_TIMEOUT_S,

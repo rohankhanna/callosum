@@ -122,7 +122,9 @@ def test_overflows_pool_at_full_context_rejects() -> None:
 
 
 def test_fits_full_context_admits() -> None:
-    curated = curate_local_models([_model("ok")], probe_results={"ok": _probe("ok", fits=True)})
+    curated = curate_local_models(
+        [_model("ok")], probe_results={"ok": _probe("ok", fits=True)}
+    )
     assert curated[0].admitted is True
 
 

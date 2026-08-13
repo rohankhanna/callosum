@@ -52,7 +52,9 @@ _BEARER = re.compile(r"(?i)\bbearer\b\s+[A-Za-z0-9._\-]+")
 # JWTs (three base64url segments, first starts with eyJ).
 _JWT = re.compile(r"eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+")
 # Account / user id values: keep the key name, redact only the value.
-_ACCOUNT_ID = re.compile(r"(?i)\b(chatgpt_user_id|account_id|user[_-]?id)\b[\"'\s:=]+[\"']?([A-Za-z0-9_\-]+)")
+_ACCOUNT_ID = re.compile(
+    r"(?i)\b(chatgpt_user_id|account_id|user[_-]?id)\b[\"'\s:=]+[\"']?([A-Za-z0-9_\-]+)"
+)
 # Long opaque runs (hex / base64 / base64url) of >= 32 chars from the merged
 # alphabet. Catches access tokens, hashes, and encoded blobs that don't match
 # a more specific pattern. False positives on long kebab-case identifiers are

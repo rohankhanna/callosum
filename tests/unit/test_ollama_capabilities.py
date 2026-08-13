@@ -115,7 +115,9 @@ async def test_fetch_success_via_mock_transport() -> None:
     """A 200 with a well-formed body returns parsed capabilities."""
     transport = httpx.MockTransport(lambda request: httpx.Response(200, json=_show_body()))
     async with contextlib.aclosing(httpx.AsyncClient(transport=transport)) as client:
-        caps = await fetch_ollama_capabilities(client, endpoint="http://ollama.local", runtime_model="model-a0d7")
+        caps = await fetch_ollama_capabilities(
+            client, endpoint="http://ollama.local", runtime_model="model-a0d7"
+        )
     assert caps is not None
     assert caps.modalities == frozenset({"text", "image"})
     assert caps.supports_tools is False
@@ -131,7 +133,9 @@ async def test_fetch_connect_error_returns_none() -> None:
 
     transport = httpx.MockTransport(handler)
     async with contextlib.aclosing(httpx.AsyncClient(transport=transport)) as client:
-        caps = await fetch_ollama_capabilities(client, endpoint="http://ollama.local", runtime_model="model-a0d7")
+        caps = await fetch_ollama_capabilities(
+            client, endpoint="http://ollama.local", runtime_model="model-a0d7"
+        )
     assert caps is None
 
 
@@ -139,7 +143,9 @@ async def test_fetch_non_200_returns_none() -> None:
     """A 500 response is swallowed -> None (never raises)."""
     transport = httpx.MockTransport(lambda request: httpx.Response(500, text="boom"))
     async with contextlib.aclosing(httpx.AsyncClient(transport=transport)) as client:
-        caps = await fetch_ollama_capabilities(client, endpoint="http://ollama.local", runtime_model="model-a0d7")
+        caps = await fetch_ollama_capabilities(
+            client, endpoint="http://ollama.local", runtime_model="model-a0d7"
+        )
     assert caps is None
 
 
@@ -151,7 +157,9 @@ async def test_fetch_malformed_json_returns_none() -> None:
 
     transport = httpx.MockTransport(handler)
     async with contextlib.aclosing(httpx.AsyncClient(transport=transport)) as client:
-        caps = await fetch_ollama_capabilities(client, endpoint="http://ollama.local", runtime_model="model-a0d7")
+        caps = await fetch_ollama_capabilities(
+            client, endpoint="http://ollama.local", runtime_model="model-a0d7"
+        )
     assert caps is None
 
 
@@ -168,9 +176,7 @@ async def test_fetch_strips_trailing_slash_and_posts_show() -> None:
     transport = httpx.MockTransport(handler)
     async with contextlib.aclosing(httpx.AsyncClient(transport=transport)) as client:
         caps = await fetch_ollama_capabilities(
-            client,
-            endpoint="http://ollama.local/",
-            runtime_model="model-a0d7",
+            client, endpoint="http://ollama.local/", runtime_model="model-a0d7",
             timeout_s=DEFAULT_HEALTH_TIMEOUT_S,
         )
     assert caps is not None

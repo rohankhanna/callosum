@@ -4,7 +4,6 @@ Extracted so the litellm_gateway and local_direct backends share one parser.
 Returns primitives (not CellCapabilities) so each backend merges with its own
 surrounding fields. Never raises — all failures return None.
 """
-
 from __future__ import annotations
 
 import logging
@@ -24,10 +23,10 @@ DEFAULT_HEALTH_TIMEOUT_S = 2.0
 class OllamaShowCapabilities:
     """Parsed ollama /api/show capability self-report (primitives, not CellCapabilities)."""
 
-    modalities: frozenset[str]  # always includes "text"
+    modalities: frozenset[str]      # always includes "text"
     supports_tools: bool
-    context_window: int  # from model_info *.context_length, else 128_000
-    parameter_count: int | None  # general.parameter_count when present
+    context_window: int            # from model_info *.context_length, else 128_000
+    parameter_count: int | None    # general.parameter_count when present
 
 
 def parse_ollama_show(info: dict[str, Any]) -> OllamaShowCapabilities | None:

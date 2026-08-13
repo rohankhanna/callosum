@@ -74,17 +74,12 @@ end note
 B --> App : stream complete
 App -> UL : record(UsageLogEntry)\n(tokens parsed from response.completed)
 
-opt peer-quality sidecar judge (primary; on by default)
-  App -> App : _spawn_sidecar_judge()\nafter response completes;\nbest-effort, no client latency
-  App -> UL : select_unjudged_cross_cell_subject()\nprior same-session turn from a different cell
-  UL --> App : subject request/response text\n+ served cell
-  App -> U : judge request (out-of-band)\nvia the same backend
-  U --> App : judgement
-  App -> UL : record_peer_quality_opinions()\n(judge cell to subject cell)
-end
-
-opt legacy in-band <<qop>> capture (opt-in; CALLOSUM_PEER_QUALITY_INBAND_ENABLED=1, default off)
-  App -> App : modify outbound body with\nnonce audit instruction
+opt peer-quality capture enabled
+  App -> UL : recent_session_assistant_turns(session_id)
+  UL --> App : prior outputs + served cells
+  App -> App : exact-match prior assistant text\nwrap non-self messages with model|effort tags\nappend nonce audit instruction
+  App -> App : skip if projected body exceeds\ncell context window minus safety margin
+  App -> App : skip tool/function requests\nand prose-less prior turns
   App -> B : modified outbound body
   App -> PQ : parse nonce-bound <<qop ...>>\nstrip echoes/malformed markers
   PQ -> UL : record_peer_quality_opinions()\n(judge cell to subject cell)

@@ -189,7 +189,11 @@ def _strip_namespace_from_custom_tool_calls(obj: Any, namespaced_names: set[str]
     or on a single parsed event."""
     changed = False
     if isinstance(obj, dict):
-        if obj.get("type") == "custom_tool_call" and "namespace" in obj and obj.get("name") not in namespaced_names:
+        if (
+            obj.get("type") == "custom_tool_call"
+            and "namespace" in obj
+            and obj.get("name") not in namespaced_names
+        ):
             del obj["namespace"]
             changed = True
         for v in obj.values():
@@ -229,7 +233,7 @@ def _rewrite_responses_event(event: bytes, namespaced_names: set[str]) -> bytes:
     if data_idx is None:
         return event
     try:
-        obj = json.loads(lines[data_idx][len("data: ") :])
+        obj = json.loads(lines[data_idx][len("data: "):])
     except (ValueError, json.JSONDecodeError):
         return event
     if not _strip_namespace_from_custom_tool_calls(obj, namespaced_names):

@@ -35,14 +35,17 @@ DIMENSION_NAME = "tool_call_shape"
 # fronts. The temporary adapter (parse/lift/strip) retires once the substrate
 # fronting this cell translates tool-call shape both directions.
 _TOOL_CALL_UPSTREAM_OWNER = "local LLM gateway / LiteLLM tool-call shape translation"
-_TOOL_CALL_CLOSE_CONDITION = "substrate fronting this cell translates tool-call shape both directions"
+_TOOL_CALL_CLOSE_CONDITION = (
+    "substrate fronting this cell translates tool-call shape both directions"
+)
 
 # Prose names for the Hermes-family tag formats recognized by
 # _shape_utils._looks_like_tool_call_hermes (kept here without literal
 # angle-bracket tag glyphs so the hint text stays readable and the formats are
 # named once, authoritatively, in _shape_utils).
 _HERMES_TAG_FORMATS_PROSE = (
-    "the Hermes tag formats: a function=NAME block, a tool_call special-token block, or a tool_call pipe marker"
+    "the Hermes tag formats: a function=NAME block, a tool_call "
+    "special-token block, or a tool_call pipe marker"
 )
 
 
@@ -99,8 +102,7 @@ async def probe(
             adapter_hint=(
                 "adapter must strip message-text content that looks like "
                 'a tool call (a JSON object of shape {"name": str, '
-                '"arguments": str|object}, or any of '
-                + _HERMES_TAG_FORMATS_PROSE
+                '"arguments": str|object}, or any of ' + _HERMES_TAG_FORMATS_PROSE
                 + ") before forwarding to the client. The structured "
                 "tool_calls are usable as-is."
             ),
@@ -125,8 +127,7 @@ async def probe(
             adapter_hint=(
                 "adapter must parse message-text content that looks like "
                 'a tool call (a JSON object of shape {"name": str, '
-                '"arguments": str|object}, or any of '
-                + _HERMES_TAG_FORMATS_PROSE
+                '"arguments": str|object}, or any of ' + _HERMES_TAG_FORMATS_PROSE
                 + ") and lift each match into a structured function_call "
                 "item in output[]. Strip the original text. Then deliver "
                 "the rewritten response to the client."

@@ -221,7 +221,9 @@ class CapabilityRow:
                 pool_bytes = int(float(chosen_gb) * 1024**3)
         modalities: frozenset[str] | None = None
         raw_modalities = row.get("modalities")
-        if isinstance(raw_modalities, list) and all(isinstance(m, str) for m in raw_modalities):
+        if isinstance(raw_modalities, list) and all(
+            isinstance(m, str) for m in raw_modalities
+        ):
             normalized = {m.lower() for m in raw_modalities}
             if normalized:
                 normalized.add("text")
