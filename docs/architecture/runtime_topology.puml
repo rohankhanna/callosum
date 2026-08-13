@@ -70,7 +70,7 @@ API --> UsageLog : record request,\nstatus, tokens
 
 Harness --> Dispatch : direct cell probes
 Harness --> OperatorState : read/write probe cache
-Harness --> Profiles : write findings\nand adapter hints
+Harness --> Profiles : write findings\nand gap-triage actions
 Canary --> UsageLog : failure observations\nand mode stats
 
 Timer --> Perception : every 6h

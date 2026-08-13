@@ -22,8 +22,8 @@ strategies, not multiple competing routers.
    `include_hidden=True` so hidden-but-supported upstream lanes are reachable
    only when explicitly named.
 6. **Gate stack** narrows the candidate pool *before* the router:
-   operator/selector mode (backend-kind filter) → canary redirect → concrete
-   pin → denylist. Hidden cells never enter free routing; an explicit pin may
+   canary redirect → operator/selector mode (backend-kind filter) → denylist
+   → concrete pin. Hidden cells never enter free routing; an explicit pin may
    target them and then either dispatch normally or return a specific 503 if no
    backend serves the requested model/effort. Empty pool → 503 (specific
    reason). The backend-kind filter's remote set is two distinct kinds:
@@ -42,7 +42,9 @@ strategies, not multiple competing routers.
 7. **`router.route(body, cells_now)`** — the one decision (`routing/router.py`):
    `extract_features` → `CapabilityFilter` (empty → 400) →
    `QualityPredictor.predict` (`cell_majority_prior` = learned per-cell
-   majority-baseline prior; `uniform` 0.5 is the cold-start fallback) →
+   majority-baseline prior; `cell_mean_prior` = shadow-only per-cell mean
+   prior that preserves outcome magnitude, not the default; `uniform` 0.5
+   is the cold-start fallback) →
    `CostWeightedSelector.select` → `RoutingDecision`. Cold-start (no
    differentiated prediction) explores randomly among capability-filtered,
    window-fitting, **feasibility-eligible** cells (predicted p95 latency under
@@ -124,7 +126,10 @@ capability harness + light probe one-shot; reset-aware quota/cooldown pass.
 **Periodic loops:** `smoke_tester` (liveness/model probing), `cooldown_prober`
 (release backends when quota resets), `codex_catalog_reconciler` (regenerate
 the Codex `/model` picker catalog), `probe_scheduler` sweep (tool-call shape
-verification), `periodic_harness` (capability findings + adapter hints),
+verification), `periodic_harness` (capability findings + gap-triage actions; the
+structured `suggested_action` field is the authoritative signal the
+dev-loop consumes first, `adapter_hint` is the legacy free-prose
+fallback for old-shape findings),
 `model_probe_spawner` (idle-gated; launches the local-model full-context fit
 probe as a short-lived subprocess when the operator is idle and memory
 headroom is sufficient — see `model_fit_probe.md`).
