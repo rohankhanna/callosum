@@ -8,6 +8,7 @@ source and are meant to point follow-on review threads at concrete code nodes.
 
 from __future__ import annotations
 
+import argparse
 import ast
 import json
 import subprocess
@@ -17,7 +18,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
 PACKAGE_ROOT = SRC_ROOT / "callosum"
-OUT_DIR = REPO_ROOT / "docs" / "architecture" / "generated"
+DEFAULT_OUT_DIR = REPO_ROOT / "docs" / "architecture" / "generated"
+OUT_DIR = DEFAULT_OUT_DIR
 
 FOCUS_ROOTS = (
     "callosum.__main__:_run_server",
@@ -462,6 +464,21 @@ def write_index(functions: dict[str, FunctionDefn], edges: dict[str, set[str]]) 
 
 
 def main() -> None:
+    global OUT_DIR
+    parser = argparse.ArgumentParser(
+        description="Generate static call/control-flow reference graphs from the Python AST.",
+    )
+    parser.add_argument(
+        "--out-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Directory to write generated artifacts into. Defaults to docs/architecture/generated/ in the repo root."
+        ),
+    )
+    args = parser.parse_args()
+    if args.out_dir is not None:
+        OUT_DIR = args.out_dir
     functions, imports_by_module = collect()
     edges = build_edges(functions, imports_by_module)
     write_call_graph(functions, edges)
