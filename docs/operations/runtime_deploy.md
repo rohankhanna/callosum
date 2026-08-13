@@ -103,9 +103,14 @@ Environment`. To disable: remove the file (or set the value to `0`),
 ### Ollama Cloud enable (live example)
 
 `CALLOSUM_OLLAMA_CLOUD_ENABLED=1` registers the `OllamaCloudBackend`
-(`BackendKind="ollama_cloud"`) — cloud models served by the local
-ollama daemon under `ollama signin`. Callosum holds NO credential; the
-daemon does. The durable drop-in is
+(`BackendKind="ollama_cloud"`) — cloud models served by ollama.com
+through credential proxy's boundary-native proxy custody. Callosum mints a
+short-TTL `ollama-cloud`-scoped stand-in token at credential proxy's
+`POST /v1/standin` and POSTs each ollama.com call through credential proxy's
+`POST /v1/proxy`(`/stream`); credential proxy injects the real ollama.com API
+key on the final hop, so the real key never enters callosum (it holds
+only the stand-in). This retires the prior local-ollama-daemon `ollama
+signin` chat path. The durable drop-in is
 `~/.config/systemd/user/system-dependency-callosum.service.d/ollama-cloud.conf`:
 
 ```ini
