@@ -26,6 +26,17 @@ from callosum.backends.ollama_cloud import (
 )
 from callosum.backends.ollama_cloud import DEFAULT_OLLAMA_URL as OLLAMA_CLOUD_DEFAULT_URL
 from callosum.backends.ollama_cloud import OllamaCloudBackend, OllamaCloudUsageSource
+from callosum.backends.openrouter import (
+    DEFAULT_CUSTODY_URL as OPENROUTER_DEFAULT_CUSTODY_URL,
+)
+from callosum.backends.openrouter import DEFAULT_BASE_URL as OPENROUTER_DEFAULT_BASE_URL
+from callosum.backends.openrouter import (
+    DEFAULT_BLOCKED_COUNTRIES as OPENROUTER_DEFAULT_BLOCKED_COUNTRIES,
+)
+from callosum.backends.openrouter import (
+    DEFAULT_EXCLUDE_FAMILIES as OPENROUTER_DEFAULT_EXCLUDE_FAMILIES,
+)
+from callosum.backends.openrouter import OpenRouterBackend
 from callosum.config import Config, build_backends, load_config
 from callosum.local import LocalModelRegistrySource
 from callosum.operator_state import OperatorState
@@ -195,6 +206,71 @@ def build_runtime_backends(cfg: Config, *, operator_state: OperatorState) -> lis
                 usage_live=usage_live,
             )
         )
+    # OpenRouter: the hosted OpenAI-compatible aggregator the operator holds
+    # prepaid credits on (a conscious REVERSAL of the 2026-05-26 removal of
+    # the old `openrouter_free` fallback — see backends/openrouter.py for the
+    # rationale and the feedback decision artifact). credential proxy (sovereign
+    # sibling) holds the real OpenRouter API key in its pass store; callosum
+    # mints a short-TTL `openrouter`-scoped stand-in at `/v1/standin` and
+    # POSTs through credential proxy's `/v1/proxy{,/stream}`, which injects the real
+    # key on the final hop — the real key NEVER enters this process. This is
+    # a CONSERVATIVE-OVERFLOW remote band member (priority offset 2000,
+    # behind Codex and ollama_cloud's 1000, before local's 10_000) so the
+    # operator spends paid Codex quota and the already-paid ollama_cloud
+    # first. Full auto-discovery by default; a family-exclude drops models
+    # ollama_cloud already serves so OpenRouter doesn't get paid for them.
+    if os.environ.get("CALLOSUM_OPENROUTER_ENABLED") == "1":
+        openrouter_url = os.environ.get("CALLOSUM_OPENROUTER_BASE_URL", OPENROUTER_DEFAULT_BASE_URL)
+        or_custody_url = os.environ.get("CALLOSUM_OPENROUTER_CUSTODY_URL", OPENROUTER_DEFAULT_CUSTODY_URL)
+        or_custody_account = os.environ.get("CALLOSUM_OPENROUTER_CUSTODY_ACCOUNT", "primary")
+        or_model_filter = os.environ.get("CALLOSUM_OPENROUTER_MODEL_FILTER", "all")
+        or_allowlist = frozenset(
+            s for s in (os.environ.get("CALLOSUM_OPENROUTER_MODELS", "") or "").split(",") if s
+        )
+        or_model_prefix = os.environ.get("CALLOSUM_OPENROUTER_MODEL_PREFIX") or None
+        or_blocked_countries = frozenset(
+            s for s in (os.environ.get("CALLOSUM_OPENROUTER_BLOCKED_COUNTRIES", "") or "").split(",")
+            if s
+        ) or OPENROUTER_DEFAULT_BLOCKED_COUNTRIES
+        or_blocked_providers = frozenset(
+            s
+            for s in (os.environ.get("CALLOSUM_OPENROUTER_BLOCKED_PROVIDERS", "") or "").split(",")
+            if s
+        )
+        or_allowed_providers = frozenset(
+            s
+            for s in (os.environ.get("CALLOSUM_OPENROUTER_ALLOWED_PROVIDERS", "") or "").split(",")
+            if s
+        )
+        or_exclude_families = frozenset(
+            s for s in (os.environ.get("CALLOSUM_OPENROUTER_EXCLUDE_FAMILIES", "") or "").split(",")
+            if s
+        ) or OPENROUTER_DEFAULT_EXCLUDE_FAMILIES
+        or_catalog_refresh_raw = os.environ.get("CALLOSUM_OPENROUTER_CATALOG_REFRESH_S")
+        or_catalog_refresh: float | None = None
+        if or_catalog_refresh_raw is not None:
+            try:
+                or_catalog_refresh = float(or_catalog_refresh_raw)
+            except ValueError:
+                logging.getLogger("callosum.startup").warning(
+                    "CALLOSUM_OPENROUTER_CATALOG_REFRESH_S not a float; using default"
+                )
+        or_kwargs: dict[str, object] = {
+            "id": "openrouter",
+            "base_url": openrouter_url,
+            "model_filter": or_model_filter,
+            "allowlist": or_allowlist,
+            "model_prefix": or_model_prefix,
+            "blocked_countries": or_blocked_countries,
+            "blocked_providers": or_blocked_providers,
+            "allowed_providers": or_allowed_providers,
+            "exclude_families": or_exclude_families,
+            "custody_url": or_custody_url,
+            "custody_account": or_custody_account,
+        }
+        if or_catalog_refresh is not None:
+            or_kwargs["catalog_refresh_s"] = or_catalog_refresh
+        backends.append(OpenRouterBackend(**or_kwargs))  # type: ignore[arg-type]
     return backends
 
 
