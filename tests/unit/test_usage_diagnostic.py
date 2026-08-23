@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 from dataclasses import FrozenInstanceError
 from pathlib import Path
@@ -11,6 +12,9 @@ from callosum.usage_diagnostic import (
     SegmentSummary,
     SessionCompoundingSummary,
     TrafficKindBucketSummary,
+    _format_count,
+    _format_turn_ts,
+    _truncate,
     compounding_cost_summaries,
     extract_peer_quality_segments,
     first_divergence_position,
@@ -20,6 +24,8 @@ from callosum.usage_diagnostic import (
     render_compounding_cost_json,
     render_recent_turns_json,
     render_token_time_series_json,
+    render_usage_live_text,
+    run_usage_live,
     token_time_series,
 )
 from callosum.usage_log import UsageLog, UsageLogEntry
@@ -796,3 +802,159 @@ def test_session_compounding_summary_is_frozen() -> None:
     )
     with pytest.raises(FrozenInstanceError):
         s.turn_count = 2  # type: ignore[misc]
+
+
+# --- F2 live terminal view () --------------------------------
+
+
+def test_format_count_humanizes_and_handles_none() -> None:
+    assert _format_count(None) == "-"
+    assert _format_count(0) == "0"
+    assert _format_count(999) == "999"
+    assert _format_count(1_000) == "1k"
+    assert _format_count(2_400_000) == "2.4M"
+    assert _format_count("not-a-number") == "-"
+
+
+def test_truncate() -> None:
+    assert _truncate("abc", 5) == "abc"
+    assert _truncate("abcdef", 5) == "abcd…"
+    assert _truncate("ab", 2) == "ab"
+    assert _truncate("abc", 0) == ""
+    assert _truncate("abc", 1) == "a"
+
+
+def test_format_turn_ts() -> None:
+    assert _format_turn_ts(None) == "?"
+    assert _format_turn_ts(0) == "1970-01-01 00:00"
+    assert _format_turn_ts("not-a-number") == "?"
+
+
+def test_render_usage_live_text_shape(tmp_path: Path) -> None:
+    db = tmp_path / "u.sqlite"
+    log = UsageLog(db, capture_bodies=True)
+    log.record(_entry(ts_start=1_000_000_000.0, prompt_tokens=1_500, req_payload={"input": "x"}))
+    log.record(
+        _entry(
+            ts_start=1_000_010_000.0,
+            prompt_tokens=2_400_000,
+            req_payload={"input": "y"},
+            served_model="model-a0e8",
+            effective_routing_mode="forced_local",
+        )
+    )
+    log.close()
+
+    series = render_token_time_series_json(db, limit=5)
+    recent = render_recent_turns_json(db, limit=5)
+    frame = render_usage_live_text(
+        series,
+        recent,
+        width=120,
+        fetched_at_iso="2026-08-23T14:02:00Z",
+        interval_s=5,
+    )
+    lines = frame.splitlines()
+
+    assert lines[0] == "callosum usage — live"
+    assert "interval=5s" in lines[1]
+    assert lines[2] == "fetched at: 2026-08-23T14:02:00Z"
+    assert "Token volume over time" in frame
+    assert "Recent turns (limit=2)" in frame
+    assert lines[-1] == "refreshing every 5s — press Ctrl-C to exit"
+    # Humanized token counts appear in the rendered frame.
+    assert "2.4M" in frame
+    # The recent-turns panel surfaces the served model and routing mode.
+    assert "model-a0e8" in frame
+    assert "forced_local" in frame
+    # No ANSI escapes in the pure render (the run loop adds them).
+    assert "\033[" not in frame
+
+
+def test_render_usage_live_text_clamps_narrow_width(tmp_path: Path) -> None:
+    db = tmp_path / "u.sqlite"
+    log = UsageLog(db, capture_bodies=True)
+    log.record(
+        _entry(
+            ts_start=1_000_000_000.0,
+            prompt_tokens=100,
+            req_payload={"input": "x"},
+            served_model="a-very-long-served-model-name",
+            effective_routing_mode="a-very-long-routing-mode-name",
+        )
+    )
+    log.close()
+    series = render_token_time_series_json(db, limit=5)
+    recent = render_recent_turns_json(db, limit=5)
+    frame = render_usage_live_text(
+        series,
+        recent,
+        width=40,
+        fetched_at_iso="2026-08-23T14:02:00Z",
+        interval_s=3,
+    )
+    # The narrow terminal truncates the recent-turns string columns rather
+    # than overflowing: the full long names must not survive into the frame,
+    # but the ellipsis marker from truncation does.
+    assert "a-very-long-served-model-name" not in frame
+    assert "a-very-long-routing-mode-name" not in frame
+    assert "…" in frame
+
+
+def test_run_usage_live_non_tty_single_snapshot(tmp_path: Path) -> None:
+    db = tmp_path / "u.sqlite"
+    log = UsageLog(db, capture_bodies=True)
+    log.record(_entry(ts_start=1_000_000_000.0, prompt_tokens=500, req_payload={"input": "x"}))
+    log.close()
+
+    out = io.StringIO()
+    assert out.isatty() is False
+    rc = run_usage_live(db, interval_s=1, out_stream=out)
+
+    assert rc == 0
+    text = out.getvalue()
+    assert "\033[" not in text  # no ANSI escapes when not a TTY
+    assert "callosum usage — live" in text
+    # A single snapshot, not a refresh loop.
+    assert text.count("callosum usage — live") == 1
+
+
+def test_run_usage_live_tty_loop_exits_on_interrupt_and_restores_cursor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = tmp_path / "u.sqlite"
+    log = UsageLog(db, capture_bodies=True)
+    log.record(_entry(ts_start=1_000_000_000.0, prompt_tokens=500, req_payload={"input": "x"}))
+    log.close()
+
+    class TTYStream(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    def raise_keyboard(_s: float) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("callosum.usage_diagnostic.time.sleep", raise_keyboard)
+
+    out = TTYStream()
+    rc = run_usage_live(db, interval_s=1, out_stream=out)
+
+    assert rc == 0
+    text = out.getvalue()
+    assert "\033[?25l" in text  # cursor hidden while running
+    assert "\033[?25h" in text  # cursor restored on exit
+    assert "\033[2J\033[H" in text  # screen cleared each frame
+    assert "callosum usage — live" in text
+
+
+def test_run_usage_live_rejects_nonpositive_interval(tmp_path: Path) -> None:
+    out = io.StringIO()
+    with pytest.raises(ValueError):
+        run_usage_live(tmp_path / "u.sqlite", interval_s=0, out_stream=out)
+
+
+def test_run_usage_live_missing_db_propagates(tmp_path: Path) -> None:
+    out = io.StringIO()
+    with pytest.raises(FileNotFoundError):
+        run_usage_live(tmp_path / "nope.sqlite", interval_s=1, out_stream=out)

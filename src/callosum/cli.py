@@ -36,6 +36,7 @@ from callosum.usage_diagnostic import (
     render_ollama_cloud_usage_text,
     render_recent_turns_json,
     render_token_time_series_json,
+    run_usage_live,
 )
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8765"
@@ -420,6 +421,30 @@ def cmd_usage_ollama_cloud(args: argparse.Namespace) -> int:
     )
     print(text)
     return 0
+
+
+def cmd_usage_live(args: argparse.Namespace) -> int:
+    config_path = args.config if args.config is not None else _default_config_path()
+    if not config_path.exists():
+        sys.exit(f"callosum CLI: config not found: {config_path}")
+    cfg = load_config(config_path)
+    usage_path = cfg.usage_log.path
+    if usage_path is None:
+        sys.exit("callosum CLI: usage_log.path is not configured.")
+    try:
+        return run_usage_live(
+            usage_path,
+            bucket=args.bucket,
+            group_by=args.group_by,
+            series_limit=args.series_limit,
+            recent_limit=args.recent_limit,
+            interval_s=args.interval,
+            out_stream=sys.stdout,
+        )
+    except FileNotFoundError as exc:
+        sys.exit(f"callosum CLI: {exc}")
+    except ValueError as exc:
+        sys.exit(f"callosum CLI: {exc}")
 
 
 def cmd_params_list(args: argparse.Namespace) -> int:
@@ -938,6 +963,51 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     ollama_cloud.set_defaults(func=cmd_usage_ollama_cloud)
+    live = pu.add_parser(
+        "live",
+        help=(
+            "Live, auto-refreshing terminal view of token volume over time "
+            "and recent turns. Stdlib-only TUI (no new dependency); the F2 "
+            "live-visualization path (operator decision 2026-08-23)."
+        ),
+    )
+    live.add_argument(
+        "--bucket",
+        choices=["hour", "day"],
+        default="day",
+        help="Time bucket size for the volume-over-time panel (default: day).",
+    )
+    live.add_argument(
+        "--group-by",
+        choices=["mode", "traffic_kind", "both"],
+        default="mode",
+        help="Provenance axis for the volume-over-time panel (default: mode).",
+    )
+    live.add_argument(
+        "--series-limit",
+        type=int,
+        default=14,
+        help="Number of most recent buckets in the volume panel (default: 14).",
+    )
+    live.add_argument(
+        "--recent-limit",
+        type=int,
+        default=15,
+        help="Number of recent turns in the turns panel (default: 15).",
+    )
+    live.add_argument(
+        "--interval",
+        type=int,
+        default=5,
+        help="Refresh interval in seconds (default: 5).",
+    )
+    live.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Path to config.toml (default: ~/.config/callosum/config.toml).",
+    )
+    live.set_defaults(func=cmd_usage_live)
 
     p_params = sub.add_parser("params", help="Per-cell inference parameter overrides.")
     pp = p_params.add_subparsers(dest="subcommand", required=True)

@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import math
 import re
+import shutil
 import sqlite3
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from callosum.backends.ollama_cloud import OllamaCloudUsageSource, OllamaUsage
 from callosum.usage_log import _walk_text, decompress
@@ -919,3 +921,239 @@ def _format_ts(ts: float | None) -> str:
     if ts is None:
         return "<no reset time>"
     return datetime.fromtimestamp(ts, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# --- F2 live terminal view (work tracker ) ------------------------
+#
+# Operator decision 2026-08-23 (): the F2 live-visualization
+# path for the token-usage diagnostic is a terminal UI (TUI), not OTel/
+# OpenLLMetry — self-contained, no external backend, fits the single-operator
+# loopback CLI. The non-live time-series already ships as `callosum usage
+# series` (); this slice adds the live, auto-refreshing
+# delivery mode over the same read-only SQLite log.
+#
+# The implementation is deliberately stdlib-only (ANSI escapes + a sleep loop):
+# adding a TUI library (textual/rich) would be a new runtime dependency, which
+# is an operator-judgment call (see the ruamel precedent on
+# ), not an autonomous one. A refresh loop over the existing
+# `render_token_time_series_json` + `render_recent_turns_json` payloads keeps
+# the surface read-only, daemon-optional, and free of new dependencies. The
+# rendering is a pure function over those payloads so it tests without a TTY.
+
+# Hide/show the cursor and clear+home the screen. Kept as named constants so
+# the run loop never embeds raw escapes inline.
+_HIDE_CURSOR = "\033[?25l"
+_SHOW_CURSOR = "\033[?25h"
+_CLEAR_SCREEN = "\033[2J\033[H"
+
+
+def render_usage_live_text(
+    series_payload: dict[str, Any],
+    recent_payload: dict[str, Any],
+    *,
+    width: int,
+    fetched_at_iso: str,
+    interval_s: int,
+) -> str:
+    """Render one live-view frame from the existing diagnostic payloads.
+
+    Pure: no I/O, no clock. The caller builds series_payload via
+    render_token_time_series_json and recent_payload via
+    render_recent_turns_json, plus a timestamp string and terminal width,
+    so this function is deterministic and unit-testable. Output is plain text
+    (no ANSI escapes) — the run loop wraps it with clear/screen control.
+    """
+    width = max(width, 40)
+    lines: list[str] = [
+        "callosum usage — live",
+        (
+            f"db: {series_payload.get('db_path', '?')}  "
+            f"bucket={series_payload.get('bucket', '?')}  "
+            f"group_by={series_payload.get('group_by', '?')}  "
+            f"interval={interval_s}s"
+        ),
+        f"fetched at: {fetched_at_iso}",
+        "",
+        "Token volume over time",
+        _format_series_header(),
+    ]
+    for bucket in series_payload.get("series", []):
+        lines.append(_format_series_row(bucket))
+    lines.append("")
+    recent_turns = recent_payload.get("turns", [])
+    lines.append(f"Recent turns (limit={recent_payload.get('turn_count', len(recent_turns))})")
+    lines.append(_format_recent_header(width))
+    for turn in recent_turns:
+        lines.append(_format_recent_row(turn, width))
+    lines.append("")
+    lines.append(f"refreshing every {interval_s}s — press Ctrl-C to exit")
+    return "\n".join(lines)
+
+
+def _format_series_header() -> str:
+    return (
+        f"{'bucket':<20} {'turns':>7} {'prompt':>10} {'compl':>9} {'total':>10}")
+
+
+def _format_series_row(bucket: dict[str, Any]) -> str:
+    return (
+        f"{str(bucket.get('bucket_start', '?')):<20.20} "
+        f"{_format_count(bucket.get('turn_count')):>7} "
+        f"{_format_count(bucket.get('prompt_tokens')):>10} "
+        f"{_format_count(bucket.get('completion_tokens')):>9} "
+        f"{_format_count(bucket.get('total_tokens')):>10}"
+    )
+
+
+def _format_recent_header(width: int) -> str:
+    mode_w, served_w = _recent_string_widths(width)
+    return (
+        f"{'id':>6} {'ts':<16} {'mode':<{mode_w}} {'served':<{served_w}} "
+        f"{'prompt':>8} {'compl':>7} {'total':>8}"
+    )
+
+
+def _format_recent_row(turn: dict[str, Any], width: int) -> str:
+    mode_w, served_w = _recent_string_widths(width)
+    ts = _format_turn_ts(turn.get("ts_start"))
+    return (
+        f"{str(turn.get('request_id', '')):>6} "
+        f"{ts:<16.16} "
+        f"{_truncate(str(turn.get('effective_routing_mode', '?')), mode_w):<{mode_w}} "
+        f"{_truncate(str(turn.get('served_model', '?')), served_w):<{served_w}} "
+        f"{_format_count(turn.get('prompt_tokens')):>8} "
+        f"{_format_count(turn.get('completion_tokens')):>7} "
+        f"{_format_count(turn.get('total_tokens')):>8}"
+    )
+
+
+# Fixed numeric columns in the recent-turns table: id(6) + ts(16) + prompt(8)
+# + compl(7) + total(8) + six single-space separators = 52 columns. The two
+# string columns (mode, served) share whatever width remains.
+_RECENT_FIXED_WIDTH = 52
+
+
+def _recent_string_widths(width: int) -> tuple[int, int]:
+    avail = max(width - _RECENT_FIXED_WIDTH, 18)
+    mode_w = max(8, min(28, avail // 2))
+    served_w = max(8, avail - mode_w)
+    return mode_w, served_w
+
+
+def _format_turn_ts(ts_start: Any) -> str:
+    if ts_start is None:
+        return "?"
+    try:
+        return datetime.fromtimestamp(float(ts_start), tz=UTC).strftime("%Y-%m-%d %H:%M")
+    except (TypeError, ValueError, OSError):
+        return "?"
+
+
+def _truncate(text: str, width: int) -> str:
+    if width <= 0:
+        return ""
+    if len(text) <= width:
+        return text
+    if width <= 1:
+        return text[:width]
+    return text[: width - 1] + "…"
+
+
+def _format_count(n: Any) -> str:
+    if n is None:
+        return "-"
+    try:
+        value = int(n)
+    except (TypeError, ValueError):
+        return "-"
+    if abs(value) >= 1_000_000:
+        return f"{value / 1_000_000:.1f}M"
+    if abs(value) >= 1_000:
+        return f"{value / 1_000:.0f}k"
+    return str(value)
+
+
+def run_usage_live(
+    db_path: Path,
+    *,
+    bucket: str = "day",
+    group_by: str = "mode",
+    series_limit: int = 14,
+    recent_limit: int = 15,
+    interval_s: int = 5,
+    out_stream: TextIO,
+) -> int:
+    """Refresh a live terminal view of the usage log until interrupted.
+
+    Reads the SQLite log directly via the existing read-only render helpers
+    (daemon-optional). When out_stream is a TTY the view clears and
+    redraws every interval_s seconds, hiding the cursor while running and
+    restoring it on exit (including Ctrl-C). When it is not a TTY (piped or
+    redirected) it prints a single text snapshot and exits 0, so the command
+    never sprays ANSI escapes into a pipe. Returns 0 on clean exit, 1 if the
+    usage log is absent.
+    """
+    if interval_s <= 0:
+        raise ValueError(f"interval must be positive: {interval_s}")
+    is_tty = out_stream.isatty()
+    try:
+        frame = _build_usage_live_frame(
+            db_path,
+            bucket=bucket,
+            group_by=group_by,
+            series_limit=series_limit,
+            recent_limit=recent_limit,
+            interval_s=interval_s,
+        )
+        if not is_tty:
+            out_stream.write(frame + "\n")
+            out_stream.flush()
+            return 0
+        out_stream.write(_HIDE_CURSOR)
+        out_stream.flush()
+        while True:
+            frame = _build_usage_live_frame(
+                db_path,
+                bucket=bucket,
+                group_by=group_by,
+                series_limit=series_limit,
+                recent_limit=recent_limit,
+                interval_s=interval_s,
+            )
+            out_stream.write(_CLEAR_SCREEN + frame + "\n")
+            out_stream.flush()
+            time.sleep(interval_s)
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        if is_tty:
+            out_stream.write(_SHOW_CURSOR)
+            out_stream.flush()
+    return 0
+
+
+def _build_usage_live_frame(
+    db_path: Path,
+    *,
+    bucket: str,
+    group_by: str,
+    series_limit: int,
+    recent_limit: int,
+    interval_s: int,
+) -> str:
+    series_payload = render_token_time_series_json(
+        db_path,
+        bucket=bucket,
+        limit=series_limit,
+        group_by=group_by,
+    )
+    recent_payload = render_recent_turns_json(db_path, limit=recent_limit)
+    width = shutil.get_terminal_size((80, 24)).columns
+    fetched_at_iso = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return render_usage_live_text(
+        series_payload,
+        recent_payload,
+        width=width,
+        fetched_at_iso=fetched_at_iso,
+        interval_s=interval_s,
+    )
