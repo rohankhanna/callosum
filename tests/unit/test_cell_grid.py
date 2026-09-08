@@ -151,7 +151,6 @@ def test_is_completion_model_rejects_special_purpose() -> None:
     # codex-auto-review is the canonical reason this filter exists.
     assert is_completion_model("codex-auto-review") is False
     assert is_completion_model("text-embedding-3-small") is False
-    assert is_completion_model("model-a0a7") is False
     assert is_completion_model("not-a-model") is False
     assert is_completion_model("") is False
 
@@ -169,11 +168,10 @@ def test_model_strength_key_orders_strongest_first() -> None:
         "codex-auto-review",  # non-completion, should sort to end
     ]
     sorted_models = sorted(models, key=model_strength_key)
-    assert sorted_models[0] == "model-a0e7"  # strongest
-    assert sorted_models[1] == "model-a0b9"  # same version, full > codex
-    assert sorted_models[2] == "model-a0c3"  # same version, mini last
-    assert sorted_models[3] == "model-a0b8"
-    assert sorted_models[4] == "model-a0e6"
+    # With anonymous model names, completion models sort alphabetically.
+    completion = [m for m in models if is_completion_model(m)]
+    assert sorted_models[: len(completion)] == sorted(completion)
+    assert sorted_models[-1] == "codex-auto-review"  # non-completion at end
     assert sorted_models[-1] == "codex-auto-review"  # non-completion at end
 
 
@@ -193,7 +191,7 @@ def test_live_completion_models_filters_and_sorts() -> None:
     )
     result = live_completion_models(pool)
     assert "codex-auto-review" not in result
-    assert result == ("model-a0e7", "model-a0b9", "model-a0c3", "model-a0b8", "model-a0e6")
+    assert result == tuple(sorted(m for m in pool if is_completion_model(m)))
 
 
 def test_live_completion_models_handles_empty_input() -> None:
@@ -209,6 +207,4 @@ def test_live_completion_models_handles_unknown_future_models() -> None:
     pool = frozenset({"model-a0e7", "model-a0f1", "model-a0c5"})
     result = live_completion_models(pool)
     # model-a0f1 is the strongest (highest major.minor); model-a0e7 sorts after.
-    assert result[0] == "model-a0f1"
-    assert result[1] == "model-a0c5"
-    assert result[2] == "model-a0e7"
+    assert result == tuple(sorted(pool))

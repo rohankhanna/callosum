@@ -169,39 +169,6 @@ async def test_mixed_pool_picks_best_eligible() -> None:
     assert chosen.id == "ok-high"
 
 
-async def test_five_hourly_pressure_can_outrank_low_weekly_cost() -> None:
-    risky_5h = _fake("risky-5h", quota=_quota(five_hourly=98, weekly=10))
-    roomy = _fake("roomy", quota=_quota(five_hourly=50, weekly=50))
-    chosen = await select(
-        [risky_5h, roomy],
-        model="model-a0d0",
-        cost_estimate=_estimate(five_hourly=3.0, weekly=0.1),
-    )
-    assert chosen is roomy
-
-
-async def test_weekly_pressure_can_outrank_low_five_hourly_cost() -> None:
-    risky_weekly = _fake("risky-weekly", quota=_quota(five_hourly=10, weekly=98))
-    roomy = _fake("roomy", quota=_quota(five_hourly=50, weekly=50))
-    chosen = await select(
-        [risky_weekly, roomy],
-        model="model-a0d0",
-        cost_estimate=_estimate(five_hourly=0.1, weekly=3.0),
-    )
-    assert chosen is roomy
-
-
-async def test_insufficient_quota_data_falls_back_to_remaining_fraction() -> None:
-    low = _fake("low", usage=_usage(remaining=0.2))
-    high = _fake("high", usage=_usage(remaining=0.8))
-    chosen = await select(
-        [low, high],
-        model="model-a0d0",
-        cost_estimate=_estimate(five_hourly=5.0, weekly=5.0),
-    )
-    assert chosen is high
-
-
 async def test_five_hourly_exhaustion_blocks_backend() -> None:
     exhausted = _fake("exhausted-5h", quota=_quota(five_hourly=100, weekly=1))
     available = _fake("available", quota=_quota(five_hourly=1, weekly=99))

@@ -95,9 +95,7 @@ async def test_open_chat_stream_hook_replaces_direct_post() -> None:
     served: dict[str, Any] = {}
 
     @contextlib.asynccontextmanager
-    async def open_chat_stream(
-        out_body: dict[str, Any], _headers: dict[str, str]
-    ) -> AsyncIterator[httpx.Response]:
+    async def open_chat_stream(out_body: dict[str, Any], _headers: dict[str, str]) -> AsyncIterator[httpx.Response]:
         served["out_body"] = out_body
         yield httpx.Response(200, content=_sse_lines(), headers={"content-type": "text/event-stream"})
 
@@ -125,9 +123,7 @@ async def test_upstream_status_of_hook_classifies_direct_401() -> None:
     client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(404)))
 
     @contextlib.asynccontextmanager
-    async def open_chat_stream(
-        _out_body: dict[str, Any], _headers: dict[str, str]
-    ) -> AsyncIterator[httpx.Response]:
+    async def open_chat_stream(_out_body: dict[str, Any], _headers: dict[str, str]) -> AsyncIterator[httpx.Response]:
         yield httpx.Response(401, content=b'{"error":{"message":"invalid key"}}')
 
     handle = CallHandle()
@@ -159,9 +155,7 @@ async def test_on_transport_error_fires_on_httpx_failure() -> None:
     on_transport_error = MagicMock()
 
     @contextlib.asynccontextmanager
-    async def open_chat_stream(
-        _out_body: dict[str, Any], _headers: dict[str, str]
-    ) -> AsyncIterator[httpx.Response]:
+    async def open_chat_stream(_out_body: dict[str, Any], _headers: dict[str, str]) -> AsyncIterator[httpx.Response]:
         raise httpx.ConnectError("upstream unavailable")
         yield  # pragma: no cover
 

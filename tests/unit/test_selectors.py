@@ -23,7 +23,7 @@ from callosum.selectors import (
             SelectorDecision(source="remote", pinned_model="model-a0e8", pinned_effort="high"),
         ),
         (
-            "callosum:local/model-a0b6".replace(":30b", ""),  # plain local pin
+            "callosum:local/model-a0d4:30b".replace(":30b", ""),  # plain local pin
             SelectorDecision(source="local", pinned_model="model-a0d4"),
         ),
         (

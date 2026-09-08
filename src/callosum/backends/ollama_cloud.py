@@ -240,9 +240,7 @@ class OllamaCloudBackend:
     async def responses_stream(self, body: dict[str, Any], handle: CallHandle | None = None) -> AsyncIterator[bytes]:
         """Translate a chat-completions stream into a Responses stream."""
 
-        def open_chat_stream(
-            out_body: dict[str, Any], _headers: dict[str, str]
-        ) -> AsyncContextManager[httpx.Response]:
+        def open_chat_stream(out_body: dict[str, Any], _headers: dict[str, str]) -> AsyncContextManager[httpx.Response]:
             return self._direct_stream_cm(out_body)
 
         collector = ResponsesStreamCollector(
@@ -364,12 +362,7 @@ class OllamaCloudBackend:
             model_info = info.get("model_info") or {}
             if isinstance(model_info, dict):
                 for key, value in model_info.items():
-                    if (
-                        isinstance(key, str)
-                        and key.endswith("context_length")
-                        and isinstance(value, int)
-                        and value > 0
-                    ):
+                    if isinstance(key, str) and key.endswith("context_length") and isinstance(value, int) and value > 0:
                         context_window = value
                 general_parameter_count = model_info.get("general.parameter_count")
                 if isinstance(general_parameter_count, int) and general_parameter_count > 0:

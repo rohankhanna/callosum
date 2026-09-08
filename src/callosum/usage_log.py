@@ -12,7 +12,18 @@ from pathlib import Path
 from typing import Any
 
 from callosum.codex_quota import CodexQuotaSnapshot
-from callosum.peer_quality import PeerQualityOpinion
+
+
+# ── no-op stub for removed private module ────────────────────────────────
+@dataclass(frozen=True, slots=True)
+class PeerQualityOpinion:
+    nonce: str = ""
+    subject_model: str = ""
+    subject_reasoning_effort: str | None = None
+    subject_request_id: int | None = None
+    score: int = 0
+    reason: str | None = None
+    raw_marker: str = ""
 
 
 @dataclass(frozen=True, slots=True)

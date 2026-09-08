@@ -27,9 +27,6 @@ from callosum.backends.ollama_cloud import DEFAULT_OLLAMA_URL as OLLAMA_CLOUD_DE
 from callosum.backends.ollama_cloud import OllamaCloudBackend
 from callosum.backends.openrouter import DEFAULT_BASE_URL as OPENROUTER_DEFAULT_BASE_URL
 from callosum.backends.openrouter import (
-    DEFAULT_BLOCKED_COUNTRIES as OPENROUTER_DEFAULT_BLOCKED_COUNTRIES,
-)
-from callosum.backends.openrouter import (
     DEFAULT_EXCLUDE_FAMILIES as OPENROUTER_DEFAULT_EXCLUDE_FAMILIES,
 )
 from callosum.backends.openrouter import OpenRouterBackend
@@ -168,16 +165,6 @@ def build_runtime_backends(cfg: Config, *, operator_state: OperatorState) -> lis
         or_model_filter = os.environ.get("CALLOSUM_OPENROUTER_MODEL_FILTER", "all")
         or_allowlist = frozenset(s for s in (os.environ.get("CALLOSUM_OPENROUTER_MODELS", "") or "").split(",") if s)
         or_model_prefix = os.environ.get("CALLOSUM_OPENROUTER_MODEL_PREFIX") or None
-        or_blocked_countries = (
-            frozenset(s for s in (os.environ.get("CALLOSUM_OPENROUTER_BLOCKED_COUNTRIES", "") or "").split(",") if s)
-            or OPENROUTER_DEFAULT_BLOCKED_COUNTRIES
-        )
-        or_blocked_providers = frozenset(
-            s for s in (os.environ.get("CALLOSUM_OPENROUTER_BLOCKED_PROVIDERS", "") or "").split(",") if s
-        )
-        or_allowed_providers = frozenset(
-            s for s in (os.environ.get("CALLOSUM_OPENROUTER_ALLOWED_PROVIDERS", "") or "").split(",") if s
-        )
         or_exclude_families = (
             frozenset(s for s in (os.environ.get("CALLOSUM_OPENROUTER_EXCLUDE_FAMILIES", "") or "").split(",") if s)
             or OPENROUTER_DEFAULT_EXCLUDE_FAMILIES
@@ -197,9 +184,6 @@ def build_runtime_backends(cfg: Config, *, operator_state: OperatorState) -> lis
             "model_filter": or_model_filter,
             "allowlist": or_allowlist,
             "model_prefix": or_model_prefix,
-            "blocked_countries": or_blocked_countries,
-            "blocked_providers": or_blocked_providers,
-            "allowed_providers": or_allowed_providers,
             "exclude_families": or_exclude_families,
             "api_key": or_api_key,
         }
@@ -281,43 +265,7 @@ def _run_server(config_path: Path, host: str | None, port: int | None) -> None:
         _sys.stderr.write("error: config.state.dir must be set\n")
         _sys.exit(2)
     operator_state = OperatorState(cfg.state.dir / "operator_state.sqlite")
-    # Earned-autonomy ladder (Tier A). First-run seeds at L1_MANUAL;
-    # subsequent runs reuse the persisted level. Lives alongside
-    # operator_state.sqlite under state.dir.
-    from callosum.autonomy import AutonomyStore
 
-    autonomy_store = AutonomyStore(cfg.state.dir / "autonomy.sqlite")
-    # Retention runner (Tier G) — owns the v1 policy list bound to the
-    # actual db / repo / filesystem locations on this host. Wired to
-    # the same usage_log / autonomy db paths the proxy uses, so
-    # archives + deletes operate on the same data.
-    from callosum.retention import DEFAULT_ARCHIVE_DIR, RetentionRunner
-
-    repo_root_for_retention: Path | None = None
-    callosum_pkg = Path(__file__).resolve().parent
-    candidate_root = callosum_pkg.parents[1]
-    if (candidate_root / ".git").exists():
-        repo_root_for_retention = candidate_root
-    research_runner_runs_dir = Path.home() / ".local" / "state" / "research_runner" / "model-research" / "runs"
-    retention_runner = RetentionRunner(
-        usage_log_path=cfg.usage_log.path,
-        autonomy_db_path=cfg.state.dir / "autonomy.sqlite",
-        repo_root=repo_root_for_retention,
-        research_runner_runs_dir=(research_runner_runs_dir if research_runner_runs_dir.exists() else None),
-        archive_dir=DEFAULT_ARCHIVE_DIR,
-    )
-    # Self-assessment runner (Tier C) — weekly metacognition. Reuses
-    # the same autonomy store + usage log so its reads are coherent
-    # with what the operator sees in /admin/autonomy/audit. Feedback
-    # root is the project repo so artifacts land under feedback/
-    # decisions/ where future agents can read them.
-    from callosum.self_assessment import SelfAssessmentRunner
-
-    self_assessment_runner = SelfAssessmentRunner(
-        autonomy_store=autonomy_store,
-        usage_log_path=cfg.usage_log.path,
-        feedback_root=(repo_root_for_retention if repo_root_for_retention is not None else None),
-    )
     backends = build_runtime_backends(cfg, operator_state=operator_state)
     usage_log = (
         UsageLog(cfg.usage_log.path, capture_bodies=cfg.usage_log.capture_bodies)
@@ -344,9 +292,6 @@ def _run_server(config_path: Path, host: str | None, port: int | None) -> None:
             startup_smoke_test=cfg.server.startup_smoke_test,
             smoke_test_interval_seconds=cfg.server.smoke_test_interval_seconds,
             operator_state=operator_state,
-            autonomy_store=autonomy_store,
-            retention_runner=retention_runner,
-            self_assessment_runner=self_assessment_runner,
         ),
         host=host,
         port=port,

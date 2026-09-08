@@ -9,10 +9,10 @@ and sends JSON requests.
 Run `callosum -h` for the authoritative, always-current list of
 subcommands — argparse generates it from the parser, so it never drifts
 from the code. The current top-level surface is: serve, status,
-version, review, params, denylist, routing, autonomy, retention,
-self-assessment, probe-tools, service, auth-rotate.
+version, params, denylist, routing, probe-tools, service,
+auth-rotate.
 
-Most output is JSON; `review` / `service` print human-readable text.
+Most output is JSON; `service` prints human-readable text.
 """
 
 from __future__ import annotations
@@ -288,65 +288,6 @@ def cmd_gate(args: argparse.Namespace) -> int:
     return 0 if report.green else 1
 
 
-def cmd_review(args: argparse.Namespace) -> int:
-    """Human-readable summary of dev-loop dispatcher state: last run
-    outcome, today's marker, and any auto/dev-loop-* branches
-    awaiting manual review/merge. The point is to make pending review
-    work visible — `callosum status` returns JSON; this prints a
-    paste-friendly checklist with git commands inline."""
-    payload = _request("GET", "/admin/status")
-    if not isinstance(payload, dict):
-        print("error: unexpected /admin/status payload", file=sys.stderr)
-        return 1
-    dev_loop = payload.get("dev_loop")
-    if not isinstance(dev_loop, dict):
-        print("error: /admin/status missing dev_loop section", file=sys.stderr)
-        return 1
-
-    last = dev_loop.get("last_run")
-    if isinstance(last, dict):
-        ts = last.get("timestamp", "(unknown)")
-        outcome = last.get("outcome", "(unknown)")
-        reason = last.get("reason", "")
-        branch = last.get("branch")
-        head = f"last dispatcher run: {ts} -> {outcome}"
-        if branch:
-            head += f" (branch: {branch})"
-        print(head)
-        if reason:
-            print(f"  reason: {reason}")
-    else:
-        print("last dispatcher run: (never recorded — dispatcher has not fired since visibility surface landed)")
-
-    marker_present = dev_loop.get("today_marker_present")
-    marker_path = dev_loop.get("today_marker_path", "")
-    if marker_present:
-        print(f"today's marker: present ({marker_path}) — dispatcher will skip further fires today")
-    else:
-        print(f"today's marker: ABSENT ({marker_path}) — next dispatcher fire is eligible")
-
-    branches = dev_loop.get("pending_review_branches") or []
-    count = dev_loop.get("pending_review_count", len(branches))
-    print()
-    if not branches:
-        print("pending review branches: 0 (clean queue)")
-        return 0
-    print(f"pending review branches: {count}")
-    print()
-    for b in branches:
-        name = b.get("name", "?")
-        sha = b.get("sha", "?")
-        subject = b.get("subject", "?")
-        age = b.get("age_days", 0.0)
-        print(f"  {name} ({age:.1f}d old)")
-        print(f"    {sha}  {subject}")
-        print(f"    inspect: git log {name} --stat")
-        print(f"    accept:  git checkout main && git merge --no-ff {name}")
-        print(f"    reject:  git branch -D {name}")
-        print()
-    return 0
-
-
 def _default_config_path() -> Path:
     return Path("~/.config/callosum/config.toml").expanduser()
 
@@ -503,80 +444,6 @@ def cmd_routing_set(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_autonomy_show(args: argparse.Namespace) -> int:
-    _print(_request("GET", "/admin/autonomy"))
-    return 0
-
-
-def cmd_autonomy_promote(args: argparse.Namespace) -> int:
-    _print(_request("POST", "/admin/autonomy/promote", {}))
-    return 0
-
-
-def cmd_autonomy_demote(args: argparse.Namespace) -> int:
-    body: dict[str, Any] = {}
-    if args.reason:
-        body["reason"] = args.reason
-    _print(_request("POST", "/admin/autonomy/demote", body))
-    return 0
-
-
-def cmd_autonomy_set(args: argparse.Namespace) -> int:
-    body: dict[str, Any] = {"level": int(args.level)}
-    if args.reason:
-        body["reason"] = args.reason
-    _print(_request("POST", "/admin/autonomy/set", body))
-    return 0
-
-
-def cmd_autonomy_history(args: argparse.Namespace) -> int:
-    _print(_request("GET", "/admin/autonomy/history"))
-    return 0
-
-
-def cmd_autonomy_audit(args: argparse.Namespace) -> int:
-    _print(_request("GET", "/admin/autonomy/audit"))
-    return 0
-
-
-def cmd_retention_show(args: argparse.Namespace) -> int:
-    _print(_request("GET", "/admin/retention"))
-    return 0
-
-
-def cmd_retention_status(args: argparse.Namespace) -> int:
-    _print(_request("GET", "/admin/retention/status"))
-    return 0
-
-
-def cmd_retention_preview(args: argparse.Namespace) -> int:
-    # Retention is invoked synchronously, so the run could take seconds
-    # on a large requests table. The status/preview is faster — but
-    # share the same generous timeout to keep one ceiling for both.
-    _print(_request("POST", "/admin/retention/preview", {}, timeout=300.0))
-    return 0
-
-
-def cmd_retention_run(args: argparse.Namespace) -> int:
-    _print(_request("POST", "/admin/retention/run", {}, timeout=600.0))
-    return 0
-
-
-def cmd_self_assessment_history(args: argparse.Namespace) -> int:
-    _print(_request("GET", "/admin/self-assessment/history"))
-    return 0
-
-
-def cmd_self_assessment_preview(args: argparse.Namespace) -> int:
-    _print(_request("POST", "/admin/self-assessment/preview", {}, timeout=60.0))
-    return 0
-
-
-def cmd_self_assessment_run(args: argparse.Namespace) -> int:
-    _print(_request("POST", "/admin/self-assessment/run", {}, timeout=60.0))
-    return 0
-
-
 def cmd_probe_tools(args: argparse.Namespace) -> int:
     """Run the tool-call verification probe and print per-cell results.
 
@@ -729,8 +596,7 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Callosum proxy CLI. `callosum serve` starts the daemon; "
             "the other subcommands administer a running instance "
-            "(status, routing mode, denylist, autonomy ladder, "
-            "retention, self-assessment, capability probing, "
+            "(status, routing mode, denylist, capability probing, "
             "auth-vault rotation)."
         ),
     )
@@ -807,19 +673,6 @@ def build_parser() -> argparse.ArgumentParser:
             "the current code."
         ),
     ).set_defaults(func=cmd_version)
-    sub.add_parser(
-        "review",
-        help="Show last dispatcher run + any pending auto/dev-loop-* branches awaiting manual review.",
-        description=(
-            "Human-readable summary of dev-loop dispatcher state: "
-            "last run outcome with timestamp + reason, whether today's "
-            "marker has been written, and the full list of "
-            "auto/dev-loop-* branches the dispatcher has created that "
-            "haven't been merged or deleted yet. For each pending "
-            "branch the output includes copy-paste git commands to "
-            "inspect / accept / reject."
-        ),
-    ).set_defaults(func=cmd_review)
 
     p_usage = sub.add_parser(
         "usage",
@@ -1014,9 +867,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_routing = sub.add_parser(
         "routing",
-        help="Backend routing mode (auto / offline / local-only / "
-        "remote-only). Distinct from `callosum-ctl autonomy` "
-        "which governs dev-loop pipeline autonomy.",
+        help="Backend routing mode (auto / offline / local-only / remote-only).",
     )
     pr = p_routing.add_subparsers(dest="subcommand", required=True)
     pr.add_parser(
@@ -1029,95 +880,6 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["auto", "offline", "local-only", "remote-only"],
     )
     sr.set_defaults(func=cmd_routing_set)
-
-    p_auto = sub.add_parser(
-        "autonomy",
-        help="Earned-autonomy ladder for the dev-loop pipeline (L1..L5).",
-    )
-    pa = p_auto.add_subparsers(dest="subcommand", required=True)
-    pa.add_parser(
-        "show",
-        help="Current level, streak, and promotion eligibility.",
-    ).set_defaults(func=cmd_autonomy_show)
-    pa.add_parser(
-        "promote",
-        help="Advance one rung if clean_streak meets threshold; errors with the missing condition otherwise.",
-    ).set_defaults(func=cmd_autonomy_promote)
-    ad = pa.add_parser(
-        "demote",
-        help="Drop one rung immediately. Floor-clamped at L1.",
-    )
-    ad.add_argument("--reason", help="Free-form note recorded in history.")
-    ad.set_defaults(func=cmd_autonomy_demote)
-    aset = pa.add_parser(
-        "set",
-        help="Force-set the level (e.g. for emergency reset to L1=1). Resets streak and ops counters at the new level.",
-    )
-    aset.add_argument(
-        "level",
-        type=int,
-        choices=[1, 2, 3, 4, 5],
-        help="1=manual, 2=auto-invoke, 3=auto-merge+soak, 4=sunset, 5=architecture",
-    )
-    aset.add_argument("--reason", help="Free-form note recorded in history.")
-    aset.set_defaults(func=cmd_autonomy_set)
-    pa.add_parser(
-        "history",
-        help="Recent level transitions (most recent first).",
-    ).set_defaults(func=cmd_autonomy_history)
-    pa.add_parser(
-        "audit",
-        help="Recent dev-loop actions: invoke / merge / soak outcomes. "
-        "This is what Tier C's weekly self-assessment reads.",
-    ).set_defaults(func=cmd_autonomy_audit)
-
-    p_ret = sub.add_parser(
-        "retention",
-        help="Tier G state retention: archive-and-delete old rows / branches / files per policy.",
-    )
-    pr = p_ret.add_subparsers(dest="subcommand", required=True)
-    pr.add_parser(
-        "show",
-        help="List the configured retention policies and archive dir.",
-    ).set_defaults(func=cmd_retention_show)
-    pr.add_parser(
-        "status",
-        help="Per-policy current state (row counts, oldest entry, etc.).",
-    ).set_defaults(func=cmd_retention_status)
-    pr.add_parser(
-        "preview",
-        help="Dry-run: report what would be archived/deleted without modifying anything.",
-    ).set_defaults(func=cmd_retention_preview)
-    pr.add_parser(
-        "run",
-        help="Execute retention: archive matching rows to a tarball "
-        "under the archive dir, then delete them from the live "
-        "table. Intended to be invoked weekly from cron.",
-    ).set_defaults(func=cmd_retention_run)
-
-    p_sa = sub.add_parser(
-        "self-assessment",
-        help="Tier C automation agent self-assessment: weekly metrics over "
-        "the autonomy audit log + usage log; auto-demotes on "
-        "bad signals, suggests promotion on clean.",
-    )
-    ps = p_sa.add_subparsers(dest="subcommand", required=True)
-    ps.add_parser(
-        "history",
-        help="Past assessments (most recent first).",
-    ).set_defaults(func=cmd_self_assessment_history)
-    ps.add_parser(
-        "preview",
-        help="Dry-run: compute metrics + decision without persisting "
-        "or firing demote. Safe to run idly to inspect what the "
-        "next real cycle would do.",
-    ).set_defaults(func=cmd_self_assessment_preview)
-    ps.add_parser(
-        "run",
-        help="Execute one self-assessment cycle. Persists a row, may "
-        "auto-demote, writes a feedback artifact. Intended to be "
-        "invoked weekly from cron.",
-    ).set_defaults(func=cmd_self_assessment_run)
 
     p_probe = sub.add_parser(
         "probe-tools",
@@ -1193,40 +955,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the managed service from the repo checkout instead of the installed runtime binary.",
     )
     start.set_defaults(func=cmd_service_start)
-
-    # Auto-dev ticket backlog (PO intake). Opens the ticket SQLite store
-    # directly so filing works while the serving daemon is down. Intake +
-    # storage only — the dispatcher that consumes tickets is a later slice
-    # (see docs/adr/2026-06-27-auto-dev-ticket-queue-statistical-promotion.md).
-    from callosum.dev_loop.tickets import KINDS, SOURCES, STATUSES
-
-    p_ticket = sub.add_parser("ticket", help="Auto-dev defect/ticket backlog (PO intake).")
-    pt = p_ticket.add_subparsers(dest="ticket_cmd", required=True)
-    t_add = pt.add_parser("add", help="File a ticket into the backlog.")
-    t_add.add_argument("title")
-    t_add.add_argument("--kind", choices=KINDS, default="bug")
-    t_add.add_argument("--source", choices=SOURCES, default="po")
-    t_add.add_argument("--repro", default=None, help="path to a repro prompt/payload file")
-    t_add.add_argument(
-        "--acceptance",
-        default=None,
-        help="machine-checkable acceptance test id (e.g. a pytest node) — sets the ticket triaged",
-    )
-    t_add.add_argument("--priority", type=int, default=0)
-    t_add.set_defaults(func=cmd_ticket_add)
-    t_list = pt.add_parser("list", help="List tickets (optionally by status).")
-    t_list.add_argument("--status", choices=STATUSES, default=None)
-    t_list.set_defaults(func=cmd_ticket_list)
-    t_show = pt.add_parser("show", help="Show one ticket and its event trail.")
-    t_show.add_argument("id")
-    t_show.set_defaults(func=cmd_ticket_show)
-    t_triage = pt.add_parser(
-        "triage",
-        help="Attach an acceptance test and move the ticket to ready (the eligibility wall).",
-    )
-    t_triage.add_argument("id")
-    t_triage.add_argument("--acceptance", required=True, help="machine-checkable acceptance test id")
-    t_triage.set_defaults(func=cmd_ticket_triage)
 
     # Surface-only feedback redirect. Points the
     # operator at the existing external feedback channels (/feedback -> the
@@ -1426,66 +1154,6 @@ def cmd_feedback_dismiss(args: argparse.Namespace) -> int:
     """Mark a suggestion dismissed (not worth filing)."""
     payload = _request("POST", f"/admin/feedback/{args.request_id}/dismiss")
     _print(payload)
-    return 0
-
-
-def cmd_ticket_add(args: argparse.Namespace) -> int:
-    from callosum.dev_loop.tickets import TicketStore, default_ticket_mirror
-
-    store = TicketStore(mirror=default_ticket_mirror)
-    try:
-        ticket = store.add(
-            kind=args.kind,
-            title=args.title,
-            source=args.source,
-            repro_ref=args.repro,
-            acceptance_test=args.acceptance,
-            priority=args.priority,
-        )
-    finally:
-        store.close()
-    _print(ticket.to_dict())
-    return 0
-
-
-def cmd_ticket_list(args: argparse.Namespace) -> int:
-    from callosum.dev_loop.tickets import TicketStore
-
-    store = TicketStore()
-    try:
-        tickets = store.list_tickets(status=args.status)
-    finally:
-        store.close()
-    _print([t.to_dict() for t in tickets])
-    return 0
-
-
-def cmd_ticket_show(args: argparse.Namespace) -> int:
-    from callosum.dev_loop.tickets import TicketStore
-
-    store = TicketStore()
-    try:
-        ticket = store.get(args.id)
-        if ticket is None:
-            print(json.dumps({"error": f"no ticket {args.id}"}))
-            return 1
-        payload = ticket.to_dict()
-        payload["events"] = store.events(args.id)
-    finally:
-        store.close()
-    _print(payload)
-    return 0
-
-
-def cmd_ticket_triage(args: argparse.Namespace) -> int:
-    from callosum.dev_loop.tickets import TicketStore
-
-    store = TicketStore()
-    try:
-        ticket = store.triage(args.id, args.acceptance)
-    finally:
-        store.close()
-    _print(ticket.to_dict())
     return 0
 
 

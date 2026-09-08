@@ -1397,7 +1397,7 @@ async def test_refresh_persists_catalog_to_state_store(tmp_path: Path) -> None:
 
     persisted = store.load_catalog("persist-vault")
     assert persisted is not None
-    assert sorted(persisted["advertised_models"]) == ["model-a0e7", "model-a0c3"]
+    assert sorted(persisted["advertised_models"]) == sorted(["model-a0e7", "model-a0c3"])
     assert persisted["context_windows"]["model-a0e7"] == 200000
     assert persisted["model_metadata"]["model-a0e7"]["default_reasoning_level"] == "xhigh"
     assert persisted["model_metadata"]["model-a0e7"]["supported_reasoning_levels"] == ["low", "high"]

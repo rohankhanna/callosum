@@ -1,6 +1,6 @@
 """Background scheduler for the thorough capability harness.
 
-Closes the loop: when callosum starts (or when 
+Closes the loop: when callosum starts (or when
 downloads a new model and ollama picks it up on the next catalog
 refresh), the registered cells are walked, and any cell without a
 fresh capability profile gets probed across every registered
@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 
 # How often the periodic harness sweeper wakes up to re-check the cell
-# grid. 6 hours by default: short enough that a model 
+# grid. 6 hours by default: short enough that a model
 # pulls in the middle of the night is probed within hours (not days),
 # long enough that re-checks don't spam logs when nothing has changed.
 # Steady-state work per sweep is near-zero because the runner's per-

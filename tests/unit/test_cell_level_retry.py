@@ -464,9 +464,7 @@ def test_stream_expired_retry_budget_short_circuits_before_any_cell_call(
     → the wrapper returns it (no exception) → pytest.raises fails AND
     seen is non-empty → red.
     """
-    seen = _install_stream_inner_stub(
-        monkeypatch, behavior={"model-a": {"served": "a"}}
-    )
+    seen = _install_stream_inner_stub(monkeypatch, behavior={"model-a": {"served": "a"}})
     budget = _DispatchRetryBudget(deadline_ts=time.monotonic() - 1.0, max_backend_attempts=4)
     body = {"model": "auto"}
     with pytest.raises(HTTPException) as exc_info:

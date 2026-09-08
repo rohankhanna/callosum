@@ -42,21 +42,15 @@ refactors with an explicit reason.
 
 ### `callosum.backends.codex_auth_vault.CodexAuthVaultBackend`
 
-  * **Active alternative**: `callosum.backends.credential_proxy.CredentialProxyBackend`,
-    which routes OAuth refresh through the credential proxy service.
   * **What this fallback provides**: direct file-backed OAuth refresh
     against `auth.openai.com/oauth/token`, with no external service
     dependency. The backend reads / writes `auth.json` on disk and
     manages its own refresh chain.
-  * **When you'd activate it**: credential proxy is unreachable, broken, or
     being temporarily decommissioned. Switch a backend's `type` in
-    `config.toml` from `credential_proxy` to `codex_auth_vault`,
     point `vault_path` at a fresh `auth.json` (run `callosum-ctl
     auth-rotate` to produce one), restart. No code edits needed.
-  * **Why it stays redundant rather than active**: credential proxy centralizes
     OAuth refresh across multiple consumers, eliminating the
     multi-refresher race that plagued the file-backed path. Until and
-    unless credential proxy becomes unavailable, the credential_proxy path is
     architecturally preferable.
   * **Maintenance contract**: every test in
     `tests/unit/test_codex_auth_vault_backend.py` continues to run in

@@ -109,9 +109,7 @@ def _import_main(monkeypatch: pytest.MonkeyPatch):
     return main_mod
 
 
-def test_litellm_gateway_not_registered_when_local_added(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_litellm_gateway_not_registered_when_local_added(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """When the local LLM gateway backend is available + registered, the LiteLLM
     gateway MUST NOT also be registered (mutual exclusivity).
 
@@ -129,9 +127,7 @@ def test_litellm_gateway_not_registered_when_local_added(
     monkeypatch.setenv("CALLOSUM_LITELLM_GATEWAY_ENABLED", "1")
 
     cfg = Config()
-    backends = main_mod.build_runtime_backends(
-        cfg, operator_state=OperatorState(tmp_path / "op.sqlite")
-    )
+    backends = main_mod.build_runtime_backends(cfg, operator_state=OperatorState(tmp_path / "op.sqlite"))
 
     # The hub path ran (the stub hub backend is present).
     assert any(isinstance(b, _StubHubBackend) for b in backends), (
@@ -144,9 +140,7 @@ def test_litellm_gateway_not_registered_when_local_added(
     )
 
 
-def test_litellm_gateway_registered_when_hub_disabled(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_litellm_gateway_registered_when_hub_disabled(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """When the local LLM gateway is disabled, the LiteLLM gateway fallback MUST
     still register. Pins that the and not local_added guard
     doesn't over-skip the legitimate fallback path."""
@@ -159,9 +153,7 @@ def test_litellm_gateway_registered_when_hub_disabled(
     monkeypatch.setenv("CALLOSUM_LITELLM_GATEWAY_ENABLED", "1")
 
     cfg = Config()
-    backends = main_mod.build_runtime_backends(
-        cfg, operator_state=OperatorState(tmp_path / "op.sqlite")
-    )
+    backends = main_mod.build_runtime_backends(cfg, operator_state=OperatorState(tmp_path / "op.sqlite"))
 
     assert not any(isinstance(b, _StubHubBackend) for b in backends), (
         "hub backend registered despite CALLOSUM_LOCAL_DISABLED=1"
@@ -258,9 +250,7 @@ async def test_chat_completions_routes_to_responses_endpoint_for_native_entry() 
         f"(993e82a part 2)"
     )
     # And the response was translated back into a chat.completion.
-    assert result["object"] == "chat.completion", (
-        f"expected chat.completion object, got {result.get('object')!r}"
-    )
+    assert result["object"] == "chat.completion", f"expected chat.completion object, got {result.get('object')!r}"
     assert result["choices"][0]["message"]["content"] == "hi"
     # The public model id (what the client asked for) is preserved, not the
     # runtime alias.

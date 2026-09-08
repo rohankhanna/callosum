@@ -145,7 +145,11 @@ def test_local_cell_gets_slowed_global_prior(tmp_path: Path) -> None:
     # Only remote (fast) traffic exists. A local cell with no data of its own
     # inherits the global prior, slowed down by local_slowdown.
     _make_db(db, _linear_rows("model-a0e8", now=now, m=1.0, c=0.0, totals=[1000, 2000, 3000] * 4))
-    p = TimeModelProvider(db, min_samples=10, local_slowdown=3.0)
+
+    def _is_remote(cell: Cell) -> bool:
+        return "model-a0f0" in cell.model  # remote only
+
+    p = TimeModelProvider(db, min_samples=10, local_slowdown=3.0, is_remote=_is_remote)
     local = p.model_for(Cell("model-a0b6", "medium"))
     assert local.source == "global-prior"
     # Slope tilted up ~3x relative to the measured remote slope (~1.0).
@@ -238,6 +242,7 @@ def test_cold_start_estimate_is_still_verifiable(tmp_path: Path) -> None:
 def test_local_performance_model_overrides_generic_local_prior(tmp_path: Path) -> None:
     est = TimeUsageEstimator(
         TimeModelProvider(tmp_path / "missing.sqlite"),
+        is_remote=lambda cell: cell.model != "model-a0b6",
         local_performance_model=lambda cell: (
             build_local_performance_model(
                 model_id=cell.model,

@@ -30,7 +30,6 @@ from callosum.gate.types import CheckResult, CommandRunner, Tier, TierResult, Ti
 # main; the gate wires them as the inaugural Tier-1 members (work tracker
 # ). Paths are repo-relative.
 INAUGURAL_CASES: tuple[str, ...] = (
-    "tests/unit/routing/test_min_coverage_doom_loop.py",  # Bug1: feasibility filter + post-timeout cooldown
     "tests/unit/test_cell_level_retry.py",  # Bug2: request-scoped dispatch retry budget / cell failover
 )
 

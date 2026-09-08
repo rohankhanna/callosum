@@ -343,9 +343,7 @@ class CodexGatewayBackend:
                     self._apply_error_to_usage(err)
                     raise err
                 namespaced_names = namespaced_tool_names_from_request(body)
-                collector = ResponsesStreamCollector(
-                    strip_namespace_stream(response.aiter_bytes(), namespaced_names)
-                )
+                collector = ResponsesStreamCollector(strip_namespace_stream(response.aiter_bytes(), namespaced_names))
                 async for _chunk in collector.iter_through():
                     pass
                 if handle is not None:
@@ -384,9 +382,7 @@ class CodexGatewayBackend:
                     self._apply_error_to_usage(err)
                     raise err
                 namespaced_names = namespaced_tool_names_from_request(body)
-                collector = ResponsesStreamCollector(
-                    strip_namespace_stream(response.aiter_bytes(), namespaced_names)
-                )
+                collector = ResponsesStreamCollector(strip_namespace_stream(response.aiter_bytes(), namespaced_names))
                 async for chunk in collector.iter_through():
                     yield chunk
                 if handle is not None:

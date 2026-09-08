@@ -28,12 +28,9 @@ strategies, not multiple competing routers.
    backend serves the requested model/effort. Empty pool → 503 (specific
    reason). The backend-kind filter's remote set is two distinct kinds:
    `codex_auth_vault` (Codex Plus/Pro) and `ollama_cloud` (cloud models served
-   by ollama.com through credential proxy's boundary-native proxy custody — callosum
-   mints a short-TTL stand-in token and POSTs via credential proxy's
    `/v1/proxy`(`/stream`), real key never in callosum; `BackendKind="ollama_cloud"`,
    env-gated via `CALLOSUM_OLLAMA_CLOUD_ENABLED`, `CLOUD_PRIORITY_OFFSET=1_000`).
    `ollama_cloud` exposes an honest-advisory `usage_snapshot()` by default;
-   real 5h/7d usage meters can be read from credential proxy when operator-gated
    (`CALLOSUM_OLLAMA_CLOUD_USAGE_*`, defaults OFF — see
    `docs/operations/runtime_deploy.md`). Every `=="litellm_gateway"`
    (local-affirmative) site excludes `ollama_cloud` by omission, so cloud

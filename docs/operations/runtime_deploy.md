@@ -104,12 +104,7 @@ Environment`. To disable: remove the file (or set the value to `0`),
 
 `CALLOSUM_OLLAMA_CLOUD_ENABLED=1` registers the `OllamaCloudBackend`
 (`BackendKind="ollama_cloud"`) — cloud models served by ollama.com
-through credential proxy's boundary-native proxy custody. Callosum mints a
-short-TTL `ollama-cloud`-scoped stand-in token at credential proxy's
-`POST /v1/standin` and POSTs each ollama.com call through credential proxy's
-`POST /v1/proxy`(`/stream`); credential proxy injects the real ollama.com API
 key on the final hop, so the real key never enters callosum (it holds
-only the stand-in). This retires the prior local-ollama-daemon `ollama
 signin` chat path. The durable drop-in is
 `~/.config/systemd/user/system-dependency-callosum.service.d/ollama-cloud.conf`:
 
@@ -126,14 +121,12 @@ curl -s http://127.0.0.1:8765/models | jq '.data[] | select(.id|test(":cloud")) 
 ```
 
 `:cloud`-suffixed models catalog from ollama.com's `/api/tags` (reached
-through the credential proxy proxy, not the local daemon) and are classified
 `callosum:remote/...` (e.g. `callosum:remote/glm-5.1:cloud:default`). The local lane catalogs from
 local LLM gateway's `/v1/models` serving endpoint, which excludes unmanaged
 `:cloud` models, so there is no double-list. Cloud cells enter the
 per-cell minimum-coverage grid, so the quota may route some real
 traffic to `glm-5.X:cloud` to satisfy the per-cell floor.
 
-### Ollama Cloud usage source (credential proxy, credential-free)
 
 By default `OllamaCloudBackend.usage_snapshot()` returns an
 **honest-advisory** snapshot (`remaining_fraction=1.0`,
@@ -142,10 +135,7 @@ because callosum has no real usage meter. The advisory is honest about
 the gap: it simply never claims exhaustion.
 
 Callosum can now optionally read the **real** ollama-cloud 5h-session
-and 7d-weekly usage meters from credential proxy (the credential-custody sibling
-on `127.0.0.1:7342`) via a credential-free loopback stand-in token.
 Callosum holds NO credential for this either — same daemon-custody
-principle as the `ollama_cloud` backend itself; credential proxy owns the
 ollama signin cookie and exposes a read-only usage endpoint.
 
 Two env flags gate the path. **Both default OFF — there is no
@@ -170,10 +160,7 @@ Environment=CALLOSUM_OLLAMA_CLOUD_USAGE_ACCOUNT=primary
 Environment=CALLOSUM_OLLAMA_CLOUD_STANDIN_TTL=1800
 ```
 
-`CALLOSUM_OLLAMA_CLOUD_STANDIN_TTL` is the stand-in token lifetime in
-seconds (credential proxy max is 1800s). The source is read-only and
 shadow-available: when `CALLOSUM_OLLAMA_CLOUD_USAGE_LIVE` is OFF, or
-the source returns `None` (credential proxy down / cookies expired / 401),
 `usage_snapshot()` falls back to the existing honest-advisory —
 routing never errors and never cools down the cloud lane just because
 a meter is unavailable.

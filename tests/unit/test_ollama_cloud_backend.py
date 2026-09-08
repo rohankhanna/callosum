@@ -115,9 +115,7 @@ async def test_default_empty_suffix_accepts_all_catalog_names() -> None:
 
 
 async def test_suffix_filter_keeps_only_matching_models() -> None:
-    handler, _ = _direct_handler(
-        tags=_tags_payload("model-a0d2:cloud", "model-a0b4", "model-a0f3:cloud", "model-a0d5")
-    )
+    handler, _ = _direct_handler(tags=_tags_payload("model-a0d2:cloud", "model-a0b4", "model-a0f3:cloud", "model-a0d5"))
     backend = _backend(handler, model_suffix=":cloud")
     await backend.refresh_advertised_models()
     assert backend.advertised_models == frozenset({"model-a0d2:cloud", "model-a0f3:cloud"})
@@ -364,9 +362,7 @@ async def test_responses_stream_emits_translated_events() -> None:
     backend = _backend(handler)
     handle = CallHandle()
     events: list[dict[str, Any]] = []
-    async for raw in backend.responses_stream(
-        {"model": "model-a0d2:cloud", "input": "say hi", "stream": True}, handle
-    ):
+    async for raw in backend.responses_stream({"model": "model-a0d2:cloud", "input": "say hi", "stream": True}, handle):
         for event_block in raw.split(b"\n\n"):
             for line in event_block.split(b"\n"):
                 if not line.startswith(b"data:"):
@@ -414,9 +410,7 @@ async def test_chat_completions_stream_passthrough() -> None:
     handler, _ = _direct_handler(chat_sse=chunks)
     backend = _backend(handler)
     handle = CallHandle()
-    output = b"".join(
-        [chunk async for chunk in backend.chat_completions_stream({"model": "model-a0d2:cloud"}, handle)]
-    )
+    output = b"".join([chunk async for chunk in backend.chat_completions_stream({"model": "model-a0d2:cloud"}, handle)])
     assert b'data: {"id":"x"' in output
     assert b"[DONE]" in output
     assert handle.upstream_status == 200
@@ -436,9 +430,7 @@ async def test_chat_completions_stream_401_is_auth_invalid() -> None:
     await backend.aclose()
 
 
-def test_backend_absent_from_build_when_env_unset(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_backend_absent_from_build_when_env_unset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from callosum.__main__ import build_runtime_backends
     from callosum.config import Config
     from callosum.operator_state import OperatorState
@@ -450,9 +442,7 @@ def test_backend_absent_from_build_when_env_unset(
     assert all(backend.id != "ollama-cloud" for backend in backends)
 
 
-def test_backend_present_when_env_set(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_backend_present_when_env_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from callosum.__main__ import build_runtime_backends
     from callosum.config import Config
     from callosum.operator_state import OperatorState

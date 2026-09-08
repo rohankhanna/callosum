@@ -92,8 +92,6 @@ def _make_backend(
     )
 
 
-
-
 def test_diagnose_green_path_reports_all_checks_pass(tmp_path: Path) -> None:
     def upstream(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -240,4 +238,3 @@ def test_diagnose_requires_bearer_when_auth_enabled(tmp_path: Path) -> None:
         ok = client.get("/diagnose/upstream", headers={"Authorization": f"Bearer {key}"})
         assert ok.status_code == 200
         assert ok.json()["ok"] is True
-

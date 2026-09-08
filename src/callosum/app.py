@@ -44,9 +44,6 @@ from callosum.cell_grid import (
 from callosum.config import LOCAL_STREAM_FIRST_BYTE_TIMEOUT_S, AutoRouterConfig
 from callosum.errors import RETRYABLE, BackendError, ErrorClass
 from callosum.fallback import FallbackExecutor, should_attempt_fallback
-from callosum.label_ui import install_label_ui
-from callosum.peer_quality import PeerQualityOpinion, extract_peer_quality_opinions
-from callosum.peer_quality_sidecar import SidecarJudgeCandidate, execute_sidecar_judge_candidate
 from callosum.routing.cost_estimator import (
     CompositeCostModelProvider,
     CompositeCostUsageEstimator,
@@ -71,7 +68,100 @@ from callosum.selector import BackendSnapshot, blocking_meters, constraining_met
 from callosum.selectors import SelectorError, is_selector, parse_selector
 from callosum.session import SessionRegistry
 from callosum.tokenization import count_tokens
-from callosum.usage_log import RoutingAttempt, SessionAssistantTurn, UsageLog, UsageLogEntry
+from callosum.usage_log import PeerQualityOpinion, RoutingAttempt, SessionAssistantTurn, UsageLog, UsageLogEntry
+
+# ── no-op stubs for removed private modules ──────────────────────────────
+# The peer_quality, peer_quality_sidecar, label_ui, and canary modules are
+# private. These no-op stubs preserve the interface so the code compiles;
+# they do nothing at runtime. Implement custom versions in your own modules
+# and wire them in to enable these features.
+
+
+@dataclass(frozen=True, slots=True)
+class PeerQualityExtraction:
+    cleaned_text: str = ""
+    opinions: tuple[PeerQualityOpinion, ...] = ()
+    echo_count: int = 0
+    malformed_count: int = 0
+
+
+def extract_peer_quality_opinions(text: str, *, nonce: str = "") -> PeerQualityExtraction:
+    return PeerQualityExtraction(cleaned_text=text)
+
+
+@dataclass(frozen=True, slots=True)
+class SidecarJudgeCandidate:
+    subject_request_id: int = 0
+    session_id: str | None = None
+    judge_model: str = ""
+    judge_reasoning_effort: str | None = None
+    user_prompt_text: str = ""
+    subject_model: str = ""
+    subject_reasoning_effort: str | None = None
+    subject_response_text: str = ""
+    id: int | None = None
+    request_id: int | None = None
+    judge_backend_id: str | None = None
+
+
+async def execute_sidecar_judge_candidate(candidate: object, **kwargs: object) -> None:
+    return None
+
+
+def install_label_ui(app: object, usage_log: object) -> None:
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class CanaryConfig:
+    percent: float = 10.0
+    floor_percent: float = 2.0
+    ceiling_percent: float = 10.0
+    quota_warning_threshold: float = 80.0
+    quota_suspend_threshold: float = 95.0
+
+
+class CanaryScheduler:
+    def __init__(self, config: CanaryConfig | None = None, **kwargs: object) -> None:
+        self._config = config if config is not None else CanaryConfig()
+
+    @property
+    def config(self) -> CanaryConfig:
+        return self._config
+
+    def effective_percent(self, *, quota_used_percent: float | None) -> float:
+        return self._config.percent
+
+    def decide(self, **kwargs: object) -> int:
+        return 0  # NORMAL
+
+
+class FailureRegistry:
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        pass
+
+    def record(self, obs: object) -> int:
+        return 0
+
+
+class CanaryDecision:
+    NORMAL = 0
+    REDIRECT_REMOTE = 1
+
+
+@dataclass(slots=True)
+class FailureObservation:
+    ts: float = 0.0
+    effective_mode: str = ""
+    symptom: str = ""
+    responsible_layer: str = ""
+    request_id: int | None = None
+    detail: str | None = None
+
+
+def peer_quality_shadow_report(path: object) -> dict[str, object]:
+    return {}
+
 
 logger = logging.getLogger("callosum.startup")
 
@@ -992,12 +1082,8 @@ def create_app(
     startup_smoke_test: bool = False,
     smoke_test_interval_seconds: int = 0,
     operator_state: Any = None,
-    autonomy_store: Any = None,
-    retention_runner: Any = None,
-    self_assessment_runner: Any = None,
     transform_registry: Any = None,
 ) -> FastAPI:
-    from callosum.canary import CanaryScheduler, FailureRegistry
     from callosum.state import StateStore
 
     backends_list: list[Backend] = list(backends)
@@ -1512,9 +1598,6 @@ def create_app(
             app,
             operator_state,
             backends=backends_list,
-            autonomy_store=autonomy_store,
-            retention_runner=retention_runner,
-            self_assessment_runner=self_assessment_runner,
             usage_log=usage_log,
         )
 
@@ -1591,8 +1674,6 @@ def create_app(
     def _compute_status_obs(log: UsageLog) -> dict[str, Any]:
         report: dict[str, Any] = {}
         try:
-            from callosum.routing.labeler.peer_quality import peer_quality_shadow_report
-
             report["peer_quality_shadow"] = peer_quality_shadow_report(log.path)
         except Exception:
             logger.exception("status: peer-quality shadow report failed")
@@ -2428,7 +2509,6 @@ async def _dispatch_internal(
                     continue
                 if _quota_pct is None or _w > _quota_pct:
                     _quota_pct = _w
-            from callosum.canary import CanaryDecision
 
             _sched = _CANARY_SCHEDULER
             if _sched is not None:
@@ -4635,8 +4715,6 @@ def _log_attempt(
     # registry write failures are swallowed inside `record()`.
     _fr = _FAILURE_REGISTRY
     if _fr is not None and ((isinstance(status, int) and status >= 500) or error is not None):
-        from callosum.canary import FailureObservation
-
         # Symptom: distinguish the well-known classes; everything
         # else is `http_5xx` as a catch-all that an operator can
         # refine later by annotating the row. `sym` is intentionally

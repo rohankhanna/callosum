@@ -9,9 +9,7 @@ from callosum.backends.codex_gateway import CodexGatewayBackend
 from callosum.errors import BackendError
 
 
-def _sse_response(
-    response_payload: dict, *, status: int = 200, headers: dict | None = None
-) -> httpx.Response:
+def _sse_response(response_payload: dict, *, status: int = 200, headers: dict | None = None) -> httpx.Response:
     events = [
         ("response.created", {"type": "response.created", "id": response_payload.get("id", "r1")}),
         ("response.completed", {"type": "response.completed", "response": response_payload}),
@@ -26,8 +24,10 @@ def _sse_response(
 
 def _gateway(handler: httpx.MockTransport | None = None, **kwargs: object) -> CodexGatewayBackend:
     if handler is None:
+
         def handler(request: httpx.Request) -> httpx.Response:
             raise AssertionError("unexpected request")
+
     return CodexGatewayBackend(
         id="gw-a",
         api_key="gw-key-123",
@@ -218,9 +218,7 @@ async def test_rate_limited_records_cooldown() -> None:
     backend = _gateway(handler)
     try:
         with pytest.raises(BackendError) as excinfo:
-            await backend.chat_completions(
-                {"model": "model-a", "messages": [{"role": "user", "content": "hi"}]}
-            )
+            await backend.chat_completions({"model": "model-a", "messages": [{"role": "user", "content": "hi"}]})
         assert excinfo.value.classification == "rate_limited"
         snapshot = await backend.usage_snapshot()
         assert snapshot.cooldown_until_ts is not None
@@ -238,9 +236,7 @@ async def test_401_raises_auth_invalid_no_retry() -> None:
     backend = _gateway(handler)
     try:
         with pytest.raises(BackendError) as excinfo:
-            await backend.chat_completions(
-                {"model": "model-a", "messages": [{"role": "user", "content": "hi"}]}
-            )
+            await backend.chat_completions({"model": "model-a", "messages": [{"role": "user", "content": "hi"}]})
         assert excinfo.value.classification == "auth_invalid"
         assert call_count["n"] == 1
     finally:

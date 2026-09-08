@@ -69,9 +69,6 @@ class OpenRouterBackend:
         model_filter: str = "all",
         allowlist: frozenset[str] = frozenset(),
         model_prefix: str | None = None,
-        blocked_countries: frozenset[str] = DEFAULT_BLOCKED_COUNTRIES,
-        blocked_providers: frozenset[str] = frozenset(),
-        allowed_providers: frozenset[str] = frozenset(),
         exclude_families: frozenset[str] = DEFAULT_EXCLUDE_FAMILIES,
         catalog_refresh_s: float = DEFAULT_CATALOG_REFRESH_S,
         client: httpx.AsyncClient | None = None,
@@ -86,9 +83,6 @@ class OpenRouterBackend:
         self._model_filter = model_filter
         self._allowlist = frozenset(allowlist)
         self._model_prefix = model_prefix
-        self._blocked_countries = frozenset(blocked_countries)
-        self._blocked_providers = frozenset(blocked_providers)
-        self._allowed_providers = frozenset(allowed_providers)
         self._exclude_families = frozenset(exclude_families)
         self._catalog_refresh_s = catalog_refresh_s
         if client is not None:
@@ -100,7 +94,6 @@ class OpenRouterBackend:
         self._catalog: tuple[str, ...] = ()
         self._context_windows: dict[str, int] = {}
         self._catalog_fetched_at: float = 0.0
-        self._regime_provider_deny: frozenset[str] = frozenset()
         self._healthy: bool = False
         self._last_health_reason: str = "unknown"
         self._exhausted_until: float = 0.0
@@ -207,47 +200,6 @@ class OpenRouterBackend:
         tokens = self._exclude_families
         return [slug for slug in slugs if not any(token in slug.lower() for token in tokens)]
 
-    def _derive_regime_provider_deny(self, providers: list[Any]) -> frozenset[str]:
-        """Derive inference providers excluded by country rules."""
-        blocked = self._blocked_countries
-        denied: set[str] = set()
-        for entry in providers:
-            if not isinstance(entry, dict):
-                continue
-            slug = entry.get("slug")
-            if not isinstance(slug, str) or not slug:
-                continue
-            headquarters = entry.get("headquarters")
-            datacenters = entry.get("datacenters")
-            regime = isinstance(headquarters, str) and headquarters in blocked
-            if not regime and isinstance(datacenters, list):
-                regime = any(
-                    isinstance(datacenter, str) and datacenter in blocked
-                    for datacenter in datacenters
-                )
-            if regime:
-                denied.add(slug)
-        denied |= set(self._blocked_providers)
-        denied -= set(self._allowed_providers)
-        return frozenset(denied)
-
-    def _inject_residency_preferences(self, body: dict[str, Any]) -> dict[str, Any]:
-        """Merge the derived provider deny set into OpenRouter preferences."""
-        if not self._regime_provider_deny:
-            return body
-        out = dict(body)
-        existing = out.get("provider")
-        if isinstance(existing, dict):
-            merged = dict(existing)
-            ignore = merged.get("ignore") or []
-            if isinstance(ignore, list):
-                ignore = set(ignore)
-            merged["ignore"] = sorted(set(ignore) | set(self._regime_provider_deny))
-            out["provider"] = merged
-        else:
-            out["provider"] = {"ignore": sorted(self._regime_provider_deny)}
-        return out
-
     @contextlib.asynccontextmanager
     async def _direct_stream_cm(self, out_body: dict[str, Any]) -> AsyncIterator[httpx.Response]:
         headers = {
@@ -266,7 +218,7 @@ class OpenRouterBackend:
         """Send a non-streaming chat request directly to OpenRouter."""
         await self._refresh_catalog_if_stale()
         prepped = _strip_codex_only_fields({**body, "stream": False})
-        out_body = self._inject_residency_preferences(prepped)
+        out_body = prepped
         try:
             upstream_status, upstream_headers, upstream_body = await self._direct_request(
                 method="POST",
@@ -298,7 +250,7 @@ class OpenRouterBackend:
         """Yield OpenRouter's chat-completions stream directly."""
         await self._refresh_catalog_if_stale()
         prepped = _strip_codex_only_fields({**body, "stream": True})
-        out_body = self._inject_residency_preferences(prepped)
+        out_body = prepped
         try:
             async with self._client.stream(
                 "POST",
@@ -343,7 +295,7 @@ class OpenRouterBackend:
         """Translate an OpenRouter chat stream into Responses events."""
 
         def open_chat_stream(out_body: dict[str, Any], _headers: dict[str, str]) -> AsyncContextManager[httpx.Response]:
-            return self._direct_stream_cm(self._inject_residency_preferences(out_body))
+            return self._direct_stream_cm(out_body)
 
         collector = ResponsesStreamCollector(
             chat_to_responses_stream(
@@ -429,28 +381,6 @@ class OpenRouterBackend:
             self._healthy = False
             self._last_health_reason = "unknown"
             return
-
-        providers: list[Any] = []
-        try:
-            providers_status, _providers_headers, providers_body = await self._direct_request(
-                method="GET",
-                url=f"{self._base_url}/providers",
-                app_headers=self._app_request_headers(stream=False),
-                body=b"",
-                timeout=DEFAULT_HEALTH_TIMEOUT_S,
-            )
-        except httpx.HTTPError:
-            providers_status = None
-            providers_body = b""
-        if providers_status == 200:
-            try:
-                providers_payload = json.loads(providers_body)
-                providers_data = providers_payload.get("data") if isinstance(providers_payload, dict) else None
-                if isinstance(providers_data, list):
-                    providers = providers_data
-            except (ValueError, TypeError):
-                pass
-        self._regime_provider_deny = self._derive_regime_provider_deny(providers)
 
         slugs: list[str] = []
         context_windows: dict[str, int] = {}

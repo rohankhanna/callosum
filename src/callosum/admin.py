@@ -33,48 +33,9 @@ from typing import Any
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request, status
 
-from callosum.autonomy import AutonomyLevel, AutonomyStore, PromotionNotReady
-from callosum.dev_loop.pre_filter import DEFAULT_DEV_LOOP_DONE_DIR
-from callosum.dev_loop.state import (
-    list_pending_review_branches,
-    read_dispatcher_outcome,
-)
 from callosum.feedback_redirect import format_feedback_redirect
 from callosum.operator_state import VALID_ROUTING_MODES, OperatorState
-from callosum.retention import RetentionRunner, result_to_dict
-from callosum.self_assessment import SelfAssessmentRunner
 from callosum.usage_log import UsageLog
-
-
-def _repo_root_for_branch_listing() -> Path:
-    """Locate the callosum repo so `git for-each-ref` can list
-    auto/dev-loop-* branches. Same derivation as
-    `callosum.dev_loop.cli._repo_root` — this module is at
-    `src/callosum/admin.py`, so the repo is two parents up."""
-    return Path(__file__).resolve().parents[2]
-
-
-def _dev_loop_status_payload() -> dict[str, Any]:
-    """Build the dev_loop section of /admin/status. Read-only — looks
-    at the daily marker, the last-run JSON, and `git for-each-ref` for
-    pending review branches. Never modifies state. Returns a sensible
-    skeleton when nothing has been recorded yet (fresh install)."""
-    from datetime import datetime
-
-    today = datetime.now().strftime("%Y-%m-%d")
-    today_marker = DEFAULT_DEV_LOOP_DONE_DIR / f"{today}.marker"
-
-    last = read_dispatcher_outcome()
-    last_payload: dict[str, Any] | None = None if last is None else last.to_dict()
-
-    branches = list_pending_review_branches(_repo_root_for_branch_listing())
-    return {
-        "today_marker_present": today_marker.exists(),
-        "today_marker_path": str(today_marker),
-        "last_run": last_payload,
-        "pending_review_branches": [b.to_dict() for b in branches],
-        "pending_review_count": len(branches),
-    }
 
 
 def _admin_token_path() -> Path:
@@ -105,9 +66,6 @@ def install_admin_routes(
     operator_state: OperatorState,
     *,
     backends: list[Any] | None = None,
-    autonomy_store: AutonomyStore | None = None,
-    retention_runner: RetentionRunner | None = None,
-    self_assessment_runner: SelfAssessmentRunner | None = None,
     usage_log: UsageLog | None = None,
 ) -> None:
     """Mount the /admin/* endpoints on `app`, gated by the admin token.
@@ -118,10 +76,6 @@ def install_admin_routes(
         returns an empty result (callosum was started without any backends
         or the wiring isn't passing them through yet).
 
-        `autonomy_store` is the earned-autonomy ladder backing
-        /admin/autonomy/*. When None, those endpoints return 503; the proxy
-        can still operate at effective L1_MANUAL (manual everything) which
-        is the safe default behavior when state isn't configured.
 
         `usage_log` backs the /admin/feedback* surface-only redirect endpoints
     . When None, those endpoints return 503; the proxy
@@ -151,7 +105,6 @@ def install_admin_routes(
                 {"model": m, "params": p, "force": f} for m, p, f in operator_state.list_inference_overrides()
             ],
             "denylist": [{"model": m, "reason": r} for m, r in operator_state.list_denied_cells()],
-            "dev_loop": _dev_loop_status_payload(),
             "feedback_suggestions_pending": (
                 usage_log.pending_feedback_suggestion_count() if usage_log is not None else 0
             ),
@@ -390,31 +343,6 @@ def install_admin_routes(
                 "error": f"{type(exc).__name__}: {exc}",
             }
 
-    # ---------- autonomy ladder (Tier A) ---------------------------------
-
-    def _autonomy_state_dict(store: AutonomyStore) -> dict[str, Any]:
-        state = store.get_state()
-        eligible, why = state.is_eligible_for_promotion()
-        return {
-            "current_level": int(state.current_level),
-            "current_level_name": state.current_level.name,
-            "last_changed_at": state.last_changed_at,
-            "last_changed_reason": state.last_changed_reason,
-            "ops_at_current_level": state.ops_at_current_level,
-            "clean_streak": state.clean_streak,
-            "promotion_threshold_k": state.promotion_threshold_k,
-            "promotion_eligible": eligible,
-            "promotion_eligibility_reason": why,
-        }
-
-    def _require_autonomy() -> AutonomyStore:
-        if autonomy_store is None:
-            raise HTTPException(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                "autonomy store not configured; effective L1_MANUAL",
-            )
-        return autonomy_store
-
     def _require_usage_log() -> UsageLog:
         if usage_log is None:
             raise HTTPException(
@@ -422,189 +350,6 @@ def install_admin_routes(
                 "usage log not configured; feedback redirect unavailable",
             )
         return usage_log
-
-    @router.get("/autonomy")
-    async def admin_autonomy_show(request: Request) -> dict[str, Any]:
-        _check(request)
-        return _autonomy_state_dict(_require_autonomy())
-
-    @router.post("/autonomy/promote")
-    async def admin_autonomy_promote(request: Request) -> dict[str, Any]:
-        _check(request)
-        store = _require_autonomy()
-        try:
-            store.promote(actor="user")
-        except PromotionNotReady as exc:
-            raise HTTPException(409, str(exc)) from exc
-        return _autonomy_state_dict(store)
-
-    @router.post("/autonomy/demote")
-    async def admin_autonomy_demote(request: Request) -> dict[str, Any]:
-        _check(request)
-        store = _require_autonomy()
-        body: dict[str, Any] = {}
-        try:
-            body = await request.json()
-        except Exception:
-            body = {}
-        reason = body.get("reason") if isinstance(body, dict) else None
-        reason_str = str(reason) if isinstance(reason, str) and reason else "operator demote"
-        store.demote(reason=reason_str, actor="user")
-        return _autonomy_state_dict(store)
-
-    @router.post("/autonomy/set")
-    async def admin_autonomy_set(request: Request) -> dict[str, Any]:
-        _check(request)
-        store = _require_autonomy()
-        body = await request.json()
-        if not isinstance(body, dict):
-            raise HTTPException(400, "expected JSON object")
-        level_raw = body.get("level")
-        if not isinstance(level_raw, int):
-            raise HTTPException(400, "level required: integer 1..5")
-        try:
-            level = AutonomyLevel(level_raw)
-        except ValueError as exc:
-            raise HTTPException(400, f"invalid level {level_raw}: {exc}") from exc
-        reason = body.get("reason")
-        reason_str = str(reason) if isinstance(reason, str) and reason else "operator set"
-        store.set_level(level, reason=reason_str, actor="user")
-        return _autonomy_state_dict(store)
-
-    @router.get("/autonomy/history")
-    async def admin_autonomy_history(request: Request) -> list[dict[str, Any]]:
-        _check(request)
-        store = _require_autonomy()
-        return [
-            {
-                "ts": t.ts,
-                "from_level": int(t.from_level),
-                "from_level_name": t.from_level.name,
-                "to_level": int(t.to_level),
-                "to_level_name": t.to_level.name,
-                "reason": t.reason,
-                "actor": t.actor,
-            }
-            for t in store.history(limit=200)
-        ]
-
-    @router.get("/autonomy/audit")
-    async def admin_autonomy_audit(request: Request) -> list[dict[str, Any]]:
-        _check(request)
-        store = _require_autonomy()
-        return [
-            {
-                "ts": e.ts,
-                "action": e.action,
-                "level_at_time": int(e.level_at_time),
-                "level_name": e.level_at_time.name,
-                "outcome": e.outcome,
-                "signal": e.signal,
-                "details": e.details,
-            }
-            for e in store.audit_log(limit=200)
-        ]
-
-    # ---------- retention (Tier G) ---------------------------------------
-
-    def _require_retention() -> RetentionRunner:
-        if retention_runner is None:
-            raise HTTPException(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                "retention runner not configured",
-            )
-        return retention_runner
-
-    @router.get("/retention")
-    async def admin_retention_show(request: Request) -> dict[str, Any]:
-        _check(request)
-        runner = _require_retention()
-        return {
-            "archive_dir": str(runner.archive_dir),
-            "policies": [
-                {
-                    "name": p.name,
-                    "description": p.description,
-                    "kind": p.kind.value,
-                    "delete_after_days": p.delete_after_days,
-                    "archive_on_delete": p.archive_on_delete,
-                    "params": p.params,
-                }
-                for p in runner.policies()
-            ],
-        }
-
-    @router.get("/retention/status")
-    async def admin_retention_status(request: Request) -> list[dict[str, Any]]:
-        _check(request)
-        return _require_retention().status()
-
-    @router.post("/retention/preview")
-    async def admin_retention_preview(request: Request) -> list[dict[str, Any]]:
-        _check(request)
-        return [result_to_dict(r) for r in _require_retention().preview()]
-
-    @router.post("/retention/run")
-    async def admin_retention_run(request: Request) -> list[dict[str, Any]]:
-        _check(request)
-        return [result_to_dict(r) for r in _require_retention().run()]
-
-    # ---------- self-assessment (Tier C) ---------------------------------
-
-    def _require_self_assessment() -> SelfAssessmentRunner:
-        if self_assessment_runner is None:
-            raise HTTPException(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                "self-assessment runner not configured",
-            )
-        return self_assessment_runner
-
-    @router.get("/self-assessment/history")
-    async def admin_self_assessment_history(
-        request: Request,
-    ) -> list[dict[str, Any]]:
-        _check(request)
-        store = _require_autonomy()
-        return [
-            {
-                "id": r.id,
-                "ts": r.ts,
-                "window_start_ts": r.window_start_ts,
-                "window_end_ts": r.window_end_ts,
-                "metrics": r.metrics,
-                "decision": r.decision,
-                "notes": r.notes,
-            }
-            for r in store.list_self_assessments(limit=200)
-        ]
-
-    @router.post("/self-assessment/preview")
-    async def admin_self_assessment_preview(
-        request: Request,
-    ) -> dict[str, Any]:
-        """Dry-run: compute metrics + decision without persisting or
-        firing demote. Useful for the operator to inspect what the
-        next real run would do."""
-        _check(request)
-        runner = _require_self_assessment()
-        metrics, decision = runner.run(dry_run=True)
-        return {
-            "metrics": _dataclass_to_dict(metrics),
-            "decision": _dataclass_to_dict(decision),
-        }
-
-    @router.post("/self-assessment/run")
-    async def admin_self_assessment_run(request: Request) -> dict[str, Any]:
-        """Execute one self-assessment cycle: persist row, demote on
-        bad signal, emit feedback artifact. Returns the metrics +
-        decision so the cron wrapper logs them."""
-        _check(request)
-        runner = _require_self_assessment()
-        metrics, decision = runner.run(dry_run=False)
-        return {
-            "metrics": _dataclass_to_dict(metrics),
-            "decision": _dataclass_to_dict(decision),
-        }
 
     # --- feedback surface-only redirect ---------------
     # NOT an upstream relay. callosum points the operator at their own

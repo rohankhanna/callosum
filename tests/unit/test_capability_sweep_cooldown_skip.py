@@ -169,8 +169,7 @@ async def test_sweep_skips_cooldown_backend_but_runs_healthy(monkeypatch) -> Non
 
     # The healthy backend's cell was probed.
     assert "healthy" in probed, (
-        f"healthy backend was not probed (probed={probed!r}) — the cooldown "
-        f"skip is over-skipping eligible backends"
+        f"healthy backend was not probed (probed={probed!r}) — the cooldown skip is over-skipping eligible backends"
     )
     # The cooldown backend's cell was NOT probed — the core regression.
     assert "cooldown" not in probed, (
@@ -199,8 +198,7 @@ async def test_sweep_skips_weekly_exhausted_backend(monkeypatch) -> None:
     _stub_dimensions(monkeypatch, probed)
     await run_harness_sweep(backends=[exhausted], ttl_s=60.0)
     assert probed == [], (
-        f"weekly-exhausted backend was probed (probed={probed!r}) — "
-        f"df2ebd3 regressed for the weekly_exhausted branch"
+        f"weekly-exhausted backend was probed (probed={probed!r}) — df2ebd3 regressed for the weekly_exhausted branch"
     )
 
 

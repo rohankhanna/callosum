@@ -49,10 +49,7 @@ class FakeRunner:
 
 
 def test_inaugural_cases_are_the_two_bug_regression_tests() -> None:
-    assert INAUGURAL_CASES == (
-        "tests/unit/routing/test_min_coverage_doom_loop.py",
-        "tests/unit/test_cell_level_retry.py",
-    )
+    assert INAUGURAL_CASES == ("tests/unit/test_cell_level_retry.py",)
 
 
 def test_all_green_runs_all_four_checks_in_order() -> None:
@@ -114,7 +111,6 @@ def test_inaugural_cases_pass_through_to_pytest() -> None:
     inaugural_argv = r.calls[0]
     assert "-m" in inaugural_argv and inaugural_argv[2] == "pytest"
     assert INAUGURAL_CASES[0] in inaugural_argv
-    assert INAUGURAL_CASES[1] in inaugural_argv
 
 
 def test_resolve_gate_python_prefers_repo_venv_when_present(tmp_path: Path) -> None:

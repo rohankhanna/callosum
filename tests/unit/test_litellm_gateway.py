@@ -887,7 +887,9 @@ async def test_responses_stream_inband_tag_straddling_deltas_routes_to_reasoning
         return httpx.Response(404)
 
     backend = LiteLLMGatewayBackend(id="local", transport=httpx.MockTransport(handler))
-    raw_chunks = [raw async for raw in backend.responses_stream({"model": "model-a0d5", "input": "puzzle", "stream": True})]
+    raw_chunks = [
+        raw async for raw in backend.responses_stream({"model": "model-a0d5", "input": "puzzle", "stream": True})
+    ]
     events = _collect_stream_events(raw_chunks)
     types = [e["type"] for e in events]
 

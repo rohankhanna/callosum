@@ -151,9 +151,6 @@ async def test_periodic_smoke_tester_stops_cleanly_mid_wait(
     await asyncio.wait_for(tester.stop(), timeout=2.0)
 
 
-
-
-
 # --------- catalog boot resync: give-up -> first-tick hole ()
 
 

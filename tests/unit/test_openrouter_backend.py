@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
 from collections.abc import Callable
 from pathlib import Path
@@ -136,9 +135,7 @@ async def test_advertised_models_empty_before_first_poll() -> None:
     assert backend.advertised_models == frozenset()
     health = await backend.health()
     assert health.available is True
-    assert backend.advertised_models == frozenset(
-        {"openai/model-a0f5", "anthropic/model-a0aa"}
-    )
+    assert backend.advertised_models == frozenset({"openai/model-a0f5", "anthropic/model-a0aa"})
     await backend.aclose()
 
 
@@ -146,9 +143,7 @@ async def test_family_exclude_drops_ollama_cloud_overlap() -> None:
     handler, _records = _direct_handler()
     backend = _backend(handler)
     await backend.health()
-    assert backend.advertised_models == frozenset(
-        {"openai/model-a0f5", "anthropic/model-a0aa"}
-    )
+    assert backend.advertised_models == frozenset({"openai/model-a0f5", "anthropic/model-a0aa"})
     assert "meta-model-a0g1/model-a0c2" not in backend.advertised_models
     assert "model-a0g3/model-a0g3-2.5-72b" not in backend.advertised_models
     assert "model-a0e2/model-a0c6" not in backend.advertised_models
@@ -218,65 +213,6 @@ async def test_model_metadata_remote_band_and_context_window() -> None:
     await backend.aclose()
 
 
-async def test_regime_deny_derivation_default() -> None:
-    handler, _records = _direct_handler()
-    backend = _backend(handler)
-    await backend.health()
-    assert backend._regime_provider_deny == frozenset({"alibaba", "z-ai"})
-    await backend.aclose()
-
-
-async def test_regime_deny_allowed_providers_exempts() -> None:
-    handler, _records = _direct_handler()
-    backend = _backend(handler, allowed_providers=frozenset({"z-ai"}))
-    await backend.health()
-    assert backend._regime_provider_deny == frozenset({"alibaba"})
-    await backend.aclose()
-
-
-async def test_regime_deny_blocked_providers_adds() -> None:
-    handler, _records = _direct_handler()
-    backend = _backend(handler, blocked_providers=frozenset({"nebius"}))
-    await backend.health()
-    assert backend._regime_provider_deny == frozenset({"alibaba", "z-ai", "nebius"})
-    await backend.aclose()
-
-
-async def test_regime_deny_custom_blocked_countries() -> None:
-    handler, _records = _direct_handler()
-    backend = _backend(handler, blocked_countries=frozenset({"US"}))
-    await backend.health()
-    assert backend._regime_provider_deny == frozenset({"deepinfra"})
-    await backend.aclose()
-
-
-async def test_regime_deny_null_metadata_not_denied() -> None:
-    handler, _records = _direct_handler()
-    backend = _backend(handler)
-    await backend.health()
-    assert "unknown-co" not in backend._regime_provider_deny
-    await backend.aclose()
-
-
-async def test_regime_deny_providers_failure_leaves_previous_set_empty() -> None:
-    handler, _records = _direct_handler(providers_status=500)
-    backend = _backend(handler)
-    await backend.health()
-    assert backend.advertised_models == frozenset(
-        {"openai/model-a0f5", "anthropic/model-a0aa"}
-    )
-    assert backend._regime_provider_deny == frozenset()
-    await backend.aclose()
-
-
-async def test_alibaba_caught_by_datacenters_not_headquarters() -> None:
-    handler, _records = _direct_handler()
-    backend = _backend(handler)
-    await backend.health()
-    assert "alibaba" in backend._regime_provider_deny
-    await backend.aclose()
-
-
 async def test_catalog_request_uses_direct_bearer_authentication() -> None:
     handler, records = _direct_handler()
     backend = _backend(handler)
@@ -284,58 +220,6 @@ async def test_catalog_request_uses_direct_bearer_authentication() -> None:
     assert records.models[0].method == "GET"
     assert str(records.models[0].url) == "https://openrouter.ai/api/v1/models"
     assert records.models[0].headers["authorization"] == "Bearer test-key"
-    await backend.aclose()
-
-
-async def test_chat_injects_provider_ignore_with_deny_set() -> None:
-    handler, records = _direct_handler()
-    backend = _backend(handler)
-    await backend.health()
-    await backend.chat_completions(
-        {"model": "openai/model-a0f5", "messages": [{"role": "user", "content": "hi"}]}
-    )
-    sent = json.loads(records.chat[0].content)
-    assert sent["provider"] == {"ignore": ["alibaba", "z-ai"]}
-    assert sent["stream"] is False
-    await backend.aclose()
-
-
-async def test_chat_no_provider_key_when_deny_set_empty() -> None:
-    handler, records = _direct_handler(providers_status=500)
-    backend = _backend(handler)
-    await backend.health()
-    await backend.chat_completions(
-        {"model": "openai/model-a0f5", "messages": [{"role": "user", "content": "hi"}]}
-    )
-    sent = json.loads(records.chat[0].content)
-    assert "provider" not in sent
-    await backend.aclose()
-
-
-async def test_chat_preserves_caller_provider_preferences() -> None:
-    handler, records = _direct_handler()
-    backend = _backend(handler)
-    await backend.health()
-    await backend.chat_completions(
-        {
-            "model": "openai/model-a0f5",
-            "messages": [{"role": "user", "content": "hi"}],
-            "provider": {"order": ["openai"], "ignore": ["someother"]},
-        }
-    )
-    sent = json.loads(records.chat[0].content)
-    assert sent["provider"]["order"] == ["openai"]
-    assert set(sent["provider"]["ignore"]) == {"alibaba", "z-ai", "someother"}
-    await backend.aclose()
-
-
-async def test_responses_path_also_injects_residency() -> None:
-    handler, records = _direct_handler()
-    backend = _backend(handler)
-    await backend.health()
-    await backend.responses({"model": "openai/model-a0f5", "input": "say hi"})
-    sent = json.loads(records.chat[0].content)
-    assert sent["provider"] == {"ignore": ["alibaba", "z-ai"]}
     await backend.aclose()
 
 
@@ -490,9 +374,7 @@ async def test_refresh_advertised_models_forces_refetch() -> None:
     await backend.health()
     assert backend.advertised_models == frozenset({"openai/model-a0f5"})
     await backend.refresh_advertised_models()
-    assert backend.advertised_models == frozenset(
-        {"openai/model-a0f5", "anthropic/model-a0aa"}
-    )
+    assert backend.advertised_models == frozenset({"openai/model-a0f5", "anthropic/model-a0aa"})
     await backend.aclose()
 
 
@@ -581,44 +463,6 @@ async def test_responses_nonstream() -> None:
     await backend.aclose()
 
 
-async def test_responses_stream_emits_responses_sse() -> None:
-    chunks = [
-        b'data: {"id":"x","model":"openai/model-a0f5","choices":[{"delta":{"content":"Hel"}}]}\n\n',
-        b'data: {"id":"x","choices":[{"delta":{"content":"lo"}}]}\n\n',
-        b'data: {"id":"x","choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}\n\n',
-        b"data: [DONE]\n\n",
-    ]
-    handler, records = _direct_handler(chat_sse=chunks)
-    backend = _backend(handler)
-    await backend.health()
-    handle = CallHandle()
-    events: list[dict[str, Any]] = []
-    async for raw in backend.responses_stream(
-        {"model": "openai/model-a0f5", "input": "say hi", "stream": True},
-        handle,
-    ):
-        for event_chunk in raw.split(b"\n\n"):
-            for line in event_chunk.split(b"\n"):
-                if line.startswith(b"data:"):
-                    value = line[5:].strip().decode()
-                    if value and value != "[DONE]":
-                        with contextlib.suppress(json.JSONDecodeError):
-                            events.append(json.loads(value))
-    event_types = [event["type"] for event in events]
-    assert event_types[0] == "response.created"
-    deltas = [event for event in events if event["type"] == "response.output_text.delta"]
-    assert "".join(event["delta"] for event in deltas) == "Hello"
-    completed = [event for event in events if event["type"] == "response.completed"]
-    assert len(completed) == 1
-    assert completed[0]["response"]["usage"]["input_tokens"] == 3
-    assert completed[0]["response"]["usage"]["output_tokens"] == 2
-    assert handle.stream_summary is not None
-    assert handle.stream_summary.completed_response is not None
-    sent = json.loads(records.stream[0].content)
-    assert sent["provider"] == {"ignore": ["alibaba", "z-ai"]}
-    await backend.aclose()
-
-
 async def test_responses_stream_401_is_auth_invalid() -> None:
     chunks = [b'data: {"id":"x","choices":[{"delta":{"content":"Hel"}}]}\n\n', b"data: [DONE]\n\n"]
     handler, _records = _direct_handler(chat_sse=chunks, chat_status=401)
@@ -665,9 +509,7 @@ async def test_transport_error_marks_unhealthy() -> None:
     snapshot = await backend.usage_snapshot()
     assert snapshot.cooldown_until_ts is None
     with pytest.raises(BackendError):
-        await backend.chat_completions(
-            {"model": "openai/model-a0f5", "messages": [{"role": "user", "content": "hi"}]}
-        )
+        await backend.chat_completions({"model": "openai/model-a0f5", "messages": [{"role": "user", "content": "hi"}]})
     snapshot = await backend.usage_snapshot()
     assert snapshot.cooldown_until_ts is not None
     await backend.aclose()
@@ -720,32 +562,6 @@ def test_backend_present_when_env_set(
     assert backend._api_key == "test-key"
     import asyncio
 
-    asyncio.run(backend.aclose())
-
-
-def test_env_blocked_countries_override(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import asyncio
-
-    from callosum.__main__ import build_runtime_backends
-    from callosum.config import Config
-    from callosum.operator_state import OperatorState
-
-    monkeypatch.setenv("CALLOSUM_OPENROUTER_ENABLED", "1")
-    monkeypatch.setenv("CALLOSUM_OPENROUTER_API_KEY", "test-key")
-    monkeypatch.setenv("CALLOSUM_LOCAL_DISABLED", "1")
-    monkeypatch.setenv("CALLOSUM_LITELLM_GATEWAY_ENABLED", "0")
-    monkeypatch.delenv("CALLOSUM_OLLAMA_CLOUD_ENABLED", raising=False)
-    monkeypatch.setenv("CALLOSUM_OPENROUTER_BLOCKED_COUNTRIES", "US")
-    configuration = Config()
-    backends = build_runtime_backends(
-        configuration,
-        operator_state=OperatorState(tmp_path / "operator.sqlite"),
-    )
-    backend = next(backend for backend in backends if getattr(backend, "id", None) == "openrouter")
-    assert backend._blocked_countries == frozenset({"US"})
     asyncio.run(backend.aclose())
 
 

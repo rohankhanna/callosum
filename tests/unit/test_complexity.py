@@ -499,39 +499,8 @@ def test_leading_digit_in_legit_content_not_stripped() -> None:
     asyncio.run(TestStreamingComplexityExtraction().test_leading_digit_in_legit_content_not_stripped())
 
 
-def test_peer_quality_chat_delta_qop_marker_is_stripped_and_captured() -> None:
-    asyncio.run(TestStreamingPeerQualityExtraction().case_chat_delta_qop_marker_is_stripped_and_captured())
-
-
-def test_peer_quality_wrong_nonce_qop_marker_is_stripped_as_echo() -> None:
-    asyncio.run(TestStreamingPeerQualityExtraction().case_wrong_nonce_qop_marker_is_stripped_as_echo())
-
-
 def test_peer_quality_tool_argument_delta_is_not_touched() -> None:
     asyncio.run(TestStreamingPeerQualityExtraction().case_tool_argument_delta_is_not_touched())
-
-
-def test_peer_quality_malformed_marker_is_counted() -> None:
-    async def run() -> _PeerQualityCapture:
-        async def source():
-            yield (
-                b'data: {"type":"response.output_text.delta","delta":"'
-                b"<<qop nonce=AB12 subject=model-a0e7|medium score=nope reason=bad>>"
-                b'"}\n\n'
-            )
-            yield b"data: [DONE]\n\n"
-
-        capture = _PeerQualityCapture(nonce="AB12")
-        async for _ in _strip_peer_quality_markers_from_stream(source(), capture=capture):
-            pass
-        return capture
-
-    capture = asyncio.run(run())
-    assert capture.opinions == []
-    assert capture.malformed_count == 1
-
-
-# ---------- Trailing-marker stripper tests ----------
 
 
 def test_strip_trailing_marker_text_closing_tag() -> None:

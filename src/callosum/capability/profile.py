@@ -55,7 +55,7 @@ class DimensionFinding:
 
     `adapter_hint` is the most important field: when `status == "fail"`,
     it describes in concrete terms what an adapter would need to do
-    to use this model reliably. This is what 
+    to use this model reliably. This is what
     admission flow (or a human writing an adapter) consumes.
 
     `gap_class` / `suggested_action` / `upstream_owner` / `close_condition`

@@ -47,26 +47,26 @@ def _fake_cli_payload() -> str:
             "entries": [
                 {
                     "model": {
-                        "id": "model-a0a9",
-                        "source": "model-a0d6",
+                        "id": "test-26b-ollama",
+                        "source": "test",
                         "runtime": "ollama",
                         "quantization": "ollama-q4_k_m",
-                        "family": "model-a0e5",
+                        "family": "test",
                     }
                 },
                 {
                     "model": {
-                        "id": "model-a0a1",
-                        "source": "model-a0d6",
+                        "id": "test-26b-ollama-responses-proxy",
+                        "source": "test",
                         "runtime": "responses_proxy",
                         "quantization": "ollama-q4_k_m",
-                        "family": "model-a0e5",
+                        "family": "test",
                     }
                 },
                 {
                     "model": {
                         "id": "model-a0a8-responses-proxy-q4_k_m",
-                        "source": "/some/path/devstralQ4_K_M.gguf",
+                        "source": "/some/path/test-model-q4_k_m.gguf",
                         "runtime": "responses_proxy",
                         "quantization": "q4_k_m",
                         "family": "model-a0b7",
@@ -83,12 +83,12 @@ def test_cli_provider_returns_identity_for_known_model() -> None:
     p = LocalLlmCliWeightIdentityProvider()
     with patch.object(subprocess, "run") as run:
         run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=_fake_cli_payload(), stderr="")
-        identity = p.identify("model-a0a9")
+        identity = p.identify("test-26b-ollama")
     assert identity == WeightIdentity(
-        source="model-a0d6",
+        source="test",
         runtime="ollama",
         quantization="ollama-q4_k_m",
-        family="model-a0e5",
+        family="test",
     )
 
 
@@ -100,10 +100,10 @@ def test_cli_provider_groups_cells_sharing_weights() -> None:
     p = LocalLlmCliWeightIdentityProvider()
     with patch.object(subprocess, "run") as run:
         run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=_fake_cli_payload(), stderr="")
-        a = p.identify("model-a0a9")
-        b = p.identify("model-a0a1")
+        a = p.identify("test-26b-ollama")
+        b = p.identify("test-26b-ollama-responses-proxy")
     assert a is not None and b is not None
-    assert a.source == b.source == "model-a0d6"
+    assert a.source == b.source == "test"
     assert a.runtime == "ollama"
     assert b.runtime == "responses_proxy"
 
@@ -154,7 +154,7 @@ def test_cli_provider_caches_catalog_within_ttl() -> None:
     with patch.object(subprocess, "run") as run:
         run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=_fake_cli_payload(), stderr="")
         for _ in range(50):
-            p.identify("model-a0a9")
+            p.identify("test-26b-ollama")
         assert run.call_count == 1
 
 
@@ -167,10 +167,10 @@ def test_heuristic_strips_responses_proxy_suffix() -> None:
     The user's specific case (model-a0d5 cells differing only by proxy vs.
     direct) is the canonical example."""
     p = HeuristicWeightIdentityProvider()
-    id_proxy = p.identify("model-a0a1")
-    id_direct = p.identify("model-a0a9")
+    id_proxy = p.identify("test-26b-ollama-responses-proxy")
+    id_direct = p.identify("test-26b-ollama")
     assert id_proxy is not None and id_direct is not None
-    assert id_proxy.source == id_direct.source == "model-a0c7"
+    assert id_proxy.source == id_direct.source == "test-26b"
     assert id_proxy.runtime == "ollama_responses_proxy"
     assert id_direct.runtime == "ollama"
 
@@ -189,9 +189,9 @@ def test_heuristic_derives_family_label() -> None:
     `model-a0c8` both report family=`model-a0e5` so they show up
     in the same family bucket."""
     p = HeuristicWeightIdentityProvider()
-    ident = p.identify("model-a0a9")
+    ident = p.identify("test-26b-ollama")
     assert ident is not None
-    assert ident.family == "model-a0e5"
+    assert ident.family == "test"
 
 
 # ---------- NullWeightIdentityProvider -------------------------------------
@@ -214,9 +214,9 @@ def test_composite_falls_through_to_next_on_none() -> None:
     null_first = NullWeightIdentityProvider()
     heuristic_second = HeuristicWeightIdentityProvider()
     composite = CompositeWeightIdentityProvider(providers=[null_first, heuristic_second])
-    ident = composite.identify("model-a0a9")
+    ident = composite.identify("test-26b-ollama")
     assert ident is not None
-    assert ident.source == "model-a0c7"
+    assert ident.source == "test-26b"
 
 
 def test_composite_first_non_none_wins() -> None:
@@ -228,17 +228,17 @@ def test_composite_first_non_none_wins() -> None:
         id = "fake-precise"
 
         def identify(self, model_id):
-            if model_id == "model-a0a9":
+            if model_id == "test-26b-ollama":
                 return WeightIdentity(
-                    source="precise-model-a0d6",
+                    source="precise-test",
                     runtime="ollama",
                 )
             return None
 
     composite = CompositeWeightIdentityProvider(providers=[FakePrecise(), HeuristicWeightIdentityProvider()])
-    ident = composite.identify("model-a0a9")
+    ident = composite.identify("test-26b-ollama")
     assert ident is not None
-    assert ident.source == "precise-model-a0d6"
+    assert ident.source == "precise-test"
 
 
 def test_composite_logs_disagreement_but_uses_first_answer(
@@ -281,9 +281,9 @@ def test_composite_survives_provider_that_raises() -> None:
             raise RuntimeError("simulated provider failure")
 
     composite = CompositeWeightIdentityProvider(providers=[BrokenProvider(), HeuristicWeightIdentityProvider()])
-    ident = composite.identify("model-a0a9")
+    ident = composite.identify("test-26b-ollama")
     assert ident is not None
-    assert ident.source == "model-a0c7"
+    assert ident.source == "test-26b"
 
 
 def test_composite_with_empty_providers_returns_none(caplog) -> None:

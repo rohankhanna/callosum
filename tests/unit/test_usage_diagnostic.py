@@ -374,7 +374,9 @@ def _on_arm_responses_payload() -> dict:
             {
                 "type": "message",
                 "role": "assistant",
-                "content": [{"type": "input_text", "text": "<model-a0e7|medium|42>did the thing</model-a0e7|medium|42>"}],
+                "content": [
+                    {"type": "input_text", "text": "<model-a0e7|medium|42>did the thing</model-a0e7|medium|42>"}
+                ],
             },
             {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "now do this"}]},
             {

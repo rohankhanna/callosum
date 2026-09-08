@@ -30,8 +30,12 @@ class CompositeCostEstimate:
 
     def __init__(self) -> None:
         zero = Estimate(
-            point=0.0, low=0.0, high=0.0,
-            unit="weekly_used_percent", source="stub", verifiable=False,
+            point=0.0,
+            low=0.0,
+            high=0.0,
+            unit="weekly_used_percent",
+            source="stub",
+            verifiable=False,
         )
         self.five_hourly = zero
         self.weekly = zero
@@ -74,20 +78,29 @@ class CostUsageEstimator:
 
     def estimate(self, inp: EstimateInput) -> Estimate:
         return Estimate(
-            point=0.0, low=0.0, high=0.0,
-            unit=WEEKLY_METER.unit, source="stub", verifiable=False,
+            point=0.0,
+            low=0.0,
+            high=0.0,
+            unit=WEEKLY_METER.unit,
+            source="stub",
+            verifiable=False,
         )
 
     def finalize(
-        self, request_id: int, cell: Cell,
+        self,
+        request_id: int,
+        cell: Cell,
         observed_output_tokens: int | None,
         observed_value: float | None,
     ) -> FinalizedObservation:
         return FinalizedObservation(
-            request_id=request_id, cell=cell,
+            request_id=request_id,
+            cell=cell,
             observed_output_tokens=observed_output_tokens,
             observed_value=observed_value,
-            unit=WEEKLY_METER.unit, verifiable=False, source="stub",
+            unit=WEEKLY_METER.unit,
+            verifiable=False,
+            source="stub",
         )
 
 
