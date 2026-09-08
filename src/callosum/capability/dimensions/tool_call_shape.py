@@ -34,7 +34,7 @@ DIMENSION_NAME = "tool_call_shape"
 # calls; the substrate owns generic tool-call shape translation for cells it
 # fronts. The temporary adapter (parse/lift/strip) retires once the substrate
 # fronting this cell translates tool-call shape both directions.
-_TOOL_CALL_UPSTREAM_OWNER = "local LLM gateway / LiteLLM tool-call shape translation"
+_TOOL_CALL_UPSTREAM_OWNER = "the local LLM gateway / LiteLLM tool-call shape translation"
 _TOOL_CALL_CLOSE_CONDITION = "substrate fronting this cell translates tool-call shape both directions"
 
 # Prose names for the Hermes-family tag formats recognized by

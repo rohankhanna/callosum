@@ -11,7 +11,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO
 
-from callosum.backends.ollama_cloud import OllamaCloudUsageSource, OllamaUsage
 from callosum.usage_log import _walk_text, decompress
 
 # --- Peer-quality (in-band) request stream segmentation ---------------------
@@ -30,7 +29,7 @@ from callosum.usage_log import _walk_text, decompress
 # shared with the no-capture arm), provenance_mutated_history (the history block
 # carrying provenance tags), live_tail (the current turn's user/tool input),
 # and peer_opinion_suffix (the appended audit instruction). The sidecar-primary
-# path () does not mutate the user request, so these kinds
+# path does not mutate the user request, so these kinds
 # only appear on in-band rows; non-peer-quality turns keep the original
 # `instructions` / `input` / `message:<role>` taxonomy via `_extract_segments`.
 
@@ -852,66 +851,8 @@ def _assemble(
     return by_bucket
 
 
-# --- Ollama Cloud usage (credential proxy loopback) -----------------------------------
-#
-# Unlike the SQLite-backed diagnostics above, this reads from the credential proxy
-# loopback HTTP surface (port 7342) via `OllamaCloudUsageSource`. It is
-# read-only, hits no DB, and needs no running callosum daemon — only the
-# credential proxy. `fetch()` returns None when the credential proxy is down, cookies are
-# expired, or the meter is absent; that is a normal unavailable state, not
-# an error, so the caller prints an "unavailable" line and exits 0.
-
-
-async def render_ollama_cloud_usage_text(
-    *,
-    custody_url: str,
-    account: str,
-    standin_ttl_s: int,
-) -> str:
-    """Fetch Ollama Cloud usage from the credential proxy loopback and format it.
-
-    Read-only; performs no DB writes and needs no running callosum daemon.
-    Returns a human-readable multi-line string. When the credential proxy is down,
-    cookies are expired, or the meter is absent, fetch() returns None and
-    this returns an "unavailable" line (a normal state, not an error).
-    """
-    source = OllamaCloudUsageSource(
-        custody_url=custody_url,
-        account=account,
-        standin_ttl_s=standin_ttl_s,
-    )
-    try:
-        payload = await source.fetch()
-    finally:
-        await source.aclose()
-    return _format_ollama_usage(payload)
-
-
-def _format_ollama_usage(payload: OllamaUsage | None) -> str:
-    if payload is None:
-        return "ollama-cloud usage: unavailable (credential proxy down, cookies expired, or not configured)"
-    plan = payload.plan or "<unknown plan>"
-    lines = [
-        "ollama-cloud usage:",
-        f"  plan: {plan}",
-        (
-            "  session: "
-            f"{_format_percent(payload.session.percent_used)} used "
-            f"(resets at {_format_ts(payload.session.resets_at_ts)})"
-        ),
-        (
-            "  weekly: "
-            f"{_format_percent(payload.weekly.percent_used)} used "
-            f"(resets at {_format_ts(payload.weekly.resets_at_ts)})"
-        ),
-        f"  fetched_at: {_format_ts(payload.fetched_at_ts)}",
-    ]
-    return "\n".join(lines)
-
-
 def _format_percent(value: float) -> str:
-    # The credential proxy meter may be empty/unparseable, in which case the source
-    # reports float("nan"); treat any non-finite value as unknown.
+    # Treat any non-finite value as unknown.
     if not math.isfinite(value):
         return "<unknown>"
     return f"{value:.1f}%"
@@ -925,11 +866,11 @@ def _format_ts(ts: float | None) -> str:
 
 # --- F2 live terminal view (work tracker ) ------------------------
 #
-# Operator decision 2026-08-23 (): the F2 live-visualization
+# Operator decision 2026-08-23: the F2 live-visualization
 # path for the token-usage diagnostic is a terminal UI (TUI), not OTel/
 # OpenLLMetry — self-contained, no external backend, fits the single-operator
 # loopback CLI. The non-live time-series already ships as `callosum usage
-# series` (); this slice adds the live, auto-refreshing
+# series`; this slice adds the live, auto-refreshing
 # delivery mode over the same read-only SQLite log.
 #
 # The implementation is deliberately stdlib-only (ANSI escapes + a sleep loop):

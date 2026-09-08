@@ -25,11 +25,7 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 
-from callosum.capability.profile import (
-    CapabilityProfile,
-    load_profile,
-    profile_path,
-)
+from callosum.capability.profile import CapabilityProfile, load_profile, profile_path
 
 # Default threshold for "this request is large enough to count as
 # at-scale." 50K chars sits well above the small-turn case (a few

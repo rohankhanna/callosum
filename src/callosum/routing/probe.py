@@ -375,9 +375,7 @@ def response_has_structured_tool_call(response: dict[str, Any]) -> bool:
 
 
 async def probe_supports_tools(
-    *,
-    model: str,
-    call_responses: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]],
+    *, model: str, call_responses: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 ) -> bool:
     """Run the tool-call probe against one cell and return whether it
     actually emits structured tool_calls under realistic conditions.

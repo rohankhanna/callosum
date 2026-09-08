@@ -34,10 +34,7 @@ import os
 import time
 from typing import TYPE_CHECKING, Any
 
-from callosum.capability.runner import (
-    DEFAULT_DIMENSION_TTL_S,
-    run_dimensions,
-)
+from callosum.capability.runner import DEFAULT_DIMENSION_TTL_S, run_dimensions
 from callosum.capability.weight_identity import WeightIdentityProvider
 
 if TYPE_CHECKING:
@@ -66,10 +63,7 @@ def _default_sweep_interval_s() -> float:
     try:
         v = float(raw)
     except ValueError:
-        logger.warning(
-            "ignoring non-numeric CALLOSUM_HARNESS_SWEEP_INTERVAL_SECONDS=%r",
-            raw,
-        )
+        logger.warning("ignoring non-numeric CALLOSUM_HARNESS_SWEEP_INTERVAL_SECONDS=%r", raw)
         return 6 * 3600.0
     # Floor to 60s so a typo doesn't pin a GPU forever. No upper cap —
     # operators may genuinely want infrequent sweeps if cell churn is
@@ -170,14 +164,9 @@ async def run_harness_sweep(
         backend_routable[bid] = await _backend_routable_now(backend)
     skipped_cooldown = sum(1 for backend, _ in todo if not backend_routable.get(getattr(backend, "id", "?"), True))
     if skipped_cooldown:
-        logger.info(
-            "capability harness sweep: %d cell(s) skipped — backend in cooldown",
-            skipped_cooldown,
-        )
+        logger.info("capability harness sweep: %d cell(s) skipped — backend in cooldown", skipped_cooldown)
     logger.info(
-        "capability harness sweep: %d cell(s) eligible (per-dim TTL=%.0fs)",
-        len(todo) - skipped_cooldown,
-        ttl_s,
+        "capability harness sweep: %d cell(s) eligible (per-dim TTL=%.0fs)", len(todo) - skipped_cooldown, ttl_s
     )
     total_dimensions_run = 0
     for backend, cell in todo:
@@ -202,15 +191,8 @@ async def run_harness_sweep(
             # run_dimensions itself is defensive; this is paranoia in
             # case orchestration around it ever raises. One cell's
             # failure must not block the rest of the sweep.
-            logger.exception(
-                "capability harness: sweep entry %s/%s raised",
-                backend_id,
-                cell,
-            )
-    logger.info(
-        "capability harness sweep: complete (%d dimension run(s) total)",
-        total_dimensions_run,
-    )
+            logger.exception("capability harness: sweep entry %s/%s raised", backend_id, cell)
+    logger.info("capability harness sweep: complete (%d dimension run(s) total)", total_dimensions_run)
     return total_dimensions_run
 
 
@@ -245,9 +227,7 @@ def schedule_background_harness(
     async def _runner() -> int:
         try:
             return await run_harness_sweep(
-                backends=backends,
-                ttl_s=ttl_s,
-                weight_identity_provider=weight_identity_provider,
+                backends=backends, ttl_s=ttl_s, weight_identity_provider=weight_identity_provider
             )
         except Exception:
             logger.exception("capability harness sweep: unexpected failure")
@@ -344,9 +324,7 @@ class PeriodicHarnessSweep:
                 return
             try:
                 await run_harness_sweep(
-                    backends=self._backends,
-                    ttl_s=self._ttl_s,
-                    weight_identity_provider=self._weight_identity_provider,
+                    backends=self._backends, ttl_s=self._ttl_s, weight_identity_provider=self._weight_identity_provider
                 )
             except Exception:
                 logger.exception("periodic harness sweep: tick failed")

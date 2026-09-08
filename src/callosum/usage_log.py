@@ -186,7 +186,7 @@ CREATE INDEX IF NOT EXISTS idx_peer_quality_sidecar_candidates_pending
     ON peer_quality_sidecar_candidates(status, created_at);
 
 -- Operator decision audit for the surface-only feedback redirect
--- (). A request row with quality_score = -1 (the existing
+--. A request row with quality_score = -1 (the existing
 -- fault signal set by the failure labeler / peer-quality calibration /
 -- user /v1/feedback) is the trigger that the operator should be pointed at
 -- the external feedback channels. This table records ONLY the operator's
@@ -257,7 +257,7 @@ _MIGRATIONS = [
     # Quality labeling for cost-optimal router training: user feedback and automated signals.
     "ALTER TABLE requests ADD COLUMN quality_score INTEGER",  # -1, 0, +1; NULL = unlabeled
     "ALTER TABLE requests ADD COLUMN quality_label_method TEXT",  # 'user', 'llm_judge_v1', etc
-    # Retired marker-only complexity label (). Column kept to
+    # Retired marker-only complexity label. Column kept to
     # preserve existing rows until an approved migration; no longer populated for
     # new requests (always NULL).
     "ALTER TABLE requests ADD COLUMN prompt_complexity_class INTEGER",  # legacy; archival-only
@@ -326,7 +326,7 @@ END""",
     "ALTER TABLE peer_quality_opinions ADD COLUMN subject_request_id INTEGER",
     "CREATE INDEX IF NOT EXISTS idx_peer_quality_opinions_subject_request_id "
     "ON peer_quality_opinions(subject_request_id)",
-    # Capture diagnosability (): the metrics row is written for
+    # Capture diagnosability: the metrics row is written for
     # every *sampled* streaming request, but injection silently no-ops when there
     # is no eligible cross-cell prose subject (tool turns, single-cell sessions,
     # budget). Without these columns `opinion_count=0` cannot distinguish "model
@@ -354,17 +354,17 @@ END""",
     # from a single total-latency sample) and for streams that produced no
     # chunks (empty stream, pre-first-chunk timeout/error). Feeds the
     # per-cell time estimator's TTFB(~input_tokens) vs decode(~output_tokens)
-    # split () and data-driven stall-guard tuning
-    # (). Same clock (time.time()) as latency_ms.
+    # split and data-driven stall-guard tuning
+    # . Same clock (time.time) as latency_ms.
     "ALTER TABLE requests ADD COLUMN ttfb_ms INTEGER",
     # Largest inter-chunk idle gap in ms for LOCAL streamed requests: the
     # longest the local upstream made us wait between two consecutive chunks
     # once data was flowing, as measured by stall_guarded. NULL for non-stream
     # rows, remote streams (not stall-guarded), and streams that ended before
     # a second chunk. Feeds data-driven tuning of
-    # CALLOSUM_LOCAL_STREAM_IDLE_TIMEOUT_S ().
+    # CALLOSUM_LOCAL_STREAM_IDLE_TIMEOUT_S.
     "ALTER TABLE requests ADD COLUMN idle_gap_ms INTEGER",
-    # Token-economy observability (). These three columns
+    # Token-economy observability. These three columns
     # unblock the held previous_response_id linearization transform
     # (O(K^2)->O(K) conversation compression) by making the ingress signal
     # queryable:
@@ -454,7 +454,7 @@ class UsageLogEntry:
     # idle_gap_ms column). NULL for non-stream, remote, and single-chunk
     # streams.
     idle_gap_ms: int | None = None
-    # Token-economy observability (). cache_creation_tokens
+    # Token-economy observability. cache_creation_tokens
     # is the cache-WRITE split of cached_tokens (caller-set from upstream
     # usage; NULL until a cache-creation usage shape is wired in).
     cache_creation_tokens: int | None = None
@@ -568,7 +568,7 @@ class UsageLog:
         """Rebuild peer_quality_opinions with a widened score CHECK, once.
 
         SQLite cannot ALTER a CHECK constraint. The old schema constrains
-        score IN (-1, 0, 1); the spectrum scale () widens it
+        score IN (-1, 0, 1); the spectrum scale widens it
         to score IN (-3, -2, -1, 0, 1, 2, 3). This rebuilds the table in a
         single transaction (CREATE _new with the widened CHECK, copy rows, DROP
         old, RENAME, recreate indexes). Idempotent: inspects sqlite_master
@@ -665,7 +665,7 @@ class UsageLog:
         prompt_text = _extract_prompt_text(entry.client_request)
         response_text = _extract_response_text(entry.resp_payload)
         # Ingress signal for the previous_response_id linearization
-        # (): record whether the client carried the handle
+        #: record whether the client carried the handle
         # so one real session answers, off the log, whether the codex CLI
         # emits it. A caller-provided value overrides extraction.
         previous_response_id = entry.previous_response_id
@@ -878,7 +878,7 @@ class UsageLog:
                 (score, method, request_id),
             )
 
-    # --- feedback-redirect audit () ---------------------
+    # --- feedback-redirect audit ---------------------
     # The fault trigger is the existing quality_score = -1 signal (set by the
     # failure labeler / peer-quality calibration / user /v1/feedback). These
     # methods are derive-on-read for "pending" and write-on-decide for the
@@ -1071,7 +1071,7 @@ class UsageLog:
     ) -> frozenset[int]:
         """Subject request ids this judge cell has already rated in this session.
 
-        Powers capture dedup (): a judge never re-rates a
+        Powers capture dedup: a judge never re-rates a
         message it already judged. Matches on the (session, judge model, judge
         effort) cell; NULL-effort is compared with IS NULL.
         """
@@ -1113,7 +1113,7 @@ class UsageLog:
     ) -> None:
         """Persist request-level qop capture counters for observability.
 
-        `injected_fired`/`subject_count`/`skip_reason` ()
+        `injected_fired`/`subject_count`/`skip_reason`
         distinguish a sampled-but-not-injected request from one where the
         model was actually asked for an opinion and stayed silent.
         `injected_tokens` makes current in-band token cost explicit for the
@@ -1640,11 +1640,11 @@ def _walk_text(node: Any) -> list[str]:
 def _extract_previous_response_id(client_request: dict[str, Any] | None) -> str | None:
     """Pull the previous_response_id handle off an OpenAI/Codex request.
 
-    The Responses API carries it as a top-level string. Its presence is the
-    ingress signal for the O(K^2)->O(K) conversation linearization
-    (): one real session, read off the log, answers whether
-    the codex CLI actually emits it. Returns None for any non-string/empty
-    value so the 1/0 used_previous_response_id flag stays accurate.
+        The Responses API carries it as a top-level string. Its presence is the
+        ingress signal for the O(K^2)->O(K) conversation linearization
+    : one real session, read off the log, answers whether
+        the codex CLI actually emits it. Returns None for any non-string/empty
+        value so the 1/0 used_previous_response_id flag stays accurate.
     """
     if not isinstance(client_request, dict):
         return None

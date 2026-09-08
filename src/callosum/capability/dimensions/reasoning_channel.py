@@ -9,7 +9,7 @@ classifies the cell's reasoning channel into one of:
 
   * native        — CoT arrives in a separate field (the backend already
                     emits clean Responses `reasoning` items, e.g. a cell
-                    fronted by local LLM gateway's responses-proxy, or a
+                    fronted by the local LLM gateway's responses-proxy, or a
                     runtime that surfaces `thinking`/`reasoning_content`
                     which callosum's translator lifts into a reasoning
                     item). No transform needed.
@@ -43,15 +43,15 @@ DIMENSION_NAME = "reasoning_channel"
 
 # The in-band reasoning strip is the canonical Class-B temporary adapter
 # (callosum's `inband_reasoning` transform). It is TEMPORARY-DEBT: the
-# upstream owner is local LLM gateway's responses-proxy `_InbandReasoningSplitter`,
-# which is NOT in local LLM gateway committed history — it lives on the in-flight
+# upstream owner is the local LLM gateway's responses-proxy `_InbandReasoningSplitter`,
+# which is NOT in the local LLM gateway committed history — it lives on the in-flight
 # `the compatibility branch` branch (live via editable
 # install, unmerged) per the ADR's 2026-07-31 accuracy amendment. If that
 # branch is abandoned, this surface's Class A/B classification must be
 # rechecked. The adapter retires once the substrate fronts this cell's
 # responses surface and strips in-band reasoning tags on both paths.
 _INBAND_UPSTREAM_OWNER = (
-    "local LLM gateway responses-proxy _InbandReasoningSplitter "
+    "the local LLM gateway responses-proxy _InbandReasoningSplitter "
     "(contingent on the compatibility branch branch merging)"
 )
 _INBAND_CLOSE_CONDITION = (
@@ -60,10 +60,7 @@ _INBAND_CLOSE_CONDITION = (
 
 # Candidate in-band tag pairs the probe looks for in message content.
 # Kept in sync with transforms.inband_reasoning.DEFAULT_REASONING_TAGS.
-_CANDIDATE_TAGS: tuple[tuple[str, str], ...] = (
-    ("<think>", "</think>"),
-    ("<thought>", "</thought>"),
-)
+_CANDIDATE_TAGS: tuple[tuple[str, str], ...] = (("<think>", "</think>"), ("<thought>", "</thought>"))
 
 
 @dataclass

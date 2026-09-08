@@ -3,7 +3,7 @@
 The unseeded, statistical model x test behaviour RATE matrix is PRODUCED by
 the sibling benchmark suite repo on a GPU under bounded daily windows and
 CONSUMED READ-ONLY here. callosum never builds it; the external handoff
-(work tracker ````) asks benchmark suite to publish the matrix
+(work tracker ) asks benchmark suite to publish the matrix
 artifact this reader expects.
 
 Resumable / interruptible (per learning ): the

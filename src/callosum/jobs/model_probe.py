@@ -50,7 +50,7 @@ def _probe_candidates(source: LocalModelRegistrySource) -> list[ModelEntry]:
 
     Probing a precision-rejected model wastes one load, but the dedup makes it
     one-time and harmless; filtering to precision-admitted candidates only is a
-    deferred refinement (see work tracker).
+    deferred refinement (see ).
     """
     return [m for m in source.models() if m.enabled and m.runtime == "vllm" and "responses" in m.api_surfaces]
 

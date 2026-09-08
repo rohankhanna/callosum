@@ -96,7 +96,7 @@ def _parse_vault_backends(config_path: Path) -> list[VaultBackend]:
     Uses the stdlib `tomllib` (Python 3.11+); callosum already requires
     >=3.11 per pyproject so this is safe.
 
-    Backends without a vault_path (e.g. credential_proxy / litellm
+    Backends without a vault_path (e.g. litellm
     gateway backends) are skipped silently; this command only acts on
     codex_auth_vault rows.
     """

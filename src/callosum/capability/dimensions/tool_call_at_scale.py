@@ -24,7 +24,7 @@ DIMENSION_NAME = "tool_call_at_scale"
 
 # Class-B at-scale tool-call gaps share the tool-call-shape upstream owner;
 # the substrate owns generic tool-call shape translation for cells it fronts.
-_TOOL_CALL_UPSTREAM_OWNER = "local LLM gateway / LiteLLM tool-call shape translation"
+_TOOL_CALL_UPSTREAM_OWNER = "the local LLM gateway / LiteLLM tool-call shape translation"
 _TOOL_CALL_CLOSE_CONDITION = "substrate fronting this cell translates tool-call shape both directions"
 
 # 80K chars ≈ 22K tokens. Substantial enough to expose context-
@@ -34,9 +34,7 @@ _PROMPT_CHARS = 80_000
 
 
 async def probe(
-    cell: str,
-    call_responses: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]],
-    profile: CapabilityProfile,
+    cell: str, call_responses: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]], profile: CapabilityProfile
 ) -> DimensionFinding:
     """Short-circuit when the small probe didn't pass. The dependency
     is encoded as a profile-state check rather than as a runner

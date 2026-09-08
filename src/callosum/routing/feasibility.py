@@ -6,21 +6,21 @@ _window_fit_factor in router.py (soft context-window fit). Capability
 asks "can this cell serve this request at all?"; window-fit asks "does the
 prompt fit the advertised context window?"; feasibility asks "can it finish
 within the stall-guard budget?" — the question the coverage doom loop
-exposed as missing (work tracker ````). A cell that fits the
+exposed as missing . A cell that fits the
 window but whose predicted p95 completion exceeds
 CALLOSUM_LOCAL_FIRST_BYTE_TIMEOUT_S will trip the first-byte guard on a
 large real turn, time out with status=0, record no completed sample, and
 — under the even-split minimum-coverage quota — get re-targeted indefinitely
 because it stays under its coverage floor forever.
 
-This module promotes the forward time estimator (````) from a
+This module promotes the forward time estimator  from a
 soft scheduling tie-break to a HARD feasibility constraint on the FORCED-COVERAGE
 path (cold-start random selection in router.py + quota forcing in
 app.py). It stays a soft tie-break on the normal selection path (the
 router's cost/quality pick), so a learned-optimal cell is never hard-excluded
 for being slow — only forced coverage avoids it.
 
-Cold-cell grace — the deliberate tradeoff named in ````: a
+Cold-cell grace — the deliberate tradeoff named below: a
 cell whose latency prediction rests on a model-pooled / global-prior / flat
 fallback prior RATHER THAN its own measured fit is NOT hard-excluded on that
 prior. The prior is uncertain, and hard-excluding on it would starve coverage

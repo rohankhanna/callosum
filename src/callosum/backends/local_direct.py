@@ -1,15 +1,15 @@
 """Local-model Backend that routes directly to each model's endpoint.
 
-Discovery + capability lookup come from local LLM gateway's CLI (the
+Discovery + capability lookup come from the local LLM gateway's CLI (the
 operator's single source of truth for what's available locally).
 Inference bypasses any centralized gateway — callosum POSTs directly
 to each model's runtime endpoint (ollama, vllm, etc.) using whichever
 API surface the model advertises (chat-completions or responses).
 
-The result: callosum picks up new models the moment local LLM gateway
+The result: callosum picks up new models the moment the local LLM gateway
 sees them (after the next refresh tick), without ever requiring an
 operator to edit a routing yaml. Pulling a model via `ollama pull` or
-`local-llm pull` immediately makes it routable.
+`the local LLM gateway pull` immediately makes it routable.
 
 Compared to LiteLLMGatewayBackend:
 - No litellm.yaml dependency
@@ -18,7 +18,7 @@ Compared to LiteLLMGatewayBackend:
 
 Compared to talking to ollama directly:
 - Supports non-ollama runtimes (vllm, responses_proxy, model-a0e0)
-- Capability data from operator-curated registry (local LLM gateway) rather
+- Capability data from operator-curated registry (the local LLM gateway) rather
   than per-model API probes
 """
 
@@ -86,7 +86,7 @@ class LocalModelSource(Protocol):
 
 
 class LocalModelRegistryBackend:
-    """Backend that uses local LLM gateway for discovery and routes inference
+    """Backend that uses the local LLM gateway for discovery and routes inference
     directly to each model's runtime endpoint."""
 
     # reuse existing kind so the cell-grid + routing pipeline don't need to learn a new tag
@@ -120,7 +120,7 @@ class LocalModelRegistryBackend:
         self._usage_log: UsageLog | None = None
         self._probe_results_cache: tuple[float, dict[str, ModelFitProbe]] | None = None
         # Health derives from "did the last source.models() call return
-        # any models?" — proxy for "is the local-llm garage reachable
+        # any models?" — proxy for "is the the local LLM gateway garage reachable
         # and configured?"
         self._healthy: bool = False
         self._last_health_reason: str = "unknown"
@@ -170,13 +170,13 @@ class LocalModelRegistryBackend:
 
     @property
     def advertised_models(self) -> frozenset[str]:
-        """Set of model_ids local LLM gateway currently reports, filtered to
+        """Set of model_ids the local LLM gateway currently reports, filtered to
         cells this backend can actually serve on the streaming-responses
         path.
 
         Why the filter exists: callosum's primary inbound traffic
         (Codex CLI) hits /v1/responses with `stream: true`. Chat-only
-        cells from local LLM gateway (api_surfaces == ("chat",), e.g. bare
+        cells from the local LLM gateway (api_surfaces == ("chat",), e.g. bare
         `model-a0a9`) can't serve that path from this backend
         — `responses_stream` raises BackendError for them because no
         chat→responses stream translator is wired here. Advertising
@@ -272,7 +272,7 @@ class LocalModelRegistryBackend:
     def cell_capabilities(self, model: str) -> CellCapabilities:
         """Per-cell capabilities via a three-tier, per-field precedence.
 
-        Tier 1 — hub-canonical: when local LLM gateway's `capabilities --json`
+        Tier 1 — hub-canonical: when the local LLM gateway's `capabilities --json`
             emits a modality/tool field for this model, that field is canonical
             truth (per operator instruction). Read defensively off the source's
             capability row; `None` when the hub is silent on that field (today
@@ -349,7 +349,7 @@ class LocalModelRegistryBackend:
         )
 
     def local_performance_model(self, model: str) -> LocalPerformanceModel | None:
-        """Optional per-model local latency surface from local LLM gateway evidence.
+        """Optional per-model local latency surface from the local LLM gateway evidence.
 
         Returns None when the hub lacks enough structured performance hints,
         letting the request-log time estimator remain the fallback.
@@ -463,7 +463,7 @@ class LocalModelRegistryBackend:
 
     def _resolve(self, model_id: str) -> ModelEntry:
         """Look up the ModelEntry for `model_id`. Raises BackendError if
-        the model isn't in the current local LLM gateway registry (could
+        the model isn't in the current the local LLM gateway registry (could
         have been pruned between the routing decision and dispatch)."""
         for m in self._source.models():
             if m.id == model_id:
@@ -493,7 +493,7 @@ class LocalModelRegistryBackend:
 
     def _outbound(self, body: dict[str, Any], *, stream: bool) -> tuple[ModelEntry, dict[str, Any]]:
         """Build the request body callosum will send. Resolves the
-        local LLM gateway entry, rewrites `model` from the public id (e.g.
+        the local LLM gateway entry, rewrites `model` from the public id (e.g.
         `model-a0b0`) to the runtime id (e.g. `model-a0d7`)
         that the underlying server expects, applies the operator's
         inference-param overrides, and pins stream."""

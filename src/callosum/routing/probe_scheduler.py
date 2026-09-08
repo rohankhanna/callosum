@@ -61,12 +61,7 @@ _LOCAL_BACKEND_KINDS = frozenset({"litellm_gateway"})
 DEFAULT_PROBE_TTL_S: float = 24 * 3600.0
 
 
-async def _probe_one_cell(
-    *,
-    backend: Any,
-    model: str,
-    operator_state: OperatorState,
-) -> None:
+async def _probe_one_cell(*, backend: Any, model: str, operator_state: OperatorState) -> None:
     """Probe one cell and persist the result. Defensive — never raises;
     a probe that errors out is recorded as supports_tools=False with
     the error captured for the operator to inspect later.
@@ -104,11 +99,7 @@ async def _probe_one_cell(
     latency_ms = int((time.time() - t0) * 1000)
     try:
         operator_state.set_probe_result(
-            backend_id,
-            model,
-            supports_tools=supports,
-            error=error_msg,
-            latency_ms=latency_ms,
+            backend_id, model, supports_tools=supports, error=error_msg, latency_ms=latency_ms
         )
         logger.info(
             "probe %s/%s: supports_tools=%s latency=%dms%s",
@@ -125,11 +116,7 @@ async def _probe_one_cell(
 
 
 def _cells_needing_probe(
-    *,
-    backends: list[Any],
-    operator_state: OperatorState,
-    probe_ttl_s: float,
-    now: float,
+    *, backends: list[Any], operator_state: OperatorState, probe_ttl_s: float, now: float
 ) -> list[tuple[Any, str]]:
     """Return (backend, model) pairs that should be probed right now.
 
@@ -167,10 +154,7 @@ def _cells_needing_probe(
 
 
 async def run_probe_sweep(
-    *,
-    backends: list[Any],
-    operator_state: OperatorState,
-    probe_ttl_s: float = DEFAULT_PROBE_TTL_S,
+    *, backends: list[Any], operator_state: OperatorState, probe_ttl_s: float = DEFAULT_PROBE_TTL_S
 ) -> int:
     """Probe every uncached / stale local cell and persist the
     results. Returns the number of probes actually executed (excludes
@@ -182,28 +166,18 @@ async def run_probe_sweep(
     complete.
     """
     todo = _cells_needing_probe(
-        backends=backends,
-        operator_state=operator_state,
-        probe_ttl_s=probe_ttl_s,
-        now=time.time(),
+        backends=backends, operator_state=operator_state, probe_ttl_s=probe_ttl_s, now=time.time()
     )
     if not todo:
         return 0
-    logger.info(
-        "probe sweep: %d cell(s) need probing (TTL=%.0fs)",
-        len(todo),
-        probe_ttl_s,
-    )
+    logger.info("probe sweep: %d cell(s) need probing (TTL=%.0fs)", len(todo), probe_ttl_s)
     for backend, model in todo:
         await _probe_one_cell(backend=backend, model=model, operator_state=operator_state)
     return len(todo)
 
 
 def schedule_background_sweep(
-    *,
-    backends: list[Any],
-    operator_state: OperatorState,
-    probe_ttl_s: float = DEFAULT_PROBE_TTL_S,
+    *, backends: list[Any], operator_state: OperatorState, probe_ttl_s: float = DEFAULT_PROBE_TTL_S
 ) -> asyncio.Task[int]:
     """Fire-and-forget version of `run_probe_sweep` suitable for
     callosum's startup. Returns the asyncio Task so callers can join
@@ -217,11 +191,7 @@ def schedule_background_sweep(
 
     async def _runner() -> int:
         try:
-            return await run_probe_sweep(
-                backends=backends,
-                operator_state=operator_state,
-                probe_ttl_s=probe_ttl_s,
-            )
+            return await run_probe_sweep(backends=backends, operator_state=operator_state, probe_ttl_s=probe_ttl_s)
         except Exception:
             logger.exception("probe sweep: unexpected failure")
             return 0
@@ -229,12 +199,7 @@ def schedule_background_sweep(
     return asyncio.create_task(_runner())
 
 
-def supports_tools_override(
-    *,
-    operator_state: OperatorState,
-    backend_id: str,
-    model: str,
-) -> bool | None:
+def supports_tools_override(*, operator_state: OperatorState, backend_id: str, model: str) -> bool | None:
     """Return the probe-derived override for a cell's supports_tools
     flag, or None when no override applies.
 

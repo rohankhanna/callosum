@@ -13,8 +13,7 @@ codex debug models renders the resolved catalog as JSON — exactly what the
 picker consumes — so the mechanism is verifiable without a TUI.
 
 This module is the "background catalog reconciler that projects the catalog
-into the client picker store" — the previously-unbuilt half of work tracker
-````. It re-emits the codex catalog file from the live
+into the client picker store" — the previously-unbuilt half of . It re-emits the codex catalog file from the live
 Callosum catalog (the same ids `/v1/models` serves) on startup, whenever the
 catalog hash changes, and on a periodic safety interval.
 
@@ -57,25 +56,15 @@ from callosum.selectors import SelectorError, is_selector, parse_selector
 logger = logging.getLogger("callosum.codex_catalog")
 
 #: Strategy selectors always lead the menu, in this fixed order.
-_STRATEGY_ORDER: tuple[str, ...] = (
-    "callosum:auto",
-    "callosum:remote-only",
-    "callosum:local-only",
-)
+_STRATEGY_ORDER: tuple[str, ...] = ("callosum:auto", "callosum:remote-only", "callosum:local-only")
 
 _STRATEGY_LABELS: dict[str, tuple[str, str]] = {
-    "callosum:auto": (
-        "Callosum: Auto",
-        "Router selects a local or remote backend per request.",
-    ),
+    "callosum:auto": ("Callosum: Auto", "Router selects a local or remote backend per request."),
     "callosum:remote-only": (
         "Callosum: Remote only",
         "Force remote backends for this session (no global mode change).",
     ),
-    "callosum:local-only": (
-        "Callosum: Local only",
-        "Force local backends for this session (no global mode change).",
-    ),
+    "callosum:local-only": ("Callosum: Local only", "Force local backends for this session (no global mode change)."),
 }
 
 
@@ -167,10 +156,7 @@ def _ordered_lane_ids(model_ids: Sequence[str], declared_lanes: Sequence[str]) -
 
 
 def build_codex_catalog(
-    *,
-    model_ids: Sequence[str],
-    declared_lanes: Sequence[str],
-    template: dict[str, Any],
+    *, model_ids: Sequence[str], declared_lanes: Sequence[str], template: dict[str, Any]
 ) -> dict[str, Any]:
     """Build a codex model_catalog_json document from Callosum lane ids.
 
@@ -216,23 +202,13 @@ def load_codex_template(*, codex_bin: str = "codex") -> dict[str, Any] | None:
             env = dict(os.environ)
             env["CODEX_HOME"] = home
             proc = subprocess.run(
-                [codex_bin, "debug", "models"],
-                capture_output=True,
-                text=True,
-                env=env,
-                timeout=30,
-                check=False,
+                [codex_bin, "debug", "models"], capture_output=True, text=True, env=env, timeout=30, check=False
             )
     except (OSError, subprocess.SubprocessError) as exc:
         logger.warning("codex catalog: could not run %r: %s", codex_bin, exc)
         return None
     if proc.returncode != 0:
-        logger.warning(
-            "codex catalog: %r exited %d: %s",
-            codex_bin,
-            proc.returncode,
-            (proc.stderr or "").strip()[:300],
-        )
+        logger.warning("codex catalog: %r exited %d: %s", codex_bin, proc.returncode, (proc.stderr or "").strip()[:300])
         return None
     try:
         catalog = json.loads(proc.stdout)
@@ -307,11 +283,7 @@ class CodexCatalogReconciler:
         if template is None:
             # Already logged; leave any existing file untouched.
             return False
-        catalog = build_codex_catalog(
-            model_ids=model_ids,
-            declared_lanes=self._declared_lanes,
-            template=template,
-        )
+        catalog = build_codex_catalog(model_ids=model_ids, declared_lanes=self._declared_lanes, template=template)
         digest = catalog_digest(catalog)
         if digest == self._last_digest and self._output_path.exists():
             return False
@@ -321,11 +293,7 @@ class CodexCatalogReconciler:
             logger.exception("codex catalog: failed to write %s", self._output_path)
             return False
         self._last_digest = digest
-        logger.info(
-            "codex catalog: wrote %d lane(s) to %s",
-            len(catalog["models"]),
-            self._output_path,
-        )
+        logger.info("codex catalog: wrote %d lane(s) to %s", len(catalog["models"]), self._output_path)
         return True
 
     def start(self) -> None:

@@ -30,8 +30,7 @@ DEFAULT_MODELS: tuple[str, ...] = (
 # log's `routing_mode` column for observability.
 # - "auto":          primary name (recommender-driven)
 # - "auto-learning": backward-compat alias (recommender-driven)
-# (The "auto-learning-synthetic" background-topper tier was removed —
-# .)
+# (The "auto-learning-synthetic" background-topper tier was removed.)
 VIRTUAL_MODELS: frozenset[str] = frozenset({"auto-learning", "auto"})
 
 # Known context window limits per model. Used as a fallback when the API
@@ -336,7 +335,7 @@ def coverage_from_db(
 
     `routing_mode` selects which logged tier to count; 'auto-learning' (organic)
     is the default. (The minimum-coverage-quota enforcer will extend this to
-    count coverage across a lane's organic traffic — .)
+    count coverage across a lane's organic traffic.)
     """
     counts: dict[Cell, int] = dict.fromkeys(cells, 0)
     if not usage_log_path.exists():
@@ -375,7 +374,7 @@ def cell_sample_counts(
     compute a cell's share of recent traffic. Lane scope is implicit in cells: pass
     the lane's candidate cells and only those are counted. Cells with no rows
     are present with value 0. (Contrast coverage_from_db, which counts a
-    single routing_mode tier over all time.) See .
+    single routing_mode tier over all time.)
     """
     counts: dict[Cell, int] = dict.fromkeys(cells, 0)
     if not usage_log_path.exists():
@@ -415,8 +414,7 @@ def recent_quota_cooldown_cells(
     transient upstream failure logs a non-200) AND no successful
     (status=200) row for the cell has arrived since. The cooldown re-arms
     only on a real completed sample, because the coverage floor's purpose
-    is coverage and coverage requires a *completed* sample, not a timeout
-    (work tracker ````).
+    is coverage and coverage requires a *completed* sample, not a timeout.
 
     This is the backstop to the feasibility filter in routing/feasibility:
     even a cold cell the estimator could not rule out (cold-cell grace) gets at

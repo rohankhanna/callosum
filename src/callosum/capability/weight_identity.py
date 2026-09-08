@@ -38,7 +38,7 @@ Design principles:
 
 Current concrete providers:
 
-  * `LocalLlmCliWeightIdentityProvider` — shells out to `local-llm
+  * `LocalLlmCliWeightIdentityProvider` — shells out to `the local LLM gateway
     models local --json` (the unified front-end CLI over ollama /
     vllm / responses-proxy / etc.). Canonical when available.
   * `HeuristicWeightIdentityProvider` — naming-pattern fallback when
@@ -115,7 +115,7 @@ class WeightIdentityProvider(Protocol):
         ...
 
 
-# ---------- concretion 1: local-llm CLI -----------------------------------
+# ---------- concretion 1: the local LLM gateway CLI -----------------------------------
 
 
 # Known transport-suffix patterns. The CLI's `id` field has the full
@@ -135,9 +135,9 @@ _TRANSPORT_SUFFIXES = (
 
 
 class LocalLlmCliWeightIdentityProvider:
-    """Queries `local-llm models local --json` for weight identity.
+    """Queries `the local LLM gateway models local --json` for weight identity.
 
-    The local LLM gateway CLI is the unified front-end over multiple local
+    The the local LLM gateway CLI is the unified front-end over multiple local
     backends (ollama, vllm, responses-proxy, etc.) — it has one
     catalog with structured `model.source`, `model.runtime`,
     `model.family`, and `model.quantization` per entry. This is the
@@ -155,14 +155,10 @@ class LocalLlmCliWeightIdentityProvider:
     behind it ensures degraded environments still get an answer.
     """
 
-    id = "local-llm-cli"
+    id = "the local LLM gateway-cli"
 
     def __init__(
-        self,
-        *,
-        binary: str = "local-llm",
-        cache_ttl_s: float = 300.0,
-        timeout_s: float = 15.0,
+        self, *, binary: str = "the local LLM gateway", cache_ttl_s: float = 300.0, timeout_s: float = 15.0
     ) -> None:
         self._binary = binary
         self._cache_ttl_s = cache_ttl_s
@@ -185,11 +181,7 @@ class LocalLlmCliWeightIdentityProvider:
                 check=False,
             )
         except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-            logger.warning(
-                "%s: failed to invoke local-llm CLI: %s",
-                self.id,
-                exc,
-            )
+            logger.warning("%s: failed to invoke the local LLM gateway CLI: %s", self.id, exc)
             with self._lock:
                 # Stamp time so we don't retry on every call within
                 # the TTL window. A persistent-failure environment
@@ -198,10 +190,7 @@ class LocalLlmCliWeightIdentityProvider:
             return
         if proc.returncode != 0:
             logger.warning(
-                "%s: local-llm CLI exited %d; stderr=%s",
-                self.id,
-                proc.returncode,
-                proc.stderr[:300],
+                "%s: the local LLM gateway CLI exited %d; stderr=%s", self.id, proc.returncode, proc.stderr[:300]
             )
             with self._lock:
                 self._catalog_at = now
@@ -209,20 +198,13 @@ class LocalLlmCliWeightIdentityProvider:
         try:
             payload = json.loads(proc.stdout)
         except json.JSONDecodeError as exc:
-            logger.warning(
-                "%s: local-llm output not valid JSON: %s",
-                self.id,
-                exc,
-            )
+            logger.warning("%s: the local LLM gateway output not valid JSON: %s", self.id, exc)
             with self._lock:
                 self._catalog_at = now
             return
         entries = payload.get("entries") if isinstance(payload, dict) else None
         if not isinstance(entries, list):
-            logger.warning(
-                "%s: local-llm output lacks 'entries' list",
-                self.id,
-            )
+            logger.warning("%s: the local LLM gateway output lacks 'entries' list", self.id)
             with self._lock:
                 self._catalog_at = now
             return
@@ -304,12 +286,7 @@ class HeuristicWeightIdentityProvider:
         # Family is the stem with size tag stripped, if recognizable.
         family_match = _SIZE_TAG_PATTERN.search(stem)
         family = stem[: family_match.start()].rstrip("-") if family_match else stem
-        return WeightIdentity(
-            source=stem,
-            runtime=runtime,
-            quantization=None,
-            family=family or None,
-        )
+        return WeightIdentity(source=stem, runtime=runtime, quantization=None, family=family or None)
 
 
 # ---------- concretion 3: null --------------------------------------------
@@ -381,11 +358,7 @@ class CompositeWeightIdentityProvider:
             try:
                 ans = p.identify(model_id)
             except Exception:
-                logger.exception(
-                    "composite weight-identity: provider %r raised on %r",
-                    p.id,
-                    model_id,
-                )
+                logger.exception("composite weight-identity: provider %r raised on %r", p.id, model_id)
                 continue
             if ans is None:
                 continue

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import httpx
 
@@ -161,3 +161,23 @@ def _extract_response_detail(response: httpx.Response) -> str:
         if isinstance(detail, str) and detail:
             return detail[:400]
     return body[:400]
+
+
+def _strip_unsupported_input_fields(upstream_body: dict[str, Any]) -> None:
+    """Remove input-item fields ChatGPT's /codex/responses endpoint rejects.
+
+    The Codex CLI emits custom_tool_call items carrying a top-level
+    namespace field. ChatGPT's Responses endpoint treats namespace as
+    an unknown parameter on an input item and returns HTTP 400. Dropping it
+    from input items loses no information the upstream uses — the tool resolves
+    by name alone.
+
+    Mutates upstream_body["input"] in place. Defensive against any
+    non-list / non-dict shape.
+    """
+    input_items = upstream_body.get("input")
+    if not isinstance(input_items, list):
+        return
+    for item in input_items:
+        if isinstance(item, dict) and "namespace" in item:
+            del item["namespace"]

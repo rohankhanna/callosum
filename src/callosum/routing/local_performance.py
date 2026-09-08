@@ -1,6 +1,6 @@
 """Parametric local-model performance model.
 
-This module keeps the local-LLM latency story separate from the generic
+This module keeps the local LLM latency story separate from the generic
 request-time estimator. It models the local runtime in three regimes:
 
 * underutilized: the request fits cleanly in the unified pool
@@ -8,7 +8,7 @@ request-time estimator. It models the local runtime in three regimes:
 * overhang: the request exceeds the pool and spills to swap
 
 The formulas are intentionally simple and conservative. They are meant to be
-fed by metadata from local LLM gateway plus later calibration from observed runs.
+fed by metadata from the local LLM gateway plus later calibration from observed runs.
 """
 
 from __future__ import annotations

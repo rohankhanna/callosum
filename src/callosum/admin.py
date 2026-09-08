@@ -112,23 +112,23 @@ def install_admin_routes(
 ) -> None:
     """Mount the /admin/* endpoints on `app`, gated by the admin token.
 
-    `backends` is an optional list of loaded backend objects. When
-    provided, the /admin/probe-tools endpoint can iterate them to run
-    the verification probe against each cell. When None, that endpoint
-    returns an empty result (callosum was started without any backends
-    or the wiring isn't passing them through yet).
+        `backends` is an optional list of loaded backend objects. When
+        provided, the /admin/probe-tools endpoint can iterate them to run
+        the verification probe against each cell. When None, that endpoint
+        returns an empty result (callosum was started without any backends
+        or the wiring isn't passing them through yet).
 
-    `autonomy_store` is the earned-autonomy ladder backing
-    /admin/autonomy/*. When None, those endpoints return 503; the proxy
-    can still operate at effective L1_MANUAL (manual everything) which
-    is the safe default behavior when state isn't configured.
+        `autonomy_store` is the earned-autonomy ladder backing
+        /admin/autonomy/*. When None, those endpoints return 503; the proxy
+        can still operate at effective L1_MANUAL (manual everything) which
+        is the safe default behavior when state isn't configured.
 
-    `usage_log` backs the /admin/feedback* surface-only redirect endpoints
-    (). When None, those endpoints return 503; the proxy
-    can still operate, the operator just has no in-CLI view of bad-output
-    feedback suggestions (they can still file feedback directly via the
-    external channels). callosum never relays feedback upstream — the
-    redirect only points the operator at their own external channels.
+        `usage_log` backs the /admin/feedback* surface-only redirect endpoints
+    . When None, those endpoints return 503; the proxy
+        can still operate, the operator just has no in-CLI view of bad-output
+        feedback suggestions (they can still file feedback directly via the
+        external channels). callosum never relays feedback upstream — the
+        redirect only points the operator at their own external channels.
     """
     token = ensure_admin_token()
     router = APIRouter(prefix="/admin", tags=["admin"])
@@ -606,7 +606,7 @@ def install_admin_routes(
             "decision": _dataclass_to_dict(decision),
         }
 
-    # --- feedback surface-only redirect () ---------------
+    # --- feedback surface-only redirect ---------------
     # NOT an upstream relay. callosum points the operator at their own
     # external channels (/feedback -> Sentry, GitHub 3-cli.yml issue,
     # ChatGPT thumbs) and records the acknowledge/dismiss decision. The

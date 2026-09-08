@@ -13,22 +13,18 @@ from callosum.app import create_app
 from callosum.auth import AuthService
 from callosum.auth_db import AuthDB
 from callosum.backend import Backend
+from callosum.backends.codex_gateway import DEFAULT_BASE_URL as CODEX_GATEWAY_DEFAULT_BASE_URL
+from callosum.backends.codex_gateway import CodexGatewayBackend
 from callosum.backends.litellm_gateway import (
     DEFAULT_BASE_URL as LITELLM_GATEWAY_DEFAULT_BASE_URL,
 )
 from callosum.backends.litellm_gateway import LiteLLMGatewayBackend
 from callosum.backends.local_direct import LocalModelRegistryBackend
 from callosum.backends.ollama_cloud import (
-    DEFAULT_CUSTODY_URL as OLLAMA_CLOUD_DEFAULT_CUSTODY_URL,
-)
-from callosum.backends.ollama_cloud import (
     DEFAULT_MODEL_SUFFIX as OLLAMA_CLOUD_DEFAULT_MODEL_SUFFIX,
 )
 from callosum.backends.ollama_cloud import DEFAULT_OLLAMA_URL as OLLAMA_CLOUD_DEFAULT_URL
-from callosum.backends.ollama_cloud import OllamaCloudBackend, OllamaCloudUsageSource
-from callosum.backends.openrouter import (
-    DEFAULT_CUSTODY_URL as OPENROUTER_DEFAULT_CUSTODY_URL,
-)
+from callosum.backends.ollama_cloud import OllamaCloudBackend
 from callosum.backends.openrouter import DEFAULT_BASE_URL as OPENROUTER_DEFAULT_BASE_URL
 from callosum.backends.openrouter import (
     DEFAULT_BLOCKED_COUNTRIES as OPENROUTER_DEFAULT_BLOCKED_COUNTRIES,
@@ -37,10 +33,11 @@ from callosum.backends.openrouter import (
     DEFAULT_EXCLUDE_FAMILIES as OPENROUTER_DEFAULT_EXCLUDE_FAMILIES,
 )
 from callosum.backends.openrouter import OpenRouterBackend
-from callosum.config import Config, build_backends, load_config
+from callosum.config import Config, load_config
 from callosum.local import LocalModelRegistrySource
 from callosum.operator_state import OperatorState
 from callosum.usage_log import UsageLog
+from callosum.wiring import build_backends
 
 
 def _default_config_path() -> Path:
@@ -138,114 +135,53 @@ def build_runtime_backends(cfg: Config, *, operator_state: OperatorState) -> lis
             "entries). Prefer LocalModelRegistryBackend (auto-registered when the "
             "`local-llm` CLI is on PATH) for production use."
         )
-    # Ollama Cloud: cloud models served DIRECT by ollama.com via a revocable
-    # API key (created at https://ollama.com/settings/keys). credential proxy (sovereign
-    # sibling) holds the key in its key store and serves it over loopback
-    # (127.0.0.1:7342); callosum fetches the real key value from
-    # `GET /v1/ollama/cloud/key` and holds it IN MEMORY ONLY (never persisted).
-    # This retires the prior architecture where callosum proxied through the
-    # local ollama daemon holding a `ollama signin` browser-session cookie.
-    # credential proxy KEEPS its browser-cookie custody for menubar metering only.
-    # This is an INDEPENDENT backend (own id, own fleet), not a local fallback —
-    # cloud requests burn real Ollama Cloud quota, so it must route as remote
-    # (BackendKind="ollama_cloud"), not as a free local cell. Env-gated OFF by
-    # default so enabling is a no-op for live routing until the operator turns
-    # it on. See backends/ollama_cloud.py + work tracker  /
-    # .
+    # Ollama Cloud is an independent remote backend. It talks directly to
+    # ollama.com with the configured API key and is disabled by default.
     if os.environ.get("CALLOSUM_OLLAMA_CLOUD_ENABLED") == "1":
         ollama_cloud_url = os.environ.get("CALLOSUM_OLLAMA_CLOUD_URL", OLLAMA_CLOUD_DEFAULT_URL)
         ollama_cloud_suffix = os.environ.get("CALLOSUM_OLLAMA_CLOUD_MODEL_SUFFIX", OLLAMA_CLOUD_DEFAULT_MODEL_SUFFIX)
-
-        # Boundary-native proxy custody: callosum holds NO ollama.com key.
-        # It mints a short-TTL `ollama-cloud`-scoped stand-in at credential proxy and
-        # POSTs ollama.com requests through credential proxy's `/v1/proxy`, which reads
-        # the real key from its `pass` store and injects it on the final hop.
-        # If credential proxy is down or the key/scope is not provisioned, the backend
-        # goes unhealthy with a clear "no-key" reason (the correct failure
-        # mode). CALLOSUM_OLLAMA_CLOUD_CUSTODY_URL (default credential proxy loopback)
-        # + CALLOSUM_OLLAMA_CLOUD_CUSTODY_ACCOUNT (default "primary") point at
-        # the credential proxy boundary that mints the stand-in. Default deployment
-        # needs zero new env (both default to existing constants).
-        custody_url = os.environ.get("CALLOSUM_OLLAMA_CLOUD_CUSTODY_URL", OLLAMA_CLOUD_DEFAULT_CUSTODY_URL)
-        custody_account = os.environ.get("CALLOSUM_OLLAMA_CLOUD_CUSTODY_ACCOUNT", "primary")
-
-        # Optional usage-source wiring (credential proxy loopback, DECOUPLED from the
-        # chat/proxy path — reads the browser-cookie-backed meter). Both flags
-        # default OFF so this block is a no-op for live routing at merge time.
-        # CALLOSUM_OLLAMA_CLOUD_USAGE_SOURCE_ENABLED gates source construction;
-        # CALLOSUM_OLLAMA_CLOUD_USAGE_LIVE gates whether the backend treats the
-        # source as authoritative (vs. shadow-only). See work tracker
-        #  /  (OPERATOR-GATED).
-        usage_source = None
-        usage_live = False
-        if os.environ.get("CALLOSUM_OLLAMA_CLOUD_USAGE_SOURCE_ENABLED") == "1":
-            usage_custody_url = os.environ.get("CALLOSUM_OLLAMA_CLOUD_USAGE_URL", OLLAMA_CLOUD_DEFAULT_CUSTODY_URL)
-            usage_account = os.environ.get("CALLOSUM_OLLAMA_CLOUD_USAGE_ACCOUNT", "primary")
-            try:
-                usage_standin_ttl = int(os.environ.get("CALLOSUM_OLLAMA_CLOUD_STANDIN_TTL", "1800"))
-            except ValueError:
-                logging.getLogger("callosum.startup").warning(
-                    "CALLOSUM_OLLAMA_CLOUD_STANDIN_TTL not an int; falling back to 1800"
-                )
-                usage_standin_ttl = 1800
-            usage_source = OllamaCloudUsageSource(
-                custody_url=usage_custody_url,
-                account=usage_account,
-                standin_ttl_s=usage_standin_ttl,
-            )
-            usage_live = os.environ.get("CALLOSUM_OLLAMA_CLOUD_USAGE_LIVE") == "1"
+        ollama_cloud_api_key = os.environ.get("CALLOSUM_OLLAMA_CLOUD_API_KEY", "")
 
         backends.append(
             OllamaCloudBackend(
                 id="ollama-cloud",
+                api_key=ollama_cloud_api_key,
                 ollama_url=ollama_cloud_url,
                 model_suffix=ollama_cloud_suffix,
-                custody_url=custody_url,
-                custody_account=custody_account,
-                usage_source=usage_source,
-                usage_live=usage_live,
             )
         )
-    # OpenRouter: the hosted OpenAI-compatible aggregator the operator holds
-    # prepaid credits on (a conscious REVERSAL of the 2026-05-26 removal of
-    # the old `openrouter_free` fallback — see backends/openrouter.py for the
-    # rationale and the feedback decision artifact). credential proxy (sovereign
-    # sibling) holds the real OpenRouter API key in its pass store; callosum
-    # mints a short-TTL `openrouter`-scoped stand-in at `/v1/standin` and
-    # POSTs through credential proxy's `/v1/proxy{,/stream}`, which injects the real
-    # key on the final hop — the real key NEVER enters this process. This is
-    # a CONSERVATIVE-OVERFLOW remote band member (priority offset 2000,
+    # OpenRouter: the hosted OpenAI-compatible aggregator. Callosum sends
+    # requests directly to OpenRouter using the configured API key. This is a
+    # conservative-overflow remote band member (priority offset 2000,
     # behind Codex and ollama_cloud's 1000, before local's 10_000) so the
     # operator spends paid Codex quota and the already-paid ollama_cloud
     # first. Full auto-discovery by default; a family-exclude drops models
     # ollama_cloud already serves so OpenRouter doesn't get paid for them.
+    # Data-residency is enforced per-request via OpenRouter `provider.ignore`
+    # denying providers with datacenters/headquarters in authoritarian
+    # regimes (default CN/RU/KP), auto-derived from the /providers endpoint.
+    # Env-gated OFF by default. The API key is read from the environment so
+    # it is never stored in Callosum's configuration file.
     if os.environ.get("CALLOSUM_OPENROUTER_ENABLED") == "1":
         openrouter_url = os.environ.get("CALLOSUM_OPENROUTER_BASE_URL", OPENROUTER_DEFAULT_BASE_URL)
-        or_custody_url = os.environ.get("CALLOSUM_OPENROUTER_CUSTODY_URL", OPENROUTER_DEFAULT_CUSTODY_URL)
-        or_custody_account = os.environ.get("CALLOSUM_OPENROUTER_CUSTODY_ACCOUNT", "primary")
+        or_api_key = os.environ.get("CALLOSUM_OPENROUTER_API_KEY", "")
         or_model_filter = os.environ.get("CALLOSUM_OPENROUTER_MODEL_FILTER", "all")
-        or_allowlist = frozenset(
-            s for s in (os.environ.get("CALLOSUM_OPENROUTER_MODELS", "") or "").split(",") if s
-        )
+        or_allowlist = frozenset(s for s in (os.environ.get("CALLOSUM_OPENROUTER_MODELS", "") or "").split(",") if s)
         or_model_prefix = os.environ.get("CALLOSUM_OPENROUTER_MODEL_PREFIX") or None
-        or_blocked_countries = frozenset(
-            s for s in (os.environ.get("CALLOSUM_OPENROUTER_BLOCKED_COUNTRIES", "") or "").split(",")
-            if s
-        ) or OPENROUTER_DEFAULT_BLOCKED_COUNTRIES
+        or_blocked_countries = (
+            frozenset(s for s in (os.environ.get("CALLOSUM_OPENROUTER_BLOCKED_COUNTRIES", "") or "").split(",") if s)
+            or OPENROUTER_DEFAULT_BLOCKED_COUNTRIES
+        )
         or_blocked_providers = frozenset(
-            s
-            for s in (os.environ.get("CALLOSUM_OPENROUTER_BLOCKED_PROVIDERS", "") or "").split(",")
-            if s
+            s for s in (os.environ.get("CALLOSUM_OPENROUTER_BLOCKED_PROVIDERS", "") or "").split(",") if s
         )
         or_allowed_providers = frozenset(
-            s
-            for s in (os.environ.get("CALLOSUM_OPENROUTER_ALLOWED_PROVIDERS", "") or "").split(",")
-            if s
+            s for s in (os.environ.get("CALLOSUM_OPENROUTER_ALLOWED_PROVIDERS", "") or "").split(",") if s
         )
-        or_exclude_families = frozenset(
-            s for s in (os.environ.get("CALLOSUM_OPENROUTER_EXCLUDE_FAMILIES", "") or "").split(",")
-            if s
-        ) or OPENROUTER_DEFAULT_EXCLUDE_FAMILIES
+        or_exclude_families = (
+            frozenset(s for s in (os.environ.get("CALLOSUM_OPENROUTER_EXCLUDE_FAMILIES", "") or "").split(",") if s)
+            or OPENROUTER_DEFAULT_EXCLUDE_FAMILIES
+        )
         or_catalog_refresh_raw = os.environ.get("CALLOSUM_OPENROUTER_CATALOG_REFRESH_S")
         or_catalog_refresh: float | None = None
         if or_catalog_refresh_raw is not None:
@@ -265,12 +201,25 @@ def build_runtime_backends(cfg: Config, *, operator_state: OperatorState) -> lis
             "blocked_providers": or_blocked_providers,
             "allowed_providers": or_allowed_providers,
             "exclude_families": or_exclude_families,
-            "custody_url": or_custody_url,
-            "custody_account": or_custody_account,
+            "api_key": or_api_key,
         }
         if or_catalog_refresh is not None:
             or_kwargs["catalog_refresh_s"] = or_catalog_refresh
         backends.append(OpenRouterBackend(**or_kwargs))  # type: ignore[arg-type]
+    # Codex gateway: a generic Codex-compatible endpoint that takes a plain
+    # API key. The operator points base_url at a Codex-compatible endpoint
+    # and provides a long-lived Bearer token. No OAuth, no token refresh,
+    # no proxy concepts. Env-gated OFF by default.
+    if os.environ.get("CALLOSUM_CODEX_GATEWAY_ENABLED") == "1":
+        codex_gw_url = os.environ.get("CALLOSUM_CODEX_GATEWAY_BASE_URL", CODEX_GATEWAY_DEFAULT_BASE_URL)
+        codex_gw_api_key = os.environ.get("CALLOSUM_CODEX_GATEWAY_API_KEY", "")
+        backends.append(
+            CodexGatewayBackend(
+                id="codex-gateway",
+                api_key=codex_gw_api_key,
+                base_url=codex_gw_url,
+            )
+        )
     return backends
 
 

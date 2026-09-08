@@ -8,9 +8,6 @@ from pydantic import ValidationError
 
 from callosum.config import (
     BackendConfig,
-    Config,
-    build_backend,
-    build_backends,
     load_config,
 )
 
@@ -115,45 +112,3 @@ models = ["model-a0d0"]
 def test_backend_config_requires_vault_path() -> None:
     with pytest.raises(ValidationError):
         BackendConfig(id="p", models=["model-a0d0"])  # type: ignore[call-arg]
-
-
-def test_build_backend_accepts_missing_models(tmp_path: Path) -> None:
-    """`models` in TOML is an OPTIONAL cold-start hint. Both backend
-    kinds discover their catalog dynamically via
-    refresh_advertised_models. Hard-coding a static list in config
-    defeated dynamic routing and forced operator churn each time
-    OpenAI shipped a model. build_backend used to reject empty
-    `models`; this test pins the relaxation."""
-    vault = _write_vault(tmp_path)
-    bc = BackendConfig(id="p", vault_path=vault)
-    backend = build_backend(bc)
-    assert backend.advertised_models == frozenset()
-
-
-async def test_build_backend_constructs_codex_auth_vault(tmp_path: Path) -> None:
-    vault = _write_vault(tmp_path)
-    bc = BackendConfig(id="vault", vault_path=vault, models=["model-a0d0"])
-    backend = build_backend(bc)
-    try:
-        assert backend.id == "vault"
-        assert backend.kind == "codex_auth_vault"
-        assert "model-a0d0" in backend.advertised_models
-    finally:
-        await backend.aclose()
-
-
-async def test_build_backends_iterates(tmp_path: Path) -> None:
-    vault_a = _write_vault(tmp_path, name="a.json")
-    vault_b = _write_vault(tmp_path, name="b.json")
-    cfg = Config(
-        backends=[
-            BackendConfig(id="a", vault_path=vault_a, models=["model-a0d0"]),
-            BackendConfig(id="b", vault_path=vault_b, models=["model-a0d0"]),
-        ]
-    )
-    backends = build_backends(cfg)
-    try:
-        assert [b.id for b in backends] == ["a", "b"]
-    finally:
-        for b in backends:
-            await b.aclose()

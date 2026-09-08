@@ -514,7 +514,7 @@ async def test_responses_forwards_body_verbatim_with_vault_headers(tmp_path: Pat
 
 
 async def test_responses_strips_custom_tool_call_namespace(tmp_path: Path) -> None:
-    """Parity with the active credential_proxy path: the Codex CLI emits
+    """The Codex CLI emits
     `custom_tool_call` input items with a top-level `namespace` field, and
     ChatGPT's `/codex/responses` rejects `namespace` as an unknown parameter
     (HTTP 400 "Unknown parameter: 'input[N].namespace'"). This inert
@@ -599,7 +599,7 @@ async def test_responses_stream_strips_custom_tool_call_namespace(tmp_path: Path
 
 
 async def test_responses_stream_strips_bogus_custom_tool_call_namespace(tmp_path: Path) -> None:
-    """Parity with the active credential_proxy path: the upstream returns
+    """The upstream returns
     `custom_tool_call` items with a `namespace` for tools the client declared
     WITHOUT one; the codex CLI then mis-dispatches `namespace+name`. The
     inert fallback must strip it from the streamed response too, while
@@ -1351,12 +1351,12 @@ def test_responses_to_chat_response_preserves_completed_as_stop() -> None:
     assert chat["choices"][0]["finish_reason"] == "stop"
 
 
-# ---------- catalog persistence / warm-start (parity with credential_proxy) --
+# ---------- catalog persistence / warm-start ----------
 
 
 async def test_refresh_persists_catalog_to_state_store(tmp_path: Path) -> None:
     """A successful /models refresh persists the catalog so the next cold boot
-    warm-starts from it. Parity with CredentialProxyBackend."""
+    warm-starts from it."""
     from callosum.state import StateStore
 
     auth_path = tmp_path / "auth.json"

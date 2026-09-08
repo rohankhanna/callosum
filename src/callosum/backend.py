@@ -9,7 +9,7 @@ from callosum.sse_tee import ResponsesStreamSummary
 
 BackendKind = Literal[
     "codex_auth_vault",
-    "credential_proxy",
+    "codex_gateway",
     "litellm_gateway",
     "ollama_cloud",
     "openrouter",
@@ -21,25 +21,19 @@ HealthReason = Literal[
     "network",
     "unknown",
     # Local-lane catalog reasons. `catalog_cli_broken` = the shelled-out
-    # local-llm catalog CLI failed to run (missing, hung, or non-zero exit —
+    # local model catalog CLI failed to run (missing, hung, or non-zero exit —
     # e.g. an orphaned pipx venv lost its package). `catalog_empty` = the CLI
-    # is healthy but the local model garage lists zero models. Distinct from
+    # is healthy but the local model registry lists zero models. Distinct from
     # the opaque "unknown" so /status names the real cause and the operator
-    # knows whether to repair the sibling CLI or populate the garage.
+    # knows whether to repair the sibling CLI or populate the registry.
     "catalog_cli_broken",
     "catalog_empty",
-    # Ollama-cloud / OpenRouter reason under boundary-native proxy custody.
-    # `no-key` = the stand-in token could not be minted or honored: credential proxy
-    # unreachable on `/v1/standin`, returned non-200/non-401, OR `/v1/proxy`
-    # returned 503 because the backend's scope (`ollama-cloud` or `openrouter`)
-    # is not wired or the `pass` entry holding the real upstream key is
-    # missing/empty. The real key NEVER enters this process. Distinct from
-    # "auth_invalid" (credential proxy injected the key but the upstream rejected it —
-    # operator re-provisions the `pass` entry, NOT a callosum-side fix) and
-    # "network" (credential proxy/upstream transport unreachable) so /status names
-    # whether the operator should wire the scope / provision the key vs.
-    # rotate it vs. check network. See backends/ollama_cloud.py and
-    # backends/openrouter.py `_ensure_standin` / `_proxy_buffered`.
+    # Ollama-cloud / OpenRouter reason for missing or invalid API key.
+    # `no-key` = the API key was not provided or is empty. Distinct from
+    # "auth_invalid" (the upstream rejected the key — operator needs to
+    # rotate or re-provision it) and "network" (upstream transport
+    # unreachable) so /status names whether the operator should provide
+    # a key vs. rotate it vs. check network.
     "no-key",
 ]
 
@@ -79,8 +73,8 @@ class CallHandle:
     # for non-stream calls and for streams that produced no chunks (e.g.
     # empty StopAsyncIteration, pre-first-chunk timeout/error). Persisted as
     # `requests.ttfb_ms = (first_byte_at - ts_start) * 1000` to feed the
-    # per-cell time estimator's TTFB-vs-decode split () and
-    # data-driven stall-guard tuning (). Same clock as
+    # per-cell time estimator's TTFB-vs-decode split and
+    # data-driven stall-guard tuning. Same clock as
     # ts_start/ts_end so the subtraction is valid.
     first_byte_at: float | None = None
     # Largest inter-chunk idle gap (seconds) observed by the local-lane
@@ -89,7 +83,7 @@ class CallHandle:
     # local streams only (remote lanes are not stall-guarded). NULL for
     # non-stream calls, remote streams, and streams that ended before a
     # second chunk. Persisted as requests.idle_gap_ms to tune
-    # CALLOSUM_LOCAL_STREAM_IDLE_TIMEOUT_S (). monotonic clock
+    # CALLOSUM_LOCAL_STREAM_IDLE_TIMEOUT_S. monotonic clock
     # (a pure duration, not a wall-clock stamp).
     max_idle_gap_s: float | None = None
 

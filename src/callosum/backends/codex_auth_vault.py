@@ -1,12 +1,10 @@
-"""REDUNDANT-CODE: see docs/architecture/redundant_code.md
+"""Codex auth vault backend — talks directly to ChatGPT's Codex
+endpoint using OAuth credentials from a local auth.json vault.
 
-This backend is no longer exercised by the default production config —
-the active path is `callosum.backends.credential_proxy`, which routes
-OAuth refresh through the credential proxy service. This module is kept
-deliberately as a fallback the operator can activate without code
-changes if credential proxy is unreachable: flip a backend's `type` in
-config.toml from `credential_proxy` to `codex_auth_vault`, point
-`vault_path` at a fresh auth.json, restart.
+This backend handles OAuth token refresh directly and forwards requests
+to the ChatGPT Codex Responses endpoint. The operator provides a
+`vault_path` pointing at a fresh auth.json, and callosum handles the rest.
+
 
 The tests in `tests/unit/test_codex_auth_vault_backend.py` continue
 to run on every CI sweep so the fallback stays working. Behavior
@@ -117,8 +115,7 @@ class CodexAuthVaultBackend:
         state_store: StateStore | None = None,
         models_refresh_s: float = DEFAULT_MODELS_REFRESH_S,
     ) -> None:
-        # `advertised_models` is OPTIONAL — see CredentialProxyBackend
-        # for the rationale. Dynamic discovery via
+        # `advertised_models` is OPTIONAL. Dynamic discovery via
         # refresh_advertised_models is the source of truth; the static
         # set is just a cold-start fallback. Empty is legal.
         self.id = id
@@ -177,7 +174,6 @@ class CodexAuthVaultBackend:
         # so a cold boot (upstream/auth slow/down) starts with a populated
         # catalog instead of an empty-catalog window. The startup refresh
         # overwrites this on success; on failure we keep serving from it.
-        # Parity with CredentialProxyBackend. See  (layer 2).
         self._warm_start_catalog()
 
     @property
@@ -222,7 +218,7 @@ class CodexAuthVaultBackend:
 
         The persisted blob is untrusted disk state: validate every field on
         load and fall back to empty (→ static hint) on any shape problem.
-        Mirrors CredentialProxyBackend._warm_start_catalog for parity.
+
         """
         if self._state_store is None:
             return
@@ -264,8 +260,7 @@ class CodexAuthVaultBackend:
 
         Called after a successful refresh so the next cold boot warm-starts
         from this live copy. Overwrites the previous blob so a model retired
-        upstream eventually drops from the hint. Mirrors
-        CredentialProxyBackend._persist_catalog for parity.
+        upstream eventually drops from the hint.
         """
         if self._state_store is None or self._dynamic_advertised_models is None:
             return
@@ -523,9 +518,8 @@ class CodexAuthVaultBackend:
         streaming_body = {**body, "stream": True}
         # Strip input-item fields the ChatGPT `/codex/responses` endpoint
         # rejects (notably `namespace` on `custom_tool_call` items the Codex
-        # CLI emits) — same normalization the active credential_proxy path
-        # applies. See callosum.backends.credential_proxy.
-        from callosum.backends.credential_proxy import _strip_unsupported_input_fields
+        # CLI emits).
+        from callosum.backends._http import _strip_unsupported_input_fields
 
         _strip_unsupported_input_fields(streaming_body)
         for attempt in (1, 2):
@@ -584,9 +578,8 @@ class CodexAuthVaultBackend:
         # restart with refreshed tokens. We can only retry before any chunk
         # has been yielded — once streaming starts, we're committed.
         # Strip upstream-rejected input-item fields (notably `namespace` on
-        # `custom_tool_call` items) before forwarding — same normalization as
-        # the active credential_proxy path. See callosum.backends.credential_proxy.
-        from callosum.backends.credential_proxy import _strip_unsupported_input_fields
+        # `custom_tool_call` items) before forwarding.
+        from callosum.backends._http import _strip_unsupported_input_fields
 
         _strip_unsupported_input_fields(body)
         for attempt in (1, 2):

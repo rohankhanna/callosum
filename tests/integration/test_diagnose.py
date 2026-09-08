@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 from pathlib import Path
 
@@ -13,7 +12,6 @@ from callosum.auth_db import AuthDB
 from callosum.auth_vault import AuthVault
 from callosum.backend import UsageSnapshot
 from callosum.backends.codex_auth_vault import CodexAuthVaultBackend
-from callosum.backends.credential_proxy import CredentialProxyBackend
 
 
 def _write_auth_json(path: Path) -> None:
@@ -94,32 +92,6 @@ def _make_backend(
     )
 
 
-def _standin_response() -> httpx.Response:
-    return httpx.Response(
-        status_code=200,
-        json={
-            "token": "ati_test_token",
-            "token_id": "test_token_id",
-            "account": "primary",
-            "expires_at": 9999999999.0,
-        },
-    )
-
-
-def _make_credential_proxy_backend(
-    *,
-    handler: httpx.MockTransport,
-    advertised_models: frozenset[str] | None = None,
-    backend_id: str = "primary",
-) -> CredentialProxyBackend:
-    return CredentialProxyBackend(
-        id=backend_id,
-        proxy_url="http://127.0.0.1:7342",
-        upstream_url="https://chatgpt.com/backend-api/codex/responses",
-        advertised_models=advertised_models or frozenset({"model-a0e7"}),
-        custody_account="primary",
-        transport=handler,
-    )
 
 
 def test_diagnose_green_path_reports_all_checks_pass(tmp_path: Path) -> None:
@@ -269,59 +241,3 @@ def test_diagnose_requires_bearer_when_auth_enabled(tmp_path: Path) -> None:
         assert ok.status_code == 200
         assert ok.json()["ok"] is True
 
-
-def test_diagnose_credential_proxy_flags_missing_quota_headers() -> None:
-    def upstream(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/v1/standin":
-            return _standin_response()
-        if request.url.path == "/v1/proxy/stream":
-            return httpx.Response(
-                status_code=200,
-                headers={
-                    "content-type": "text/event-stream",
-                    "x-credential proxy-upstream-status": "200",
-                },
-                content=_healthy_sse(),
-            )
-        raise AssertionError(f"unexpected path: {request.url.path}")
-
-    backend = _make_credential_proxy_backend(handler=httpx.MockTransport(upstream))
-    with TestClient(create_app(backends=[backend])) as client:
-        body = client.get("/diagnose/upstream").json()
-    assert body["ok"] is False
-    [bd] = body["backends"]
-    assert bd["ok"] is False
-    assert "quota_headers_present" in bd["failed_checks"]
-    assert "weekly_used_percent_present" in bd["failed_checks"]
-
-
-def test_diagnose_credential_proxy_uses_completion_model_and_records_quota() -> None:
-    seen_models: list[str] = []
-
-    def upstream(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/v1/standin":
-            return _standin_response()
-        if request.url.path == "/v1/proxy/stream":
-            payload = json.loads(request.content.decode("utf-8"))
-            body = json.loads(base64.b64decode(payload["body_b64"]).decode("utf-8"))
-            seen_models.append(body["model"])
-            return httpx.Response(
-                status_code=200,
-                headers={
-                    **_healthy_codex_headers(),
-                    "x-credential proxy-upstream-status": "200",
-                },
-                content=_healthy_sse(),
-            )
-        raise AssertionError(f"unexpected path: {request.url.path}")
-
-    backend = _make_credential_proxy_backend(
-        handler=httpx.MockTransport(upstream),
-        advertised_models=frozenset({"codex-auto-review", "model-a0e7"}),
-    )
-    with TestClient(create_app(backends=[backend])) as client:
-        body = client.get("/diagnose/upstream").json()
-    assert body["ok"] is True
-    assert seen_models == ["model-a0e7"]
-    assert backend._last_quota is not None
-    assert backend._last_quota.weekly_used_percent == 10

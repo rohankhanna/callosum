@@ -215,11 +215,7 @@ def profile_path(model_id: str, profile_dir: Path | None = None) -> Path:
     return base / f"{safe}.json"
 
 
-def load_profile(
-    model_id: str,
-    *,
-    profile_dir: Path | None = None,
-) -> CapabilityProfile:
+def load_profile(model_id: str, *, profile_dir: Path | None = None) -> CapabilityProfile:
     """Load the profile for `model_id` from disk, or return a fresh
     empty profile when none exists yet. Never raises on missing files
     — first-probe-ever is the normal case."""
@@ -236,11 +232,7 @@ def load_profile(
     return CapabilityProfile.from_dict(data)
 
 
-def save_profile(
-    profile: CapabilityProfile,
-    *,
-    profile_dir: Path | None = None,
-) -> Path:
+def save_profile(profile: CapabilityProfile, *, profile_dir: Path | None = None) -> Path:
     """Atomically persist the profile to disk. Returns the written path."""
     path = profile_path(profile.model_id, profile_dir)
     path.parent.mkdir(parents=True, exist_ok=True)

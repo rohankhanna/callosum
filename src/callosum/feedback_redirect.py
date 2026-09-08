@@ -1,4 +1,4 @@
-"""Surface-only feedback redirect ().
+"""Surface-only feedback redirect.
 
 When callosum's existing fault detectors flag a suspect model output
 (quality_score = -1 from the failure labeler, peer-quality calibration,
@@ -7,7 +7,7 @@ at the existing external feedback channels* and hand them a scrubbed local
 snippet + thread id they can paste into a GitHub issue.
 
 This is explicitly NOT an upstream relay. The parent research node
-() established that the Codex CLI /feedback command
+ established that the Codex CLI /feedback command
 egresses out-of-band to Sentry over a channel the OpenAI-API-terminating
 routing proxy never sees, carries privacy-sensitive raw data, and is a
 per-invocation opt-in. There is no OpenAI-side endpoint to forward to.

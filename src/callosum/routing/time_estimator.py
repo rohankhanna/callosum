@@ -1,6 +1,6 @@
 """Forward time estimator: per-request wall-clock latency prediction.
 
-This is the TIME half of the usage estimator (work tracker ),
+This is the TIME half of the usage estimator,
 implementing the shared UsageEstimator contract in
 routing/usage_estimate.py and mirroring the COST estimator
 (routing/cost_estimator.py) so the two stay parallel. It predicts how
@@ -14,14 +14,14 @@ has a fully-observed latency_ms label, so — unlike the integer-% quota
 delta on the cost side — time has no unverifiable case: finalize always
 records a usable observation.
 
-Model: t ≈ a·input_tokens + b·output_tokens + c (),
+Model: t ≈ a·input_tokens + b·output_tokens + c,
 i.e. TTFB-ish ingest that scales with input, decode that scales with output,
 and a fixed per-call overhead c. v1 fits a == b == m (a single
 per-total-token slope) plus the intercept c against total latency_ms.
 The a≠b split — TTFB-per-input vs decode-per-output — is deliberately
 deferred: only TOTAL latency is logged today, which makes the two
 coefficients unidentifiable, so separating them needs the TTFB capture
-tracked as . CellTimeModel keeps a and b as
+tracked as . CellTimeModel keeps ab as
 separate fields so that refit is mechanical (exactly how CellCostModel
 keeps input_rate/output_rate split). This mirrors the cost v1, which
 likewise blended its two rates pending the same refinement.
@@ -95,7 +95,7 @@ class CellTimeModel:
 
     t ≈ a·input + b·output + c in milliseconds. v1 sets a == b (a
     single slope per total token); the fields stay separate so a TTFB-vs-decode
-    refit () can populate them independently without changing
+    refit can populate them independently without changing
     call sites. resid_p50 / resid_p95 are the median and upper-tail
     residuals (ms) measured around the fit — they carry the irreducible
     dispersion (load/concurrency) the coefficients cannot explain, and build

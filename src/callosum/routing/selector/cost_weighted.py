@@ -43,7 +43,7 @@ class CostWeightedSelector:
     tier.
 
     Local throughput is an informational same-tier signal for local cells:
-    when local LLM gateway exposes a measured or estimated tokens/s figure, the
+    when the local LLM gateway exposes a measured or estimated tokens/s figure, the
     faster local cell should win before we fall back to model size. For
     admitted local cells, smaller wins that final tie because the hierarchy
     is an exact-fit ladder. For non-local fallback, parameter_count remains

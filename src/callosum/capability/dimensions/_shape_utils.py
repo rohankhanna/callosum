@@ -9,7 +9,7 @@ here once.
 
 A "text tool-call leak" is any message-text content that IS a tool
 call the model emitted as text instead of as a structured
-function_call output item — i.e. the substrate (local LLM gateway /
+function_call output item — i.e. the substrate (the local LLM gateway /
 LiteLLM / the responses-proxy) failed to translate the model's
 text-format tool call into a structured call. Two canonical text
 formats are recognized (both are well-documented Hermes-family
@@ -180,20 +180,14 @@ def _looks_like_tool_call_json(text: str) -> bool:
 # un-translating responses-proxy). NAME is constrained to a tool-name-ish
 # token (letters/digits/_/-/.) so ordinary prose with the literal
 # substring "function=" does not trip it.
-_HERMES_FUNCTION_TAG = re.compile(
-    r"<function=[A-Za-z0-9_.\-]+\s*>.*?</function\s*>",
-    re.DOTALL,
-)
+_HERMES_FUNCTION_TAG = re.compile(r"<function=[A-Za-z0-9_.\-]+\s*>.*?</function\s*>", re.DOTALL)
 # <|tool_call|> marker (some Hermes-template models) optionally
 # followed by a tool-call-shaped JSON object.
 _HERMES_TOOL_CALL_MARKER = re.compile(r"<\|\s*tool_call\s*\|>")
 #  ...  wrapping a tool-call-shaped JSON object (vLLM's
 # canonical Hermes format — the special tokens are sometimes emitted
 # verbatim as text when the runtime doesn't strip them).
-_HERMES_TOOL_TOKEN_BLOCK = re.compile(
-    r"<\s*tool_call\s*>(?P<body>.*?)<\s*/\s*tool_call\s*>",
-    re.DOTALL,
-)
+_HERMES_TOOL_TOKEN_BLOCK = re.compile(r"<\s*tool_call\s*>(?P<body>.*?)<\s*/\s*tool_call\s*>", re.DOTALL)
 
 
 def _looks_like_tool_call_hermes(text: str) -> bool:

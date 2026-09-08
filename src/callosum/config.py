@@ -2,22 +2,17 @@ from __future__ import annotations
 
 import os
 import tomllib
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from callosum.auth_vault import AuthVault
-from callosum.backend import Backend
-from callosum.backends.codex_auth_vault import (
-    DEFAULT_BASE_URL as CODEX_AUTH_VAULT_DEFAULT_BASE_URL,
-)
-from callosum.backends.codex_auth_vault import CodexAuthVaultBackend
 from callosum.routing.factory import RoutingConfig
-from callosum.state import StateStore
 
-BackendType = Literal["codex_auth_vault", "credential_proxy"]
+BackendType = Literal["codex_auth_vault", "codex_gateway"]
+
+# Default upstream base URL for Codex auth vault backends.
+CODEX_AUTH_VAULT_DEFAULT_BASE_URL = "https://chatgpt.com/backend-api/codex"
 
 # Behavioral stall guard for LOCAL streaming backends. Replaces the old
 # size-based pre-flight cap (MAX_LOCAL_TOOL_REQUEST_BYTES): a hardcoded byte
@@ -97,7 +92,7 @@ class CodexCatalogConfig(BaseModel):
     by the provider's `/v1/models`. When enabled, Callosum re-emits that file
     from the same catalog `/v1/models` serves, so the picker lists and switches
     between Callosum lanes from a single config file. See
-    callosum.codex_catalog and work tracker .
+    callosum.codex_catalog and.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -186,7 +181,7 @@ class AutoRouterConfig(BaseModel):
     # Window over which a cell's share is measured. 30 days.
     min_coverage_window_seconds: int = 2_592_000
 
-    # Coverage feasibility (work tracker ): a cell is forced onto a
+    # Coverage feasibility (): a cell is forced onto a
     # coverage turn only when the forward time estimator predicts it can
     # FINISH within the stall-guard first-byte budget — otherwise the forced
     # turn times out (status 0), records no completed sample, and the cell
@@ -199,7 +194,7 @@ class AutoRouterConfig(BaseModel):
     # to fall back to the pre-fix window-fit-only filter (escape hatch). See
     # routing/feasibility.py.
     min_coverage_feasibility_enabled: bool = True
-    # Post-timeout cooldown (the second half of ): a cell that
+    # Post-timeout cooldown (the second half of): a cell that
     # just timed out on a forced-coverage turn is skipped by the quota for
     # this window so it is not immediately re-targeted. Re-arms only after the
     # cell records a real completed sample. The backstop to feasibility —
@@ -304,26 +299,18 @@ class BackendConfig(BaseModel):
     id: str
     type: BackendType = "codex_auth_vault"
     vault_path: Path | None = None
-    proxy_url: str | None = None
-    upstream_url: str | None = None
-    custody_account: str | None = None
     models: list[str] = Field(default_factory=list)
     codex_base_url: str = CODEX_AUTH_VAULT_DEFAULT_BASE_URL
+    api_key: str = ""
+    base_url: str = CODEX_AUTH_VAULT_DEFAULT_BASE_URL
 
     @model_validator(mode="after")
     def _validate_credential_source(self) -> BackendConfig:
-        """Enforce exactly one of vault_path or proxy_url is set."""
-        has_vault = self.vault_path is not None
-        has_proxy = self.proxy_url is not None
-        if has_vault and has_proxy:
-            raise ValueError("cannot specify both vault_path and proxy_url")
-        if self.type == "codex_auth_vault" and not has_vault:
+        """Enforce credential fields are set per backend type."""
+        if self.type == "codex_auth_vault" and not self.vault_path:
             raise ValueError("codex_auth_vault requires vault_path")
-        if self.type == "credential_proxy":
-            if not has_proxy:
-                raise ValueError("credential_proxy requires proxy_url")
-            if not self.upstream_url:
-                raise ValueError("credential_proxy requires upstream_url")
+        if self.type == "codex_gateway" and not self.api_key:
+            raise ValueError("codex_gateway requires api_key")
         return self
 
 
@@ -342,52 +329,5 @@ class Config(BaseModel):
 def load_config(path: Path) -> Config:
     with path.open("rb") as f:
         data = tomllib.load(f)
+
     return Config.model_validate(data)
-
-
-def build_backend(
-    cfg: BackendConfig,
-    *,
-    state_store: StateStore | None = None,
-) -> Backend:
-    # `models` is an OPTIONAL cold-start hint, not a contract. Both
-    # backend kinds discover their model catalog dynamically via
-    # `refresh_advertised_models` at startup. Operator-provided lists
-    # in config are useful only as a fallback when discovery hasn't
-    # run yet or has failed — and even then, the smoke test will report
-    # "no advertised_models" cleanly rather than crash. Hard-coding
-    # current model names into config would defeat dynamic routing
-    # and create maintenance churn each time OpenAI ships a new model.
-    if cfg.type == "credential_proxy":
-        from callosum.backends.credential_proxy import CredentialProxyBackend
-
-        if cfg.proxy_url is None or cfg.upstream_url is None:
-            raise ValueError(f"credential_proxy backend {cfg.id!r}: proxy_url and upstream_url are required")
-        return CredentialProxyBackend(
-            id=cfg.id,
-            proxy_url=cfg.proxy_url,
-            upstream_url=cfg.upstream_url,
-            advertised_models=frozenset(cfg.models),
-            custody_account=cfg.custody_account,
-            state_store=state_store,
-        )
-    else:  # codex_auth_vault
-        if cfg.vault_path is None:
-            raise ValueError(f"codex_auth_vault backend {cfg.id!r}: vault_path is required")
-        vault = AuthVault(path=cfg.vault_path)
-        return CodexAuthVaultBackend(
-            id=cfg.id,
-            vault=vault,
-            advertised_models=frozenset(cfg.models),
-            base_url=cfg.codex_base_url,
-            state_store=state_store,
-        )
-
-
-def build_backends(cfg: Config, *, env: Mapping[str, str] | None = None) -> list[Backend]:
-    # `env` is accepted for signature compatibility with callers that used to
-    # resolve API-key env vars here. Codex auth vaults are file-backed and do
-    # not read the environment.
-    del env
-    state_store = StateStore(cfg.state.dir) if cfg.state.dir is not None else None
-    return [build_backend(bc, state_store=state_store) for bc in cfg.backends]

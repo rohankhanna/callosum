@@ -1,10 +1,10 @@
 """LiteLLM gateway backend — routes to local models behind one
-OpenAI-compatible endpoint managed by `local LLM gateway`.
+OpenAI-compatible endpoint managed by `the local LLM gateway`.
 
-`local LLM gateway` runs LiteLLM as a gateway (default 127.0.0.1:4000) that
+`the local LLM gateway` runs LiteLLM as a gateway (default 127.0.0.1:4000) that
 abstracts over per-runtime servers (ollama, vllm, model-a0e0, etc.).
 Callosum doesn't need N adapters — one Backend talks to the gateway,
-and local LLM gateway handles per-runtime detail. Catalog of routable local
+and the local LLM gateway handles per-runtime detail. Catalog of routable local
 models comes from the gateway's /v1/models endpoint, refreshed
 periodically so models added/removed via litellm.yaml propagate without
 a callosum restart.

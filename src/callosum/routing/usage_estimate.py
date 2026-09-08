@@ -6,13 +6,13 @@ consume" before (or alongside) the request runs:
   * the COST estimator (this is its home contract; impl in
     routing/cost_estimator.py) predicts ChatGPT weekly-quota burn in
     weekly_used_percent points;
-  * the TIME estimator (sibling, work tracker ) predicts
+  * the TIME estimator (sibling) predicts
     wall-clock latency in milliseconds.
 
 Both depend on the SAME unknown — how many output tokens the response will
 contain — which is only known after completion. Rather than let each
 estimator guess output length its own way (and diverge), this module owns
-the single shared resolution recorded in work tracker :
+the single shared resolution recorded below:
 
   1. OutputTokenForecaster produces ONE OutputTokenForecast per
      request. Both estimators consume the *same object* — this is the
@@ -29,7 +29,7 @@ the single shared resolution recorded in work tracker :
      bandit cost term in , data-driven timeout tuning)
      wait for finalized truth.
 
-The label-quality caveats from the substrate verification ()
+The label-quality caveats from the substrate verification
 are designed around here, not rediscovered:
 
   * weekly_used_percent is integer-resolution, so a small request logs a
@@ -262,7 +262,7 @@ def _build_ratio_stats(
 
 
 class OutputTokenForecaster:
-    """The single shared output-length forecaster ().
+    """The single shared output-length forecaster.
 
     Call forecast ONCE per request and pass the resulting
     OutputTokenForecast to every estimator's EstimateInput.output.

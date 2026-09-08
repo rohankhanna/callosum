@@ -1,18 +1,18 @@
-"""Wrapper around the local LLM gateway CLI.
+"""Wrapper around the the local LLM gateway CLI.
 
-local LLM gateway manages a garage of locally-served models across multiple
+the local LLM gateway manages a garage of locally-served models across multiple
 runtimes (ollama, vllm, responses_proxy, etc.). Its CLI is the
 single source of truth for what's available and what each model can do.
 callosum shells out to it instead of hardcoding model lists.
 
 Two CLI surfaces we consume:
 
-  local-llm models local --json
+  the local LLM gateway models local --json
     → { "entries": [ { "model": {...}, "artifacts": {...} }, ... ] }
     Per-model: id, endpoint, runtime, runtime_model, api_surfaces,
     context_window, family, enabled.
 
-  local-llm capabilities --json
+  the local LLM gateway capabilities --json
     → { "rows": [ { "model_id": ..., "host_fit": {...}, ... }, ... ] }
     Per-model: deeper capability info (host fit, quantization,
     deployment profile). Phase 5 only consumes the basics (context
@@ -23,9 +23,9 @@ order of minutes/hours (only when the operator adds/removes a model —
 a restart event, not steady state), so a healthy snapshot is served
 indefinitely after the first fetch and re-fetched only on an explicit
 `force=True` (startup pass, boot resync, operator reload). A *failed*
-snapshot (local-llm unreachable) still retries on read, throttled to
+snapshot (the local LLM gateway unreachable) still retries on read, throttled to
 once per `refresh_s`, so a cold boot recovers without a restart while a
-down local-llm isn't hammered on every lookup. Restart always reloads.
+down the local LLM gateway isn't hammered on every lookup. Restart always reloads.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 #: Max age before a *failed* (unhealthy) cache retries. A healthy snapshot
 #: never auto-expires — it is re-fetched only via `force=True`. Kept as a
-#: throttle so a down local-llm isn't hammered on every read while a cold
+#: throttle so a down the local LLM gateway isn't hammered on every read while a cold
 #: boot still recovers on the next refresh tick.
 DEFAULT_REFRESH_S = 60.0
 DEFAULT_CLI_TIMEOUT_S = 15.0
@@ -52,7 +52,7 @@ DEFAULT_CLI_TIMEOUT_S = 15.0
 
 @dataclass(frozen=True, slots=True)
 class ModelEntry:
-    """One model from local LLM gateway's registry, normalized for callosum.
+    """One model from the local LLM gateway's registry, normalized for callosum.
 
     `endpoint` is the http://host:port the runtime listens on.
     `runtime_model` is the model name the runtime expects (e.g.
@@ -69,7 +69,7 @@ class ModelEntry:
     context_window: int | None
     api_surfaces: tuple[str, ...]
     enabled: bool
-    #: Ordered reasoning-effort levels the model exposes, per local LLM gateway's
+    #: Ordered reasoning-effort levels the model exposes, per the local LLM gateway's
     #: registry. Always begins with "default". model-a0d2 cells advertise
     #: ("default", "low", "medium", "high"); reason-by-default models (model-a0g2,
     #: nemotron reasoning, phi-4-reasoning-plus) advertise only ("default",).
@@ -86,8 +86,8 @@ class ModelEntry:
 
     @classmethod
     def from_cli_entry(cls, entry: dict[str, Any]) -> ModelEntry | None:
-        """Parse one entry from `local-llm models local --json`. Returns
-        None if required fields are missing (defensive — local LLM gateway
+        """Parse one entry from `the local LLM gateway models local --json`. Returns
+        None if required fields are missing (defensive — the local LLM gateway
         output shape evolves; never crash callosum)."""
         if not isinstance(entry, dict):
             return None
@@ -132,7 +132,7 @@ class ModelEntry:
 
 @dataclass(frozen=True, slots=True)
 class CapabilityRow:
-    """One row from `local-llm capabilities --json`, normalized for callosum.
+    """One row from `the local LLM gateway capabilities --json`, normalized for callosum.
 
     The hub's capability matrix is the authoritative structured source for
     local runtime facts that are not part of the simpler `models local` roster:
@@ -259,19 +259,19 @@ class _CacheState:
 
 
 class LocalModelRegistrySource:
-    """Thin client over the local LLM gateway CLI.
+    """Thin client over the the local LLM gateway CLI.
 
-    Load-once cache: the first read shells out to `local-llm models local
-    --json` (and `local-llm capabilities --json`); subsequent reads return
+    Load-once cache: the first read shells out to `the local LLM gateway models local
+    --json` (and `the local LLM gateway capabilities --json`); subsequent reads return
     the same healthy snapshot indefinitely. The garage changes on the
     order of minutes/hours — a restart event, not steady state — so no
     TTL-driven auto-refresh. `force=True` re-fetches (startup pass,
     `_catalog_boot_resync`, operator reload); a *failed* fetch retries on
     read at most once per `refresh_s` so a cold boot recovers without a
-    restart while a down local-llm isn't hammered.
+    restart while a down the local LLM gateway isn't hammered.
 
     The CLI path is configurable for tests; default uses the
-    `local-llm` executable on PATH.
+    `the local LLM gateway` executable on PATH.
     """
 
     def __init__(
@@ -282,11 +282,11 @@ class LocalModelRegistrySource:
         timeout_s: float = DEFAULT_CLI_TIMEOUT_S,
         env: dict[str, str] | None = None,
     ) -> None:
-        # Default to the user-installed CLI from local LLM gateway. Users
+        # Default to the user-installed CLI from the local LLM gateway. Users
         # can override by passing an explicit command (typically
         # `["uv", "run", "python", "-m", "local.cli"]` for
         # development installs).
-        self._cli = cli_command if cli_command is not None else ["local-llm"]
+        self._cli = cli_command if cli_command is not None else ["the local LLM gateway"]
         # Throttle for retrying a *failed* (unhealthy) cache; a healthy
         # snapshot never auto-expires.
         self._refresh_s = refresh_s
@@ -321,7 +321,7 @@ class LocalModelRegistrySource:
         of the downstream fallback backend's opaque reason="network" in
         /status. Used by __main__.py at registration time.
         """
-        cmd = cli_command if cli_command is not None else ["local-llm"]
+        cmd = cli_command if cli_command is not None else ["the local LLM gateway"]
         try:
             proc = subprocess.run(
                 cmd + ["--help"],
@@ -366,7 +366,7 @@ class LocalModelRegistrySource:
         state). `force=True` bypasses the cache and re-fetches (startup pass,
         boot resync, operator reload). A *failed* (unhealthy) snapshot still
         retries on read, throttled to once per `refresh_s`, so a cold boot
-        recovers without a restart while a down local-llm isn't hammered.
+        recovers without a restart while a down the local LLM gateway isn't hammered.
         """
         with self._lock:
             now = time.time()
@@ -495,7 +495,7 @@ class LocalModelRegistrySource:
         except FileNotFoundError as exc:
             self._last_fetch_reason = "missing"
             logger.warning(
-                "local LLM gateway: CLI not found (%s); %s unavailable this cycle",
+                "the local LLM gateway: CLI not found (%s); %s unavailable this cycle",
                 exc,
                 warn_label,
             )
@@ -503,7 +503,7 @@ class LocalModelRegistrySource:
         except subprocess.TimeoutExpired:
             self._last_fetch_reason = "timeout"
             logger.warning(
-                "local LLM gateway: CLI timed out after %ss reading %s",
+                "the local LLM gateway: CLI timed out after %ss reading %s",
                 self._timeout_s,
                 warn_label,
             )
@@ -511,7 +511,7 @@ class LocalModelRegistrySource:
         if proc.returncode != 0:
             self._last_fetch_reason = "broken"
             logger.warning(
-                "local LLM gateway: CLI exited %d while reading %s; stderr=%r",
+                "the local LLM gateway: CLI exited %d while reading %s; stderr=%r",
                 proc.returncode,
                 warn_label,
                 proc.stderr[:300] if proc.stderr else "",
@@ -521,17 +521,17 @@ class LocalModelRegistrySource:
             payload = json.loads(proc.stdout)
         except json.JSONDecodeError as exc:
             self._last_fetch_reason = "broken"
-            logger.warning("local LLM gateway: CLI emitted non-JSON %s (%s)", warn_label, exc)
+            logger.warning("the local LLM gateway: CLI emitted non-JSON %s (%s)", warn_label, exc)
             return None
         if not isinstance(payload, dict):
             self._last_fetch_reason = "broken"
-            logger.warning("local LLM gateway: CLI emitted non-object %s", warn_label)
+            logger.warning("the local LLM gateway: CLI emitted non-object %s", warn_label)
             return None
         self._last_fetch_reason = "ok"
         return payload
 
     def _merged_env(self) -> dict[str, str] | None:
-        """Some local LLM gateway installs need specific env (PATH for uv,
+        """Some the local LLM gateway installs need specific env (PATH for uv,
         SCHED_ORCH_RUNTIME_DIR for Dispatch integration). Caller can
         provide overrides; we layer them on os.environ."""
         if self._env is None:

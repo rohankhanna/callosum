@@ -1,6 +1,6 @@
-"""Tests for the local LLM gateway CLI wrapper.
+"""Tests for the the local LLM gateway CLI wrapper.
 
-Stubs the subprocess call so tests don't depend on local LLM gateway being
+Stubs the subprocess call so tests don't depend on the local LLM gateway being
 installed. Verifies parsing, caching, failure handling.
 """
 
@@ -146,7 +146,7 @@ def test_models_loads_once_then_never_expires(monkeypatch) -> None:
 
 def test_models_unhealthy_cache_retries_after_refresh_s(monkeypatch) -> None:
     """A failed (unhealthy) snapshot retries on read, but throttled to once
-    per `refresh_s` so a down local-llm isn't hammered on every lookup."""
+    per `refresh_s` so a down the local LLM gateway isn't hammered on every lookup."""
     calls = _stub_subprocess(monkeypatch, "", returncode=1)
     clock = [1_000.0]
 
@@ -188,7 +188,7 @@ def test_models_force_bypasses_cache(monkeypatch) -> None:
 
 def test_models_handles_subprocess_filenotfound(monkeypatch) -> None:
     def raise_fnf(*args, **kwargs):
-        raise FileNotFoundError("local-llm not found")
+        raise FileNotFoundError("the local LLM gateway not found")
 
     monkeypatch.setattr("callosum.local.subprocess.run", raise_fnf)
     models = LocalModelRegistrySource().models(force=True)
@@ -204,7 +204,7 @@ def test_is_available_returns_false_when_cli_missing(monkeypatch) -> None:
 
 
 def test_is_available_returns_true_on_zero_exit(monkeypatch) -> None:
-    _stub_subprocess(monkeypatch, "Usage: local-llm", returncode=0)
+    _stub_subprocess(monkeypatch, "Usage: the local LLM gateway", returncode=0)
     assert LocalModelRegistrySource.is_available() is True
 
 
@@ -220,7 +220,7 @@ def test_probe_availability_classifies_missing(monkeypatch) -> None:
 
 def test_probe_availability_classifies_timeout(monkeypatch) -> None:
     def raise_timeout(*args, **kwargs):
-        raise subprocess.TimeoutExpired(cmd=["local-llm"], timeout=5.0)
+        raise subprocess.TimeoutExpired(cmd=["the local LLM gateway"], timeout=5.0)
 
     monkeypatch.setattr("callosum.local.subprocess.run", raise_timeout)
     available, reason = LocalModelRegistrySource.probe_availability()
@@ -237,14 +237,14 @@ def test_probe_availability_classifies_broken_on_nonzero_exit(monkeypatch) -> No
 
 
 def test_probe_availability_ok_on_zero_exit(monkeypatch) -> None:
-    _stub_subprocess(monkeypatch, "Usage: local-llm", returncode=0)
+    _stub_subprocess(monkeypatch, "Usage: the local LLM gateway", returncode=0)
     available, reason = LocalModelRegistrySource.probe_availability()
     assert available is True
     assert reason == "ok"
 
 
 def test_probe_availability_uses_cli_command_override(monkeypatch) -> None:
-    calls = _stub_subprocess(monkeypatch, "Usage: local-llm", returncode=0)
+    calls = _stub_subprocess(monkeypatch, "Usage: the local LLM gateway", returncode=0)
     LocalModelRegistrySource.probe_availability(["uv", "run", "python", "-m", "local.cli"])
     assert calls
     assert calls[0] == ["uv", "run", "python", "-m", "local.cli", "--help"]
@@ -294,7 +294,7 @@ def test_model_entry_from_cli_returns_none_when_id_missing() -> None:
 
 
 def test_model_entry_from_cli_accepts_legacy_api_field() -> None:
-    """Some local LLM gateway entries have `api: "responses"` instead of
+    """Some the local LLM gateway entries have `api: "responses"` instead of
     `api_surfaces: ["responses"]`. The parser should accept either."""
     entry = {
         "model": {

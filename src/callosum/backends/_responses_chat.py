@@ -38,7 +38,7 @@ from callosum.errors import BackendError
 # Local/cloud backends (ollama / vLLM / model-a0e0 behind LiteLLM, or the
 # ollama daemon serving cloud models) don't honor every Chat-Completions
 # request field OpenAI advertises. LiteLLM in `drop_params: false` mode (the
-# default in local LLM gateway's config) errors hard instead of silently
+# default in the local LLM gateway's config) errors hard instead of silently
 # dropping — `litellm.UnsupportedParamsError` bubbles up as a 400 to the
 # caller. The ollama daemon likewise rejects unknown fields. Strip the fields
 # known to trigger this BEFORE sending. Currently includes:
@@ -403,10 +403,10 @@ async def chat_to_responses_stream(
       * `open_chat_stream(out_body, headers)` / `upstream_status_of(response)`
         — optional (default `None`) hooks that replace the hardcoded
         direct-POST open + the bare `response.status_code` read. A backend
-        that routes its upstream through a credential proxy (ollama_cloud via
-        credential proxy) passes both so the generator opens the proxy stream instead
-        of a direct upstream POST and classifies the *upstream* status from a
-        proxy header rather than the proxy's own HTTP status. `None` reproduces
+        that routes its upstream through a custom path passes both so
+        the generator opens the custom stream instead of a direct upstream
+        POST and classifies the *upstream* status from a custom reader
+        rather than the HTTP status. `None` reproduces
         the original `client.stream("POST", chat_url, json=out_body, headers=headers)` +
         `response.status_code` exactly (litellm local lane is byte-identical).
 
@@ -571,10 +571,10 @@ async def chat_to_responses_stream(
 
     try:
         if open_chat_stream is not None:
-            # Proxy-custody path (ollama_cloud via credential proxy): the backend opens
-            # the upstream through a credential proxy, so the POST target,
-            # auth, and body envelope are backend-controlled. The generator
-            # stays shape-agnostic — it still parses `data:` SSE lines from
+            # Custom-stream path: the backend opens the upstream through
+            # a custom method, so the POST target, auth, and body are
+            # backend-controlled. The generator stays shape-agnostic — it
+            # still parses `data:` SSE lines from
             # whatever the proxy forwards, regardless of media type.
             stream_ctx = open_chat_stream(out_body, headers)
         else:

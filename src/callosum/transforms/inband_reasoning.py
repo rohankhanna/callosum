@@ -12,7 +12,7 @@ This module re-routes those in-band spans out of the visible content
 channel and into Responses-API reasoning items. It exposes:
 
   * `InbandReasoningSplitter` -- a stateful splitter (ported from
-    local LLM gateway's responses-proxy, proven there) that partitions a
+    the local LLM gateway's responses proxy, proven there) that partitions a
     content stream into ("reasoning", text) / ("content", text)
     segments. It is robust to a tag straddling an SSE delta boundary
     (`…<thou` then `ght>…`) because it buffers the longest trailing
@@ -37,7 +37,7 @@ channel and into Responses-API reasoning items. It exposes:
 ARCHITECTURE NOTE (the pass-through invariant): this transform only ever
 acts where callosum itself translates a chat-completions upstream into
 Responses output. Cells served natively over /v1/responses (remote
-Codex, and local cells fronted by local LLM gateway's responses-proxy, which
+Codex, and local cells fronted by the local LLM gateway's responses proxy, which
 already strips in-band tags upstream) probe as `native`/`none`, so both
 the non-stream transform's `applies_to` and the streaming gate return
 inert for them. callosum never parses a byte-passed Responses stream to
@@ -46,9 +46,9 @@ run this.
 TEMPORARY-DEBT (ADR `docs/adr/2026-07-28-substrate-compatibility-contract.md`
 section 5, the canonical Class-B `author_temporary_adapter`):
 
-  * Upstream owner: local LLM gateway responses-proxy `_InbandReasoningSplitter`
+  * Upstream owner: the local LLM gateway's responses proxy `_InbandReasoningSplitter`
     (the original this was ported from). Per the ADR's 2026-07-31 accuracy
-    amendment, that splitter is NOT in local LLM gateway committed history —
+    amendment, that splitter is NOT in the gateway's committed history —
     it lives on the in-flight `the compatibility branch`
     branch (live via editable install, unmerged). If that branch is
     abandoned, this transform becomes the sole owner (not a port) and the
@@ -157,7 +157,7 @@ class InbandReasoningSplitter:
     streaming path, a fresh instance is fed the full content in one
     push + flush.
 
-    Ported from local LLM gateway's responses-proxy `_InbandReasoningSplitter`
+    Ported from the local LLM gateway's responses proxy `_InbandReasoningSplitter`
     where the algorithm is proven against real model-a0d5/model-a0g3 traffic.
     """
 

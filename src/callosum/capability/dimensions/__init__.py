@@ -16,11 +16,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from callosum.capability.dimensions import (
-    reasoning_channel,
-    tool_call_at_scale,
-    tool_call_shape,
-)
+from callosum.capability.dimensions import reasoning_channel, tool_call_at_scale, tool_call_shape
 from callosum.capability.profile import CapabilityProfile, DimensionFinding
 
 # Type alias for the probe callable each dimension implements.

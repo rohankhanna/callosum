@@ -50,7 +50,7 @@ _OUTPUT_HEADROOM_TOKENS = 4096
 # forever. Mirrors CALLOSUM_LOCAL_FIRST_BYTE_TIMEOUT_S (the deadline a
 # large-context prefill trips); the env-tunable value is plumbed in from
 # app.py via build_router, so this is only the test/headless default.
-# See routing/feasibility.py and work tracker .
+# See routing/feasibility.py and.
 _DEFAULT_FEASIBILITY_BUDGET_S = 180.0
 
 
@@ -149,7 +149,7 @@ class Router:
             # Feasibility: among window-fitting cells, keep only those predicted
             # to FINISH within the stall-guard budget, so cold-start coverage
             # doesn't hand a large real turn to a slow local cell that will time
-            # out and record no sample (the doom loop, ). Cold
+            # out and record no sample (the doom loop). Cold
             # cells with no measured fit stay eligible (grace) — see
             # routing/feasibility.py. Fall back to the window-fitting pool, then
             # the whole compatible pool, so feasibility never empties selection

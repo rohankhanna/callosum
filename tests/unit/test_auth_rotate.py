@@ -78,10 +78,8 @@ vault_path = "/vault/primary/auth.json"
 models = ["model-a0e8"]
 
 [[backends]]
-id = "local-credential-proxy"
-type = "credential_proxy"
-proxy_url = "http://127.0.0.1:9999"
-upstream_url = "http://127.0.0.1:11434"
+id = "local-gateway"
+type = "litellm_gateway"
 models = ["model-a0d5"]
 """,
     )
@@ -321,10 +319,8 @@ def test_config_with_no_vault_backends_returns_1(tmp_path: Path) -> None:
         tmp_path,
         """
 [[backends]]
-id = "local-credential-proxy"
-type = "credential_proxy"
-proxy_url = "http://127.0.0.1:9999"
-upstream_url = "http://127.0.0.1:11434"
+id = "local-gateway"
+type = "litellm_gateway"
 models = ["model-a0d5"]
 """,
     )

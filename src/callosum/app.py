@@ -111,7 +111,7 @@ _DISPATCH_BUDGET_EXHAUSTED_HEADER = "X-Callosum-Retry-Budget-Exhausted"
 # and read by response handlers to include in X-Proxy-Request-ID header.
 _request_id_context: ContextVar[int | None] = ContextVar("request_id", default=None)
 
-# The marker-only prompt-complexity label is retired (): the
+# The marker-only prompt-complexity label is retired: the
 # bare {{{1|2|3}}} class lacked judge/model provenance and was never an input to
 # the live router, so collection is removed. Output scrubbers below still strip
 # any stray marker a model voluntarily emits, and the legacy
@@ -142,7 +142,7 @@ _PEER_QUALITY_SIDECAR_ENQUEUE_RATE_ENV = "CALLOSUM_PEER_QUALITY_SIDECAR_ENQUEUE_
 # default ("0") means the live request is never mutated.
 _PEER_QUALITY_INBAND_ENABLED_ENV = "CALLOSUM_PEER_QUALITY_INBAND_ENABLED"
 # Recent session assistant turns to scan for un-judged subjects. No hard cap on
-# how many get judged () — judging is bounded per turn by the
+# how many get judged — judging is bounded per turn by the
 # token budget below (defer-not-skip), not by a fixed count.
 _PEER_QUALITY_MAX_SCAN = 50
 # Per-turn audit token budget: judge as many un-judged subjects as fit this many
@@ -175,7 +175,7 @@ class _PeerQualityCapture:
     opinions: list[PeerQualityOpinion] = field(default_factory=list)
     echo_count: int = 0
     malformed_count: int = 0
-    # Injection-side diagnosability (). Set by
+    # Injection-side diagnosability. Set by
     # _inject_peer_quality_prompt so the metrics row records whether the qop
     # instruction was actually sent, how many cross-cell prose subjects were
     # tagged, and — when not injected — why injection no-opped.
@@ -183,7 +183,7 @@ class _PeerQualityCapture:
     subject_count: int = 0
     skip_reason: str | None = None
     # Exact token cost of the injected audit (instruction + provenance tags),
-    # computed with the model's real tokenizer (). Subtracted
+    # computed with the model's real tokenizer. Subtracted
     # from the Codex-facing usage so the audit never moves the context meter.
     injected_tokens: int = 0
     _seen_markers: set[str] = field(default_factory=set)
@@ -406,7 +406,7 @@ def _inject_peer_quality_prompt(
     version should use provider tokenizers and explicit output-token reservation
     instead of the rough chars/3 estimate.
 
-    Eligibility is OUTPUT-based, not input-based (): we do NOT
+    Eligibility is OUTPUT-based, not input-based: we do NOT
     skip requests that merely *carry* tool definitions. Real Codex traffic
     attaches tools to every turn — including the ~45% that answer in prose — so
     an input-side tools gate skipped 100% of traffic and captured nothing. The
@@ -418,7 +418,7 @@ def _inject_peer_quality_prompt(
     Control State: Callosum deliberately promotes them into the
     model-visible envelope, then veils them from Codex/UI on the way back.
 
-    Judging is DEDUPED, UNCAPPED, and DEFERRED (): only
+    Judging is DEDUPED, UNCAPPED, and DEFERRED: only
     present subjects this judge cell hasn't already rated; judge as many as fit
     a per-turn token budget (and the remaining context room); leave the rest
     un-judged so the next turn picks them up. `capture.injected_tokens` records
@@ -444,7 +444,7 @@ def _inject_peer_quality_prompt(
     subjects = {text: subj for text, subj in subjects.items() if text in present_texts}
     if not subjects:
         # Every cross-cell prose subject is already judged or not in this turn's
-        # history ( / ).
+        # history.
         capture.skip_reason = "no_eligible_subject"
         return body
     model = current_cell.model
@@ -547,7 +547,7 @@ def _peer_quality_subjects(
 
     Excludes self (same cell) and any subject this judge cell already rated
     (exclude_request_ids). No count cap — the per-turn token budget bounds
-    how many actually get tagged ().
+    how many actually get tagged.
     """
     subjects: dict[str, _PeerQualitySubject] = {}
     current_effort = current_cell.reasoning_effort or None
@@ -637,7 +637,7 @@ def _example_qop_score(nonce: str, request_id: int) -> str:
     A hardcoded score=+1 example was a systematic anchor that biased judges
     toward +1 (: embedded labels were ~90% +1, unlearnable —
     the KNN lost to the majority-class baseline). The honor-code fix
-    overcorrected to a 0-dominated neutral class (). Rotation
+    overcorrected to a 0-dominated neutral class. Rotation
     over the graduated -3..+3 scale avoids any systematic anchor AND the wider
     scale lets judges express graduated confidence. Rotation is deterministic
     per (nonce, subject) so the budgeting estimate and the actually-injected
@@ -655,7 +655,7 @@ def _peer_quality_marker_line(nonce: str, subject: _PeerQualitySubject) -> str:
 
 
 def _peer_quality_instruction(nonce: str, subjects: dict[str, _PeerQualitySubject]) -> str:
-    # Wording + structure validated by live research (): on
+    # Wording + structure validated by live research: on
     # PROSE turns models comply regardless, but on TOOL turns (the bulk of real
     # traffic) they emit nothing unless the instruction (a) explicitly demands
     # the marker as TEXT alongside any tool call, (b) is placed as a recent
@@ -667,8 +667,8 @@ def _peer_quality_instruction(nonce: str, subjects: dict[str, _PeerQualitySubjec
     # PRODUCE on a -3..+3 scale (+3 much better .. +1 slightly better / 0 exactly
     # even / -1 slightly worse .. -3 much worse). An absolute "is it good?"
     # 3-point rating was lenient — ~90% +1, near single-class, so the KNN lost
-    # to the majority baseline (); a 3-point honor-code fix then
-    # overcorrected to a 0-dominated neutral class (). The
+    # to the majority baseline; a 3-point honor-code fix then
+    # overcorrected to a 0-dominated neutral class. The
     # graduated scale + a high-bar 0 (most real comparisons have a net difference
     # — commit to a direction) gives judges room to express graduated confidence
     # so the cross-judge average is a stable, confidence-weighted net verdict.
@@ -708,7 +708,7 @@ def _peer_quality_instruction(nonce: str, subjects: dict[str, _PeerQualitySubjec
 def _append_peer_quality_instruction(body: dict[str, Any], instruction: str) -> dict[str, Any]:
     # Place the audit as the LAST (most recent) message, not buried in the
     # system prompt — research showed buried instructions are ignored on tool
-    # turns (). A `developer` message is the right channel for
+    # turns. A `developer` message is the right channel for
     # a meta-instruction.
     if "input" in body and isinstance(body["input"], list):
         item = {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": instruction}]}
@@ -746,12 +746,12 @@ _TRANSFORM_REGISTRY: Any = None
 # Cost estimator holder. Set by create_app to a CostUsageEstimator (or None
 # when usage logging is off). Consulted by `_log_attempt` to finalize the
 # realized weekly-quota delta post-request with the integer-% verifiable
-# flag (). Same module-level pattern as the registries
+# flag. Same module-level pattern as the registries
 # above; tests can monkey-patch it.
 _COST_ESTIMATOR: Any = None
 _COMPOSITE_COST_ESTIMATOR: Any = None
 
-# Shared output-token forecaster holder (). Set by
+# Shared output-token forecaster holder. Set by
 # create_app alongside the cost estimator; published on app.state for
 # in-process consumers and reused by the time estimator.
 _OUTPUT_FORECASTER: Any = None
@@ -1070,14 +1070,9 @@ def create_app(
         # populated fields (fewer "Unknown" defaults).
         merged_metadata: dict[str, ModelMetadata] = {}
         for b in backends_list:
-            # `credential_proxy` now also surfaces model_metadata (via
-            # refresh_advertised_models → /codex/models through credential proxy).
-            # Excluding it from the cell-grid builder produced an empty
-            # grid when both production backends were credential_proxy —
-            # router rejected every request with "no cell can serve."
             if b.kind not in (
                 "codex_auth_vault",
-                "credential_proxy",
+                "codex_gateway",
                 "litellm_gateway",
                 "ollama_cloud",
                 "openrouter",
@@ -1121,12 +1116,10 @@ def create_app(
         for b in backends_list:
             # Fallback pool collects advertised_models from every backend
             # whose model_metadata wasn't populated above (cold start, or
-            # discovery RPC failed). Both ChatGPT-Codex paths participate:
-            # codex_auth_vault (direct OAuth) and credential_proxy
-            # (credential proxy-mediated). litellm_gateway is excluded here
+            # discovery RPC failed). litellm_gateway is excluded here
             # because the metadata path above already handles its local
             # models.
-            if b.kind not in ("codex_auth_vault", "credential_proxy"):
+            if b.kind not in ("codex_auth_vault", "codex_gateway"):
                 continue
             pool.update(b.advertised_models)
         models = live_completion_models(frozenset(pool))
@@ -1272,7 +1265,7 @@ def create_app(
             _COST_ESTIMATOR = CostUsageEstimator(cost_model_provider.weekly)
             _COMPOSITE_COST_ESTIMATOR = CompositeCostUsageEstimator(cost_model_provider)
 
-        # Forward time estimator (): the sibling of the cost
+        # Forward time estimator: the sibling of the cost
         # estimator. Reuses the SAME output_forecaster (anti-divergence) and
         # the same request-log substrate, fitting t ≈ a·input + b·output + c
         # against latency_ms. Local cells are NOT zeroed — they are often the
@@ -1317,7 +1310,7 @@ def create_app(
     # Callosum catalog (the same ids `/v1/models` serves) into a codex
     # `model_catalog_json` file so codex's in-session `/model` picker lists and
     # switches between Callosum lanes from a single config. The unbuilt half of
-    # work tracker . The `model_ids_fn` lambda defers to the
+    # . The `model_ids_fn` lambda defers to the
     # `_catalog_model_ids` closure defined below (resolved at call time, i.e.
     # after the app is fully constructed). None when disabled.
     codex_catalog_reconciler: Any = None
@@ -1341,7 +1334,7 @@ def create_app(
     #
     # The weight-identity provider here is a composite — code depends
     # on the abstraction (WeightIdentityProvider protocol), not on any
-    # one source. The default composite tries the local-llm CLI first,
+    # one source. The default composite tries the the local LLM gateway CLI first,
     # falls back to naming-pattern heuristics, then a null backstop.
     # Adding a new concrete source is one new class + one item in
     # `build_default_provider()`; no caller in app.py changes.
@@ -2590,7 +2583,7 @@ async def _dispatch_internal(
             # A concrete client pin that no backend currently serves: the pin
             # filter (above) emptied the pool. Surface that directly — the lane
             # may be operator-declared in the `/model` picker but not yet live
-            # (requirement of the client-driven routing catalog, ).
+            # (requirement of the client-driven routing catalog).
             # Without this branch the cause would be misreported as a routing-mode
             # exclusion below.
             if _selector is not None and _selector.pinned_model is not None:
@@ -2609,7 +2602,7 @@ async def _dispatch_internal(
             # model catalog yet, so the cell filter emptied cells_now.
             # This must NOT be reported as a routing-mode exclusion — the
             # mode kept the backends; only the catalog is unpopulated
-            # (). Without this branch the cold-boot
+            # . Without this branch the cold-boot
             # state falls through to "current routing mode excludes all
             # currently-routable backends" below, which is misleading:
             # the backends were NOT excluded by mode, they simply cannot
@@ -2649,7 +2642,7 @@ async def _dispatch_internal(
                 detail=f"no cell can serve this request: {exc}",
             ) from exc
         chosen = decision.cell
-        # Per-cell minimum-coverage quota (): the router's
+        # Per-cell minimum-coverage quota: the router's
         # cost/quality-optimal pick stands by default; when any compatible cell
         # is below its floor, steer this turn to it so every cell gets at least
         # min_coverage_floor_pct of traffic. Lane scope is implicit:
@@ -2662,7 +2655,7 @@ async def _dispatch_internal(
                 list(decision.candidates),
                 window_seconds=auto_cfg.min_coverage_window_seconds,
             )
-            # Feasibility-aware coverage (): only force
+            # Feasibility-aware coverage: only force
             # onto cells predicted to FINISH within the stall-guard budget, so
             # a large real turn is not handed to a slow local cell that will
             # time out, record no sample, and stay under floor forever (the
@@ -2686,7 +2679,7 @@ async def _dispatch_internal(
                 # pick stands rather than burning a forced turn on a timeout.
                 # Cold cells are always eligible (grace), so an empty pool here
                 # means every candidate is trusted-measured-and-over-budget.
-            # Post-timeout cooldown (): a cell that just timed
+            # Post-timeout cooldown: a cell that just timed
             # out on a forced turn is skipped this cycle so the quota does not
             # re-target it. Re-arms only on a real completed sample.
             _cooldown: frozenset[Cell] = frozenset()
@@ -3275,7 +3268,7 @@ async def _dispatch_nonstream(
 
         # Defensively strip any stray complexity marker a model voluntarily
         # emits so it never leaks to the client. The marker-only class itself is
-        # retired () and no longer recorded.
+        # retired and no longer recorded.
         _, result = _extract_and_strip_complexity(result)
 
         _log_attempt(
@@ -4194,7 +4187,7 @@ async def _strip_peer_quality_markers_from_stream(
                 mutated = _scrub_peer_quality_from_event(data, capture=capture, tails=tails)
                 # Subtract the audit's token cost from the usage the client sees,
                 # so the hidden injection never moves Codex's context meter
-                # (; Codex reads usage.input_tokens).
+                # .
                 mutated = _subtract_audit_tokens_from_event(data, capture=capture) or mutated
                 if mutated:
                     new_lines.append("data: " + json.dumps(data))
@@ -4584,7 +4577,7 @@ def _log_attempt(
         )
     # Store request_id in context for response handlers to access
     _request_id_context.set(request_id)
-    # Finalize the forward cost estimate (): record the
+    # Finalize the forward cost estimate: record the
     # realized weekly-quota delta with the integer-% verifiable flag. A 0
     # delta is unverifiable (NOT a 0-cost label) and only ever feeds
     # aggregate calibration. Best-effort; the row is already persisted, so a
@@ -4617,7 +4610,7 @@ def _log_attempt(
             )
         except Exception:
             logger.debug("cost.finalize failed for request_id=%s", request_id, exc_info=True)
-    # Finalize the forward time estimate (): record the
+    # Finalize the forward time estimate: record the
     # realized wall-clock latency. Latency is always observable, so this is
     # always verifiable (no integer-resolution / unverifiable case like cost)
     # and has no local-zero branch — local cells carry real, often large
@@ -4666,7 +4659,7 @@ def _log_attempt(
         backend_kind = getattr(backend, "kind", "")
         if backend_kind == "litellm_gateway":
             resp_layer = "callosum-local"
-        elif backend_kind in ("codex_auth_vault", "ollama_cloud", "openrouter"):
+        elif backend_kind in ("codex_auth_vault", "codex_gateway", "ollama_cloud", "openrouter"):
             resp_layer = "upstream-remote"
         else:
             resp_layer = "unknown"
@@ -4826,7 +4819,7 @@ def _path_requires_api_key(path: str) -> bool:
 _DIAGNOSE_PROMPT = "say only: ok"
 _DIAGNOSE_INSTRUCTIONS = "You are a smoke-test probe. Reply minimally."
 
-_CODEX_BACKEND_KINDS = frozenset({"codex_auth_vault", "credential_proxy"})
+_CODEX_BACKEND_KINDS = frozenset({"codex_auth_vault", "codex_gateway"})
 
 
 async def _diagnose_backend(backend: Backend, *, force: bool = False) -> dict[str, Any]:
@@ -5279,7 +5272,7 @@ async def _catalog_boot_resync(
     Two phases: a fast phase (attempts x interval_s) for the common
     dependency-lag case, then a slow tail (tail_attempts x
     tail_interval_s) that keeps retrying past the fast budget. The tail
-    closes the give-up -> first-tick hole (): without it, a
+    closes the give-up -> first-tick hole: without it, a
     dependency that takes longer than the fast budget to come up leaves the
     catalog empty until the hourly smoke tester's first tick — which sleeps a
     full hour before firing. The tail self-heals a slow dependency start in

@@ -1,13 +1,13 @@
 """One-shot full-context memory-fit probe for a local model.
 
-Loads a model via the local LLM gateway CLI just long enough to read vLLM's
+Loads a model via the the local LLM gateway CLI just long enough to read vLLM's
 startup KV-cache allocation, decides whether the model can serve its full
 advertised context window on this host, persists the result, and stops the
 model. Each model is probed at most once per artifact (content hash), so
 re-probing happens only after a re-pull or version change.
 
 vLLM logs the answer we need at startup, into the serve log file that
-local-llm serve --model <id> --json reports back to us:
+the local LLM gateway serve --model <id> --json reports back to us:
 
     core.py:97] ... max_seq_len=<N> ...                      # resolved context
     kv_cache_utils.py:1307] GPU KV cache size: <K> tokens    # achievable KV
@@ -21,7 +21,7 @@ Host safety follows the unified-memory overlapping-loads anti-pattern
 (learnings ):
 
 - an exclusive GPU lock is taken for the load
-  (LOCAL_LLM_EXCLUSIVE_GPU_LOCK=1), reusing local LLM gateway's
+  (LOCAL_LLM_EXCLUSIVE_GPU_LOCK=1), reusing the local LLM gateway's
   locked_exec path so the probe never overlaps another heavyweight load
   that honors the same lock;
 - a preflight admission check blocks the load when host headroom is too tight;
@@ -30,7 +30,7 @@ Host safety follows the unified-memory overlapping-loads anti-pattern
 MVP scope: runtime == "vllm" models only. The custom gpt_oss runtime,
 model-a0e0, and ollama entries are admitted via the catalog's existing
 training-precision check + the hub's local_fit_limit_tokens prior; probing
-them is a deferred refinement (see work tracker).
+them is a deferred refinement (see ).
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ from callosum.usage_log import ModelFitProbe, UsageLog
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CLI_COMMAND: list[str] = ["local-llm"]
+DEFAULT_CLI_COMMAND: list[str] = ["the local LLM gateway"]
 DEFAULT_SERVE_TIMEOUT_S = 600.0  # cold weight load on unified memory can be slow
 DEFAULT_STOP_TIMEOUT_S = 90.0
 DEFAULT_MODELS_TIMEOUT_S = 30.0
@@ -102,13 +102,7 @@ def _run_cli(
     if env is not None:
         run_env = dict(os.environ)
         run_env.update(env)
-    return subprocess.run(
-        cmd,
-        capture_output=capture,
-        text=True,
-        timeout=timeout_s,
-        env=run_env,
-    )
+    return subprocess.run(cmd, capture_output=capture, text=True, timeout=timeout_s, env=run_env)
 
 
 def _read_memavailable_bytes() -> int | None:
@@ -126,7 +120,7 @@ def _read_memavailable_bytes() -> int | None:
 
 
 def _artifact_dir_for(cli_command: list[str], model_id: str) -> str | None:
-    """Resolve a model's on-disk artifact dir from local-llm models local --json.
+    """Resolve a model's on-disk artifact dir from the local LLM gateway models local --json.
 
     The hub's per-entry artifacts.detail carries a target=<path> segment
     pointing at the model's download directory. This is fragile by design of the
@@ -134,11 +128,7 @@ def _artifact_dir_for(cli_command: list[str], model_id: str) -> str | None:
     (external handoff). Returns None if it can't be resolved.
     """
     try:
-        proc = _run_cli(
-            cli_command,
-            ["models", "local", "--json"],
-            timeout_s=DEFAULT_MODELS_TIMEOUT_S,
-        )
+        proc = _run_cli(cli_command, ["models", "local", "--json"], timeout_s=DEFAULT_MODELS_TIMEOUT_S)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return None
     if proc.returncode != 0:
@@ -295,13 +285,7 @@ def _write_backoff_state(path: Path, state: dict[str, dict[str, Any]]) -> None:
 
 
 def _record_backoff_failure(
-    path: Path | None,
-    model_id: str,
-    content_hash: str,
-    lane_hash: str,
-    reason: str,
-    ts: float,
-    confirmations: int,
+    path: Path | None, model_id: str, content_hash: str, lane_hash: str, reason: str, ts: float, confirmations: int
 ) -> None:
     """Record a probe failure for the (model, weights, lane) combo.
 
@@ -348,14 +332,14 @@ _STACK_VERSIONS_CACHE: dict[tuple[str, ...], str] = {}
 
 
 def _stack_versions(cli_command: list[str]) -> str:
-    """Best-effort 'vllm <v> transformers <v>' from the local-llm serving venv.
+    """Best-effort 'vllm <v> transformers <v>' from the the local LLM gateway serving venv.
 
-    The serving stack sits between the model weights and the local-llm CLI,
-    so its versions are part of the lane identity. The local-llm CLI's own
+    The serving stack sits between the model weights and the the local LLM gateway CLI,
+    so its versions are part of the lane identity. The the local LLM gateway CLI's own
     shebang venv (pipx) does not contain vllm; the model is actually served from
     a separate venv, resolved in priority order: the
     CALLOSUM_LOCAL_LLM_VENV_PYTHON override, then the repo venv at
-    ~/Desktop/local LLM gateway/.venv/bin/python, then the CLI's shebang python.
+    ~/Desktop/the local LLM gateway/.venv/bin/python, then the CLI's shebang python.
     Returns "" if none can be imported (e.g. in CI or unit tests) -- the lane
     hash then falls back to config files only. Cached per cli_command.
     """
@@ -366,7 +350,7 @@ def _stack_versions(cli_command: list[str]) -> str:
     env_py = os.environ.get("CALLOSUM_LOCAL_LLM_VENV_PYTHON")
     if env_py:
         candidates.append(env_py)
-    candidates.append(os.path.expanduser("~/Desktop/local LLM gateway/.venv/bin/python"))
+    candidates.append(os.path.expanduser("~/Desktop/the local LLM gateway/.venv/bin/python"))
     try:
         with open(cli_command[0], "rb") as fh:
             m = re.match(rb"#!\s*(\S+)", fh.readline())
@@ -394,18 +378,17 @@ def _stack_versions(cli_command: list[str]) -> str:
 
 
 def _lane_hash(model_id: str, cli_command: list[str]) -> str:
-    """Fingerprint of the lane: the local LLM gateway serving definition for this
+    """Fingerprint of the lane: the the local LLM gateway serving definition for this
     model plus the vLLM/transformers stack version.
 
-    "Lane" = everything between the model weights and the local-llm CLI:
+    "Lane" = everything between the model weights and the the local LLM gateway CLI:
     the registry serving config (launch/manifest/sources/requirements) and the
     serving stack (vllm/transformers). Editing the serving config OR upgrading
     the stack changes this hash, which resets the failure counter and re-probes
     the combo -- so a vLLM upgrade that might fix a broken lane is detected.
     """
     base = os.environ.get(
-        "CALLOSUM_LOCAL_LLM_MODELS_DIR",
-        os.path.expanduser("~/.local/share/local-llm/live/models"),
+        "CALLOSUM_LOCAL_LLM_MODELS_DIR", os.path.expanduser("~/.local/share/the local LLM gateway/live/models")
     )
     d = Path(base) / model_id
     parts: list[str] = []
@@ -511,13 +494,7 @@ def execute_model_probe(
     if not admitted:
         logger.info("model_probe: %s deferred by preflight (%s)", model.id, reason)
         _record_backoff_failure(
-            bo_path,
-            model.id,
-            content_hash or "",
-            lane_hash,
-            f"preflight: {reason}",
-            ts,
-            confirmations,
+            bo_path, model.id, content_hash or "", lane_hash, f"preflight: {reason}", ts, confirmations
         )
         return None
 
@@ -542,13 +519,7 @@ def execute_model_probe(
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
         logger.warning("model_probe: serve invocation failed for %s (%s)", model.id, exc)
         _record_backoff_failure(
-            bo_path,
-            model.id,
-            content_hash or "",
-            lane_hash,
-            f"serve invocation failed: {exc}",
-            ts,
-            confirmations,
+            bo_path, model.id, content_hash or "", lane_hash, f"serve invocation failed: {exc}", ts, confirmations
         )
         return None
     if proc.returncode != 0:
@@ -568,13 +539,7 @@ def execute_model_probe(
     except json.JSONDecodeError:
         logger.warning("model_probe: serve emitted non-JSON for %s", model.id)
         _record_backoff_failure(
-            bo_path,
-            model.id,
-            content_hash or "",
-            lane_hash,
-            "serve emitted non-JSON",
-            ts,
-            confirmations,
+            bo_path, model.id, content_hash or "", lane_hash, "serve emitted non-JSON", ts, confirmations
         )
         return None
 
@@ -585,13 +550,7 @@ def execute_model_probe(
             tail = serve_payload.get("log_tail") or proc.stderr
             logger.warning("model_probe: %s did not reach readiness: %s", model.id, str(tail)[:300])
             _record_backoff_failure(
-                bo_path,
-                model.id,
-                content_hash or "",
-                lane_hash,
-                f"not ready: {str(tail)[:200]}",
-                ts,
-                confirmations,
+                bo_path, model.id, content_hash or "", lane_hash, f"not ready: {str(tail)[:200]}", ts, confirmations
             )
             return None
         with open(log_file, encoding="utf-8", errors="replace") as fh:
@@ -599,13 +558,7 @@ def execute_model_probe(
     except OSError as exc:
         logger.warning("model_probe: could not read log_file %s: %s", log_file, exc)
         _record_backoff_failure(
-            bo_path,
-            model.id,
-            content_hash or "",
-            lane_hash,
-            f"log read failed: {exc}",
-            ts,
-            confirmations,
+            bo_path, model.id, content_hash or "", lane_hash, f"log read failed: {exc}", ts, confirmations
         )
         return None
     finally:
