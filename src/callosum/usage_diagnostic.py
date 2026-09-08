@@ -991,8 +991,7 @@ def render_usage_live_text(
 
 
 def _format_series_header() -> str:
-    return (
-        f"{'bucket':<20} {'turns':>7} {'prompt':>10} {'compl':>9} {'total':>10}")
+    return f"{'bucket':<20} {'turns':>7} {'prompt':>10} {'compl':>9} {'total':>10}"
 
 
 def _format_series_row(bucket: dict[str, Any]) -> str:
@@ -1007,10 +1006,7 @@ def _format_series_row(bucket: dict[str, Any]) -> str:
 
 def _format_recent_header(width: int) -> str:
     mode_w, served_w = _recent_string_widths(width)
-    return (
-        f"{'id':>6} {'ts':<16} {'mode':<{mode_w}} {'served':<{served_w}} "
-        f"{'prompt':>8} {'compl':>7} {'total':>8}"
-    )
+    return f"{'id':>6} {'ts':<16} {'mode':<{mode_w}} {'served':<{served_w}} {'prompt':>8} {'compl':>7} {'total':>8}"
 
 
 def _format_recent_row(turn: dict[str, Any], width: int) -> str:
