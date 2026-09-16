@@ -58,9 +58,8 @@ router and the coverage quota see the candidate pool:
   (`immune`) backend kinds.
 
 This is intentionally a **temporary operating cap, not a learned quality
-claim**. work tracker tracks the later removal once the learned router has
-enough reliable cost/quality evidence to spend high reasoning effort
-deliberately.
+claim**. Remove it once the learned router has enough reliable cost and
+quality evidence to spend high reasoning effort deliberately.
 
 ## Consequences
 

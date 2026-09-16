@@ -1,6 +1,6 @@
 """Tests for the routing-events SSE broadcaster.
 
-Covers payload construction (the contract the snorkel sidecar consumes),
+Covers payload construction (the contract external sidecars consume),
 graceful degradation when components are missing, and slow-subscriber
 backpressure (events drop rather than block the request thread).
 """
@@ -97,8 +97,8 @@ def _caps_of_gemma(cell: Cell) -> CellCapabilities:
 
 def test_builds_payload_with_all_fields(tmp_path: Path) -> None:
     """The payload contract — every field documented in the module
-    docstring must appear, with correct values. snorkel and any other
-    consumer keys off this shape."""
+    docstring must appear, with correct values. Any consumer keys off
+    this shape."""
     db = _make_db(tmp_path)
     bcast = _RoutingEventBroadcaster(
         usage_log=_FakeUsageLog(db),
@@ -125,8 +125,8 @@ def test_filter_forwards_only_matching_session(tmp_path: Path) -> None:
     """When a subscriber passes a session_id filter, only events whose
     payload session_id matches are forwarded. Other events go to
     unfiltered subscribers but not this one. This is what lets
-    per-instance sidecars (snorkel) avoid showing other instances'
-    routing decisions."""
+    per-instance sidecars avoid showing other client processes' routing
+    decisions."""
     db = _make_db(tmp_path, session_id="sess-A")
     bcast = _RoutingEventBroadcaster(
         usage_log=_FakeUsageLog(db),
@@ -216,8 +216,8 @@ def test_missing_request_returns_none(tmp_path: Path) -> None:
 
 def test_missing_capabilities_resolver_yields_null_window(tmp_path: Path) -> None:
     """When capabilities_of is None (no backends loaded), the payload
-    still emits — just without a real context window. snorkel handles
-    null gracefully in its renderer."""
+    still emits — just without a real context window. Consumers should
+    handle a null value gracefully."""
     db = _make_db(tmp_path)
     bcast = _RoutingEventBroadcaster(
         usage_log=_FakeUsageLog(db),

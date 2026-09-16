@@ -1,8 +1,8 @@
 """Extension point: labeled-row loader for predictor reload.
 
-The trained loader (reads quality-scored rows from the request-log SQLite) is
-private.  This stub returns an empty stream so the default predictor stays at
-its cold-start uniform prior.
+The default loader returns no rows, so the default predictor stays at its
+cold-start uniform prior.  Replace this loader to read quality-scored rows
+from the request-log SQLite database or another data source.
 
 To implement a custom loader:
 
@@ -27,6 +27,6 @@ def labeled_rows_from_request_log(
     *,
     limit: int | None = None,
 ) -> Iterable[LabeledRow]:
-    """Stub: yields no rows.  Implement to load labeled data."""
+    """Yield no rows. Replace this loader to provide labeled data."""
     return
     yield  # pragma: no cover  — make it a generator

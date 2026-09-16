@@ -354,7 +354,7 @@ def test_segment_summary_is_frozen() -> None:
 
 
 # --- Peer-quality (in-band) stream segmentation + first-divergence ----------
-# These cover the retired in-band path's payload shape (work tracker ):
+# These cover the retired in-band path's payload shape:
 # provenance tags `<model|effort|reqid>...</model|effort|reqid>` around prior
 # assistant text + a trailing developer audit instruction carrying `<<qop ...>>`
 # markers. Non-peer-quality turns must keep the original taxonomy unchanged.

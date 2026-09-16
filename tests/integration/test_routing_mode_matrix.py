@@ -268,7 +268,7 @@ def test_auto_mode_all_healthy_routes_normally(tmp_path: Path) -> None:
 # Pins the BackendKind partition: an ollama_cloud backend must land in the
 # REMOTE lane (admitted by remote-only, excluded by local-only) so cloud
 # models — which burn real Ollama Cloud quota — never get mis-routed as FREE
-# local cells. See backends/ollama_cloud.py + work tracker .
+# local cells. See backends/ollama_cloud.py.
 
 
 def test_ollama_cloud_excluded_from_local_only(tmp_path: Path) -> None:

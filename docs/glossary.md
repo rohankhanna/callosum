@@ -53,8 +53,7 @@ A single turn's output may contain any combination of the three.
 > Why this matters: peer-quality opinions live in the **message-text** channel
 > and judge prior **message text**. Codex sessions are overwhelmingly **tool
 > turns**, so cross-cell **text-turn** pairs — the only thing the opinion matrix
-> can feed on — are doubly scarce. See `docs/architecture/ce_loop.md` and
-> work tracker .
+> can feed on — are doubly scarce. See `docs/architecture/ce_loop.md`.
 
 ## Routing vocabulary (the terms these got tangled with)
 

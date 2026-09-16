@@ -230,7 +230,7 @@ def _tier2_config_from_args(args: argparse.Namespace) -> Tier2Config:
 
 
 def cmd_gate(args: argparse.Namespace) -> int:
-    """Run the tiered merge/promotion gate (work tracker ).
+    """Run the tiered merge and promotion gate.
 
     Tier 1 (deterministic CPU code tests + ruff + mypy --strict) is the only
     merge-blocking tier. Tier 2 (GPU rate matrix) and Tier 3 (shadow canary)
@@ -994,7 +994,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the tiered merge/promotion gate: Tier-1 CPU tests (blocking) "
         "+ Tier-2 GPU rate matrix (resumable, external) + Tier-3 shadow canary.",
         description=(
-            "Run the tiered merge/promotion gate (work tracker ). "
+            "Run the tiered merge and promotion gate. "
             "Tier 1 (pytest inaugural bug cases + unit suite + ruff + mypy --strict) "
             "is the only merge-blocking tier. Tier 2 consumes the GPU rate matrix "
             "published by the sibling benchmark suite repo (read-only, resumable). "

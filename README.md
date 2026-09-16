@@ -24,7 +24,7 @@ knowing anything else is going on.
 
 - [How it works (architecture)](#how-it-works-architecture)
 - [Quick start (operator)](#quick-start-operator)
-- [Bootstrap your daily-driver API key](#bootstrap-your-daily-driver-api-key)
+- [Create an API key](#create-an-api-key)
 - [Pointing clients at the proxy](#pointing-clients-at-the-proxy)
   - [Universal pattern (env-var override)](#universal-pattern-env-var-override)
   - [Codex CLI](#codex-cli)
@@ -133,42 +133,13 @@ curl -s http://127.0.0.1:8765/health
 # {"status":"ok","version":"0.1.0"}
 ```
 
-## Bootstrap your daily-driver API key
+## Create an API key
 
-If you set `[auth]` in your config (recommended), every `/v1/*` request needs a bearer token. Mint one for yourself once, store it in your shell rc, and forget about it.
+If you set `[auth]` in your configuration, every `/v1/*` request needs a bearer token. Create one through the web interface and store it in a password manager or the environment where your clients run.
 
-**The easy way: web UI.** Open [`http://127.0.0.1:8765/ui/`](http://127.0.0.1:8765/ui/) in a browser. Click "Create account", pick a username and password, then "Mint key" with a label like `daily-driver`. The plaintext key is shown ONCE — copy it immediately into your shell rc:
+Open [`http://127.0.0.1:8765/ui/`](http://127.0.0.1:8765/ui/) in a browser. Create an account, then mint a key with a label such as `daily-driver`. The plaintext key is shown once. Store it immediately; the proxy keeps only a SHA-256 hash.
 
-```
-echo 'export CALLOSUM_TOKEN=<the-plaintext-from-the-ui>' >> ~/.bashrc
-source ~/.bashrc
-```
-
-**The curl way (same flow, scriptable):**
-
-```
-PROXY=http://127.0.0.1:8765
-
-# 1. Register (once per user).
-curl -s -X POST $PROXY/auth/register \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"alice","password":"<a-strong-password>"}'
-
-# 2. Log in to get a 30-min session token.
-SESSION=$(curl -s -X POST $PROXY/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"alice","password":"<a-strong-password>"}' \
-  | jq -r .session_token)
-
-# 3. Mint an API key. PLAINTEXT IS SHOWN ONLY ONCE — copy it now.
-curl -s -X POST $PROXY/auth/keys \
-  -H "Authorization: Bearer $SESSION" \
-  -H 'Content-Type: application/json' \
-  -d '{"label":"daily-driver"}' \
-  | jq -r .api_key
-```
-
-Either way you end up with a plaintext key that goes into `CALLOSUM_TOKEN`. The proxy stores only `sha256(key)`, never the plaintext, so this is your only chance to see it.
+To use the key, set `CALLOSUM_TOKEN` in the environment for the client that will call the proxy. The proxy never stores the plaintext after the initial response.
 
 If you don't want auth at all (single-operator localhost, no other people, no usage attribution): drop the `[auth]` block from your config. `/v1/*` is then open and the `/ui/` route returns 404.
 
@@ -204,7 +175,7 @@ The OpenAI Codex CLI (`codex`, `codex exec`, `codex resume`) uses a typed provid
 
 Edit `~/.codex/config.toml` so global defaults stay at the top, **before any `[section]` header**.
 
-> **TOML detail that bit me once.** Every `key = value` line after a `[section]` header belongs to that section until the next header. Putting `model_provider = "callosum"` *after* a `[profiles.x]` block silently makes it part of that profile, not a global default. You'll then wonder why `-p via_proxy` is still required.
+> **TOML detail.** Every `key = value` line after a `[section]` header belongs to that section until the next header. Put `model_provider = "callosum"` above any `[profiles.x]` block if it is intended as a global default.
 
 ```toml
 # Global defaults — MUST be above any [section] header.
@@ -230,25 +201,7 @@ codex exec "..."       # routes through the proxy
 codex resume           # picker shows sessions tagged "callosum"
 ```
 
-**One-time migration of pre-existing sessions** so they appear under the new default. The `resume` picker filters by the saved `model_provider` field in each rollout. Migrate (with hardlink backup so it's safe and cheap):
-
-```
-# 1. Migrate the JSONL rollouts (the source of truth for replay).
-cp -al ~/.codex/sessions ~/.codex/sessions.before-migration-$(date +%Y%m%d-%H%M%S)
-find ~/.codex/sessions -name '*.jsonl' \
-  -exec sed -i -E 's/"model_provider":\s*"openai"/"model_provider":"callosum"/g' {} +
-
-# 2. ALSO migrate the index DB the picker reads from. Without this, the
-#    picker's WHERE model_provider = 'callosum' filter returns 0 rows
-#    even though the JSONLs are correctly tagged. Discovered the hard way.
-cp ~/.codex/state_5.sqlite ~/.codex/state_5.sqlite.before-migration-$(date +%Y%m%d-%H%M%S)
-sqlite3 ~/.codex/state_5.sqlite \
-  "UPDATE threads SET model_provider = 'callosum' WHERE model_provider = 'openai'"
-```
-
-The hardlink backup of `sessions/` costs near-zero disk space — `sed -i` rename-on-top breaks the hardlink for each modified file, leaving the backup pointing at the original inode. The index backup is a regular `cp` because SQLite is a single file.
-
-After the migration, verify the picker actually works: `codex resume --all` should return your full history. If it returns "No sessions yet" with `--all`, the index didn't update — check `sqlite3 ~/.codex/state_5.sqlite "SELECT model_provider, COUNT(*) FROM threads GROUP BY model_provider"` and re-run step 2.
+New sessions use the selected provider immediately. Existing sessions keep the provider saved when they were created; change the provider in the client if you want an old session to route through Callosum.
 
 #### Option B — opt-in profile, default unchanged
 
@@ -287,7 +240,7 @@ hermes config set model.api_mode codex_responses
 hermes config set OPENAI_API_KEY "$CALLOSUM_TOKEN"
 ```
 
-Three things worth knowing about the hermes setup that surprised me during integration:
+Three details matter for the Hermes integration:
 
 - **The provider name is `custom`**, not `openai-compatible`. Hermes' `--provider` flag list omits it (and instead lists `auto`, `openai-codex`, `nous`, ...), but `model.provider = custom` is the value the OpenAI-compatible code path checks for.
 - **`model.api_mode = codex_responses` is required**, not optional. Without it hermes sends `/v1/chat/completions` requests with hermes-shape bodies (system prompt as `developer` role, ~28 tool definitions). The proxy's chat-completions → Responses-API translator drops the `developer` role and the tools, and the upstream rejects the resulting minimal body with `400`. Setting `api_mode = codex_responses` makes hermes send native Responses-API requests at `/v1/responses`, which the proxy forwards verbatim — no translation gap. The 400 disappears.
@@ -351,7 +304,7 @@ Cursor's "Override OpenAI Base URL" setting is **global and persistent** — the
   "provider": "openai",
   "model": "model-a0e7",
   "apiBase": "http://127.0.0.1:8765/v1",
-  "apiKey": "<your-callosum-api-key>"
+  "apiKey": "REPLACE_WITH_CALLOSUM_API_KEY"
 }
 ```
 
@@ -362,7 +315,7 @@ from openai import OpenAI
 
 client = OpenAI(
     base_url="http://127.0.0.1:8765/v1",
-    api_key="<your-callosum-api-key>",
+    api_key="REPLACE_WITH_CALLOSUM_API_KEY",
 )
 
 resp = client.responses.create(
@@ -387,7 +340,7 @@ import OpenAI from "openai";
 
 const client = new OpenAI({
   baseURL: "http://127.0.0.1:8765/v1",
-  apiKey: "<your-callosum-api-key>",
+  apiKey: "REPLACE_WITH_CALLOSUM_API_KEY",
 });
 
 const resp = await client.responses.create({
@@ -456,7 +409,7 @@ smoke_test_interval_seconds = 3600                     # optional, default 3600 
 
 - `host` — bind address. Default `127.0.0.1`. Do not expose on `0.0.0.0` unless you understand the threat model.
 - `port` — TCP port. Default `8765`.
-- `client_auth_token_env` — if set, `/v1/*` requires `Authorization: Bearer <value of this env var>`. Ignored when `[auth]` is also set (the multi-tenant flow is the more flexible replacement).
+- `client_auth_token_env` — if set, `/v1/*` requires the value of that environment variable as the bearer token. Ignored when `[auth]` is also set (the multi-tenant flow is the more flexible replacement).
 - `control_auth_token_env` — if set, `/status` and `/control/*` require the same.
 - `startup_smoke_test` — when true (default), the proxy probes each non-cooldown backend with one minimal upstream call at launch and logs OK/SKIPPED/FAILED so the operator sees auth and quota state immediately. Each probe burns a few hundred tokens of quota.
 - `smoke_test_interval_seconds` — when > 0 (default 3600), the smoke test re-runs on this interval so the operator sees live state changes (weekly resets, auth refreshes, model catalog churn) without restarting the proxy. Set to 0 to disable the periodic re-run; the startup pass still happens.
@@ -682,7 +635,7 @@ effort_cap_window_seconds = 604800       # 7 days, aligned to the weekly quota w
 By default every request is an independent selection. If a client wants to stay on the same account across a sequence of requests, it sends:
 
 ```
-X-Codex-Session-Id: <any string>
+X-Codex-Session-Id: session-123
 ```
 
 The first request with that id binds it to whichever backend the selector picks. Subsequent requests with the same id route to that backend while it remains viable. If the bound backend becomes unavailable, the proxy falls back to normal ranking and updates the binding to whichever backend actually served the request.
@@ -783,64 +736,20 @@ quota data.
 When `[usage_log] path = "..."` is set, every backend call is recorded as a row in a SQLite database. Combined with `capture_bodies = true` (default during the modeling phase), this is the data corpus for figuring out how `(model, reasoning_effort, token counts)` translate into the opaque "usage percent" Codex Plus accounts decrement against.
 
 Peer-quality capture is stored separately from live routing decisions.
-The primary capture path is a synchronous post-completion sidecar judge
-that reads the captured request/response from the usage log and writes
-an opinion out-of-band; the legacy in-band `<<qop ...>>` injection path
-is retired as the default and is opt-in behind
-`CALLOSUM_PEER_QUALITY_INBAND_ENABLED` (default off). Opinions are
-persisted in `peer_quality_opinions`; new rows include an exact subject
-request id when the judging model returns it, while older rows fall
-back to the latest prior same-session subject-cell match. The shadow
-label job can write conservative `quality_score` candidates with
-`quality_label_method='peer_quality_v1'`. These labels feed the
-configured quality predictor (currently `cell_majority_prior`); the
-job does not switch live routing by itself.
+The shipped build records opinion-shaped rows but does not apply labels or
+train the quality predictor by itself. Implement
+`callosum.routing.predictor.loader.labeled_rows_from_request_log` and a
+predictor that consumes `LabeledRow` records to turn captured opinions into
+your own training signal. Keep label application separate from live routing so
+you can inspect candidates before changing the predictor.
 
-The sidecar judge is ON by default
-(`CALLOSUM_PEER_QUALITY_SIDECAR_ENQUEUE_RATE`, default `0.1`); setting
-`CALLOSUM_PEER_QUALITY_CAPTURE_RATE` alone does NOT enable capture.
-`/status` reports the sidecar under `router.peer_quality_sidecar_enqueue`
-and the legacy in-band path under `router.peer_quality_capture`. For a
-managed service, use the reversible capture-window flow in
-`docs/operations/dispatch.md` rather than editing the unit file directly.
-
-Apply peer-derived labels manually:
-
-```bash
-python -m callosum.jobs.apply_peer_quality_labels \
-  --db-path /home/<user>/.local/state/callosum/requests.sqlite \
-  --checkpoint-path /home/<user>/.local/state/callosum/apply_peer_quality_labels.ckpt \
-  --batch-size 200 \
-  --dry-run
-```
-
-Drop `--dry-run` only after the preview shows candidate labels worth
-writing. Dry-run mode resolves candidates through the same operator path
-but does not update request rows or checkpoint state.
-
-Inspect the shadow report without changing routing:
-
-```bash
-curl -s http://127.0.0.1:8765/status \
-  -H "Authorization: Bearer $CALLOSUM_TOKEN" \
-  | jq .router.peer_quality_shadow
-```
-
-If the service is stopped, inspect the same shadow report
-directly from the usage log:
-
-```bash
-python -m callosum.jobs.peer_quality_shadow_report \
-  --db-path /home/<user>/.local/state/callosum/requests.sqlite
-```
-
-`peer_quality_shadow` reports captured opinion counts, the capture
-funnel (sampled → injected → opinion, via `peer_quality_capture`), the
-sidecar judging-cost breakdown, whether the label job has pending
-candidates, `peer_quality_v1` label counts, and per-cell label
-coverage. Treat that block as diagnostic only; live routing stays on
-the configured predictor (`cell_majority_prior`) until the operator
-approves a rollout.
+The sidecar judge is enabled by default
+(`CALLOSUM_PEER_QUALITY_SIDECAR_ENQUEUE_RATE`, default `0.1`). The legacy
+in-band `<<qop ...>>` injection path is opt-in behind
+`CALLOSUM_PEER_QUALITY_INBAND_ENABLED` and is disabled by default. `/status`
+reports the sidecar under `router.peer_quality_sidecar_enqueue`, the legacy
+in-band path under `router.peer_quality_capture`, and the neutral shadow
+summary under `router.peer_quality_shadow`.
 
 `requests` (one row per backend attempt — successes AND rotated-from failures):
 

@@ -1,9 +1,9 @@
 """Extension point: cost-label data structures and quantization helpers.
 
-The trained cost-label extraction (quantized meter-tick windows from the
-request log) is private.  This stub preserves the data structures
-(``QuotaMeterSpec``, ``FIVE_HOURLY_METER``, ``WEEKLY_METER``) used by public
-modules and provides no-op implementations of the analysis functions.
+This module preserves the shared data structures
+(``QuotaMeterSpec``, ``FIVE_HOURLY_METER``, ``WEEKLY_METER``) and provides
+neutral implementations of the analysis functions.  Replace the functions to
+extract quantized meter-tick windows from the request log.
 """
 
 from __future__ import annotations

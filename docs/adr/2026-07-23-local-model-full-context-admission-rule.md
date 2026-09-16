@@ -37,8 +37,7 @@ admitted local fleet and streamed from a remote source instead.
 
 This makes the judgment **mechanical and self-enforcing** rather than a
 recurring manual cull, so future model pulls are auto-evaluated. It
-realizes the training-precision + full-context-fit admission policy
-(work tracker ).
+realizes the training-precision plus full-context-fit admission policy.
 
 ## Decision
 
@@ -140,8 +139,7 @@ check before each load. Kill switch: `CALLOSUM_MODEL_PROBE_ENABLED=0`.
 - The MVP bar is **concurrency 1** at the full window (one request can
   fill the window). Stricter bars (≥N concurrent at full window; a
   headroom margin) are deferred — both reuse the already-recorded
-  `max_concurrency`, so they are ~one-line admission changes once tuned
-  (work tracker , ).
+  `max_concurrency`, so they are small admission changes once tuned.
 - The MVP probes `runtime == "vllm"` models only; `gpt_oss` runtime,
   model-a0e0, and ollama entries are not probed and fall back to the
   hub's existing `local_fit_limit_tokens` prior + the

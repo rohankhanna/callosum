@@ -27,10 +27,10 @@ and load-balancers don't close the connection between requests.
 Filtering: GET /events/routing accepts an optional `?session_id=<id>`
 query parameter. When provided, only events whose session_id matches
 are forwarded to that subscriber. Subscribers without a filter receive
-every event (used by general observability tools and by per-instance
-sidecars like snorkel BEFORE they anchor on their child's session_id).
+    every event (used by general observability tools and by per-instance
+    sidecars before they anchor on a client session id).
 
-Design notes for consumers (e.g. the `snorkel` sidecar HUD):
+Design notes for observability sidecars:
   * `requested_model` is what the client (Codex CLI) put in the request;
     `served_cell` is what callosum's router chose. They often differ.
     The lying-CLI-footer problem this endpoint exists to solve is
@@ -95,9 +95,8 @@ class _RoutingEventBroadcaster:
 
         When `session_id` is provided, only events whose payload
         session_id matches exactly are forwarded to this subscriber.
-        When None, every event is forwarded. Per-instance sidecars
-        (e.g. snorkel wrapping one specific codex child) pass the
-        session_id they've anchored on; general observers leave it
+        When None, every event is forwarded. Per-instance sidecars pass the
+        session id they have anchored on; general observers leave it
         None.
         """
         q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=100)
@@ -230,8 +229,8 @@ def install_routing_events(
         """SSE stream of routing events.
 
         Pass `?session_id=<id>` to receive only events whose
-        session_id matches exactly — used by per-instance sidecars
-        (e.g. snorkel) that have anchored on a specific codex child.
+        session id matches exactly — used by per-instance sidecars that
+        have anchored on a specific client process.
         Omit the param to receive every event (general observability).
         """
         q = broadcaster.subscribe(session_id=session_id)

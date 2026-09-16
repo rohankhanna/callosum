@@ -70,10 +70,10 @@ from callosum.session import SessionRegistry
 from callosum.tokenization import count_tokens
 from callosum.usage_log import PeerQualityOpinion, RoutingAttempt, SessionAssistantTurn, UsageLog, UsageLogEntry
 
-# ── no-op stubs for removed private modules ──────────────────────────────
-# The peer_quality, peer_quality_sidecar, label_ui, and canary modules are
-# private. These no-op stubs preserve the interface so the code compiles;
-# they do nothing at runtime. Implement custom versions in your own modules
+# ── neutral integration adapters ─────────────────────────────────────────
+# These adapters preserve the interface used by the application while keeping
+# peer-quality extraction, sidecar judging, label user-interface, and canary
+# features inactive by default. Implement custom versions in your own modules
 # and wire them in to enable these features.
 
 
@@ -1572,8 +1572,8 @@ def create_app(
     if usage_log is not None:
         install_label_ui(app, usage_log)
 
-    # Install routing-events SSE stream (consumed by external sidecar
-    # observers like the snorkel HUD). One event per recorded request,
+    # Install routing-events SSE stream (consumed by external observability
+    # sidecars). One event per recorded request,
     # carrying the served cell, real context window, status, latency,
     # tokens, retries, and current operator mode. Shape documented at
     # callosum.routing_events module docstring.

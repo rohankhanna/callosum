@@ -1,8 +1,7 @@
 """Tiered merge/promotion gate harness.
 
-The gate that must go GREEN before auto-dev / routing feature branches merge
-to main (work tracker ). Three tiers, ordered by cost and
-decisiveness:
+The gate that must go green before auto-dev and routing feature branches merge
+to main. Three tiers, ordered by cost and decisiveness:
 
   * **Tier 1** — deterministic CPU code tests. pytest on the inaugural
     regression cases (then the full unit/integration suite) + ruff check

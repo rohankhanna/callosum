@@ -136,7 +136,7 @@ def test_wilson_matches_promotion_semantics() -> None:
 
 def test_unconfigured_with_present_matrix_is_pending(tmp_path: Path) -> None:
     # A published matrix with no expected_tests/models configured must NOT report
-    # a vacuous green over zero cells (work tracker ). It stays pending
+    # a vacuous green over zero cells. It stays pending
     # so the operator is told to configure the gate rather than misread 0x0 as a pass.
     _write_matrix(_matrix_path(tmp_path), {TESTS[0]: {"passes": 200, "samples": 200}})
     cfg = Tier2Config(

@@ -3,7 +3,7 @@
 Pins the contract that the CLI flags populate Tier2Config exactly (expected_tests,
 models with optional weight_identity, min_samples, threshold, suite_version) and
 that an unflagged invocation yields an empty config — which the runner's guard
-turns into pending rather than a vacuous green (work tracker ).
+turns into pending rather than a vacuous green.
 """
 
 from __future__ import annotations

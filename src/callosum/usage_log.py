@@ -14,7 +14,7 @@ from typing import Any
 from callosum.codex_quota import CodexQuotaSnapshot
 
 
-# ── no-op stub for removed private module ────────────────────────────────
+# ── neutral peer-quality data structures ─────────────────────────────────
 @dataclass(frozen=True, slots=True)
 class PeerQualityOpinion:
     nonce: str = ""
