@@ -133,7 +133,7 @@ class LocalModelRegistryBackend:
         # Stopgap scope, gated per operator decision:
         #   off | modalities (default) | all.
         # Modalities are strictly additive (vision was a hard 400 today -> zero
-        # regression) so they ship on by default. Tool accuracy is operator-gated
+        # regression) so they ship on by default. Tool accuracy is explicitly enabled
         # because the runtime tool-probe is one-directional (probe-fail revokes,
         # probe-pass CANNOT grant): a sticky false-negative would exclude a cell
         # from tool routing with no path back in. Read once at construction.
@@ -285,7 +285,7 @@ class LocalModelRegistryBackend:
             can REVOKE a wrong tool claim (the probe is one-directional — it can
             revoke but cannot grant). Modalities are on by default (strictly
             additive — vision was a hard 400 today); tool accuracy is
-            operator-gated (`all`) because a sticky false-negative would exclude
+            explicitly enabled (`all`) because a sticky false-negative would exclude
             a cell from tool routing with no path back in.
         Tier 3 — conservative defaults (current values; `supports_tools=True`
             optimistic so non-ollama runtimes with no direct-ask source stay

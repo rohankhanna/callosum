@@ -6,8 +6,8 @@ to main. Three tiers, ordered by cost and decisiveness:
   * **Tier 1** — deterministic CPU code tests. pytest on the inaugural
     regression cases (then the full unit/integration suite) + ruff check
     + mypy --strict. Fast and blocking: a red Tier 1 blocks the merge.
-  * **Tier 2** — GPU-local repeated-sampling behaviour RATE matrix (unseeded,
-    statistical). Produced by the sibling benchmark suite repo and consumed
+  * **Tier 2** — GPU-local repeated-sampling behaviour rate matrix (unseeded,
+    statistical). Produced by an external benchmark suite and consumed
     READ-ONLY here; callosum never builds it. Resumable / interruptible so a
     bounded daily GPU window can be paused and resumed across sessions. Not
     merge-blocking on its own — it feeds the auto-promotion decision; an

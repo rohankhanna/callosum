@@ -392,8 +392,8 @@ END""",
     #    stay NULL.
     # NOTE: the companion idx_requests_session_ts (session_id, ts_start)
     # index that accelerates batched-vs-serial turn clustering is NOT in
-    # this auto-migration list: over the live ~115M-row DB it is a heavy
-    # one-time build that must be operator-gated. Its DDL is recorded on
+    # this auto-migration list: on a large database it is a heavy
+    # one-time build that must be explicitly enabled. Its DDL is recorded on
     #  as an explicit operator one-off.
     "ALTER TABLE requests ADD COLUMN cache_creation_tokens INTEGER",
     "ALTER TABLE requests ADD COLUMN used_previous_response_id INTEGER",

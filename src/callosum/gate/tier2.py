@@ -232,7 +232,7 @@ class ResumableTier2Runner:
         cfg = self._config
         reader = FileRateMatrixReader(cfg.matrix_path, expected_tests=cfg.expected_tests, min_samples=cfg.min_samples)
         if not reader.present:
-            return self._pending("rate matrix not yet published by the sibling benchmarks repo")
+            return self._pending("rate matrix not yet published by the external benchmark suite")
         if not cfg.expected_tests or not cfg.models:
             # Refuse to report a vacuous green over zero configured cells. If
             # the operator has not declared expected_tests/models, stay pending

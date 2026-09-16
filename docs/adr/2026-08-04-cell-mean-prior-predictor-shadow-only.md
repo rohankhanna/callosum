@@ -100,7 +100,7 @@ un-routed cells — absent from a single-outcome-per-row request log. So
 the data-side lever is **ceiling-bound by construction**; the live flip
 and the metric redefinition (the gate must be repointed from "vs random"
 to "vs the uniform no-op," under which `cell_mean_prior` fails) remain
-operator-gated.
+explicitly enabled by configuration.
 
 **Reversibility:** normal git-history change. The predictor is behind
 configuration (`quality_predictor`); the default `uniform` makes it

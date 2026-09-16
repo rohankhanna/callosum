@@ -45,7 +45,7 @@ three-tier per-field precedence: hub-canonical (`CapabilityRow.modalities`/
 `supports_tools`, parsed defensively, `None` until the hub emits) > a tier-2
 ollama `/api/show` direct-ask stopgap (`CALLOSUM_LOCAL_CAPABILITIES_STOPGAP`=
 `off`|`modalities`(default)|`all`; modalities strictly additive — vision was a
-hard 400 — so they ship on; tool accuracy operator-gated because the runtime
+hard 400 — so they ship on; tool accuracy explicitly enabled because the runtime
 tool-probe is one-directional) > conservative defaults. The EMISSION gap (the
 hub actually emitting the fields) remains the open P4 handoff; callosum no
 longer needs the hub to emit before it can route vision to a local ollama cell.

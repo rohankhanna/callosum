@@ -18,8 +18,8 @@ acknowledge/dismiss decision in a local audit table. It never proxies,
 mirrors, or auto-sends the payload.
 
 The held-back variant is in-band *auto-send* (injecting the redirect into the
-model response stream without operator approval). That is a separate scoped-A4
-autonomy decision with the auto-promotion master switch OFF; feedback_auto_send_enabled
+model response stream without operator approval). That is a separate automation
+decision with the auto-promotion master switch OFF; feedback_auto_send_enabled
 below is the reserved switch and is NOT wired to any injection path.
 """
 
@@ -173,10 +173,10 @@ def format_feedback_redirect(
     )
 
 
-# --- reserved auto-send switch (scoped-A4, OFF, NOT WIRED) -------------------
+# --- reserved auto-send switch (future automation stage, OFF, NOT WIRED) -----
 # The in-band auto-send variant (injecting this redirect into the model
-# response stream without operator approval) is a separate scoped-A4
-# autonomy decision. The auto-promotion master switch is OFF, so this helper
+# response stream without operator approval) is a separate automation
+# decision. The auto-promotion master switch is OFF, so this helper
 # exists only to RESERVE the knob and make the boundary explicit; it is not
 # called from any injection path today. Raising here if it ever becomes wired
 # without the operator decision would be the guard.
@@ -185,7 +185,7 @@ def format_feedback_redirect(
 class FeedbackAutoSendNotWiredError(RuntimeError):
     """Raised if auto-send is enabled in config but no injection path is wired.
 
-    Reserved for the scoped-A4 follow-on. Today there is no in-band injection
+    Reserved for the future automation stage. Today there is no in-band injection
     call site, so a True setting has no effect and should not be silently
     accepted as 'working' — callers that observe feedback_auto_send_enabled()
     returning True without having implemented the injection path MUST raise
@@ -198,8 +198,8 @@ def feedback_auto_send_enabled() -> bool:
 
     RESERVED / NOT WIRED. Reads CALLOSUM_FEEDBACK_AUTO_SEND_ENABLED (must
     be exactly "1"); defaults to False. No code path consumes a True
-    result today — the in-band response-stream injection is the scoped-A4
-    follow-on and is operator-gated behind the auto-promotion master switch.
+    result today — the in-band response-stream injection is a future
+    follow-on and is explicitly enabled behind the auto-promotion master switch.
     See FeedbackAutoSendNotWiredError for the guard the future call site
     must use.
     """

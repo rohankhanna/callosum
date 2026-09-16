@@ -136,7 +136,7 @@ async def run_harness_sweep(
     the TTL window contribute zero.
 
     Harnesses run serially across cells to avoid GPU contention —
-    two 31B-class harnesses in parallel would OOM most workstations.
+    two 31B-class harnesses in parallel would exhaust memory on most hosts.
 
     Backends in cooldown are skipped on a per-sweep basis: when an
     upstream lane is cold-loading or in transient failure, hammering

@@ -57,7 +57,7 @@ strategies, not multiple competing routers.
    direct-ask stopgap — otherwise ask the runtime via ollama `/api/show`
    (`CALLOSUM_LOCAL_CAPABILITIES_STOPGAP` = `off`|`modalities` (default)|`all`;
    modalities are strictly additive so they ship on, tool accuracy is
-   operator-gated because the runtime tool-probe is one-directional — it can
+   explicitly enabled because the runtime tool-probe is one-directional — it can
    revoke a wrong claim but cannot grant); (3) conservative defaults
    (`text`-only, `supports_tools=True` optimistic so non-ollama runtimes with
    no direct-ask source stay tool-routable, probe-revocable). The hard filter

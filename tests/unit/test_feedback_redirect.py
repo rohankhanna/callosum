@@ -139,7 +139,7 @@ def test_build_redirect_message_uses_prescrubbed_input() -> None:
 
 
 # ---------------------------------------------------------------------------
-# reserved auto-send switch (scoped-A4, OFF, not wired)
+# reserved auto-send switch (future automation stage, OFF, not wired)
 # ---------------------------------------------------------------------------
 
 

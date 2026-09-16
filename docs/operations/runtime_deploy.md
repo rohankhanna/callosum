@@ -147,7 +147,7 @@ live-routing change at merge.**
 # does NOT change routing by itself).
 Environment=CALLOSUM_OLLAMA_CLOUD_USAGE_SOURCE_ENABLED=1
 # Project the real session/weekly meters into usage_snapshot() so the
-# quota/cool-down path reacts to them. A2/scoped-A4 operator-gated.
+# quota/cool-down path reacts to them. Explicitly enabled by configuration.
 # Requires the source flag ON too. Default OFF → honest-advisory unchanged.
 Environment=CALLOSUM_OLLAMA_CLOUD_USAGE_LIVE=1
 ```
@@ -180,6 +180,5 @@ routing behavior (it reverts to honest-advisory).
 
 ## Host-side change
 
-The systemd user unit lives in the dotfiles repo and must be updated
-there before the live service switch. This repo only defines the build
-and install contract.
+Update the host's systemd user unit before changing the live service.
+This repository only defines the build and install contract.

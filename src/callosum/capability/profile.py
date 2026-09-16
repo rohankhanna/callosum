@@ -26,8 +26,8 @@ from typing import Any, Literal
 from callosum.capability.weight_identity import WeightIdentity
 from callosum.substrate_contract import ContractAction
 
-# The repo root's logs directory. Profiles live alongside the prior-
-# art gate logs since both are durable operator state about what the
+# The repository root's logs directory. Profiles live alongside workflow
+# research logs since both are durable operator state about what the
 # system has learned about models. Path resolution walks up from this
 # file (src/callosum/capability/profile.py) to repo root, then down
 # to logs/capability_profiles/.
