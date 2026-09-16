@@ -2,9 +2,8 @@
 
 Version-controlled sources for callosum's architecture diagrams.
 
-Per the active control plane, diagrams used in architecture docs must be
-generated from version-controlled source, not maintained primarily as
-hand-edited image files. Each `.puml` file in this directory is a
+Architecture diagrams are generated from version-controlled source rather
+than maintained as hand-edited image files. Each `.puml` file in this directory is a
 PlantUML source; the matching `.svg` next to it is the rendered output.
 Regenerate when the source changes.
 
@@ -36,13 +35,9 @@ copies can be rendered on demand with the same PlantUML jar using
 `-tpng`.
 
 The script expects PlantUML's single-file jar at
-`~/.local/share/plantuml/plantuml.jar`. If you haven't installed it
-yet, the script prints a clear message and exits non-zero. The jar is
-a single-file download from `https://plantuml.com/download`; it is
-kept under the user's local share rather than committed to this repo.
-Java is the only other requirement. It is NOT currently on `PATH` on
-this workstation (the dotfiles repo owns Java install state); install it
-(or restore it to `PATH`) before rendering, or the script exits non-zero.
+`~/.local/share/plantuml/plantuml.jar` by default. The jar is not committed to
+this repository. If it is missing, the script prints a clear message and exits
+non-zero. Java is the only other requirement.
 
 ## Why PlantUML and not Structurizr / Mermaid / diagrams-as-code
 
@@ -50,8 +45,7 @@ this workstation (the dotfiles repo owns Java install state); install it
   `npm`/Chromium dependency (note: Java must be on `PATH` — see above).
 - Pure-text source is diff-friendly. Source review catches drift
   between intent and what gets rendered.
-- SVG output is the control plane's preferred public format for
-  architecture artifacts.
+- SVG output is the preferred format for architecture artifacts.
 - Sequence diagrams in PlantUML do not need Graphviz, which is the
   most common friction with `dot`-backed component diagrams.
 

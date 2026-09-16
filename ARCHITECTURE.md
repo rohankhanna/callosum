@@ -260,8 +260,8 @@ All paths are under `src/callosum/`.
   malformed markers so the operator can measure task interference and
   echo behavior before any routing use.
 - `routing_events.py` — `GET /events/routing` SSE stream of
-  per-request routing decisions. The `snorkel` sidecar HUD consumes
-  this to display the actually-routed model in its bottom bar.
+  per-request routing decisions. External observability sidecars can consume
+  this stream to display the model that actually served a request.
 - `local.py` — wrapper around the external `local-llm` CLI
   used by `local_direct.py` for model discovery.
 - `auth.py` / `auth_service.py` — API-key issuance and validation

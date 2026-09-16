@@ -9,8 +9,8 @@ diverge on assumed output length.
 
 Model: `t ≈ a·input_tokens + b·output_tokens + c`. v1 fits `a == b` (one slope
 per total token) plus the intercept `c` against the log's `latency_ms`; the
-TTFB-vs-decode split (`a ≠ b`) is deferred until first-byte time is captured
-(work tracker ), because only TOTAL latency is logged today.
+TTFB-vs-decode split (`a ≠ b`) is deferred until first-byte time is captured,
+because only total latency is logged today.
 
 Two things make time **different from cost**:
 
@@ -139,4 +139,3 @@ All knobs live under `AutoRouterConfig` (`src/callosum/config.py`):
 `time_estimate_refresh_seconds`, `time_estimate_overrides`
 (`{model_slug: [ms_per_token, base_ms]}`, wins outright), plus the shared
 forecaster's `output_forecast_min_obs` and `output_forecast_fallback_ratio`.
-```

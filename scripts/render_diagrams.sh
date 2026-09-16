@@ -2,14 +2,13 @@
 # Render every PlantUML source in docs/architecture/ to SVG.
 #
 # This script is the canonical way to regenerate the architecture
-# diagrams from their .puml sources. Per the active control plane, diagrams
-# must be generated from version-controlled source rather than hand-
-# edited as image files. Whenever a .puml source changes, run this
-# script and commit the regenerated SVG alongside.
+# diagrams from their .puml sources. Diagrams are generated from
+# version-controlled source rather than hand-edited image files.
+# Whenever a .puml source changes, run this script and commit the
+# regenerated SVG alongside.
 #
 # Requirements:
-#   * Java runtime (`java -version` works) — already standard on this
-#     workstation; the dotfiles repo owns Java install state.
+#   * Java runtime (`java -version` works).
 #   * PlantUML jar at $PLANTUML_JAR (defaults to
 #     ~/.local/share/plantuml/plantuml.jar). The jar is a single-file
 #     download from https://plantuml.com/download — kept under the
@@ -38,7 +37,7 @@ if ! command -v java >/dev/null 2>&1; then
     exit 2
 fi
 
-# -tsvg     : emit SVG (preferred per control plane over raster)
+# -tsvg     : emit SVG (preferred over raster)
 # -nbthread : single-thread; the diagrams here are tiny and parallelism
 #             adds noise to error reporting without helping latency.
 # Pass each .puml explicitly so a missing source dir fails clearly.

@@ -1,10 +1,9 @@
 """Extension point: cell-prior quality predictor.
 
-The trained predictor (per-cell majority/mean label priors from request-log
-quality scores) is private.  This stub preserves the interface so the routing
-factory can reference it by id; the default predictor is ``UniformPriorPredictor``
-(see ``uniform.py``), which returns 0.5 for every candidate — mathematically
-the max-likelihood cold-start prior.
+This module defines a neutral cell-prior implementation.  It preserves the
+interface used by the routing factory and returns 0.5 for every candidate,
+which is the maximum-likelihood cold-start prior.  The default predictor is
+``UniformPriorPredictor`` (see ``uniform.py``).
 
 To implement a custom predictor:
 
@@ -34,10 +33,10 @@ from callosum.routing.protocols import LabeledRow, PromptFeatures
 
 
 class CellMajorityPriorPredictor:
-    """Stub: returns the uniform 0.5 prior for every candidate.
+    """Neutral cell-prior implementation.
 
-    The trained majority-label logic is private.  Override ``reload`` and
-    ``predict`` to implement a custom version.
+    Override ``reload`` and ``predict`` to learn from labeled rows and produce
+    a custom majority-label prior.
     """
 
     id: str = "cell_majority_prior"
@@ -51,10 +50,10 @@ class CellMajorityPriorPredictor:
 
 
 class CellMeanPriorPredictor:
-    """Stub: returns the uniform 0.5 prior for every candidate.
+    """Neutral cell-mean implementation.
 
-    The trained mean-outcome logic is private.  Override ``reload`` and
-    ``predict`` to implement a custom version.
+    Override ``reload`` and ``predict`` to learn from labeled rows and produce
+    a custom mean-outcome prior.
     """
 
     id: str = "cell_mean_prior"

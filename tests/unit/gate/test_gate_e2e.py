@@ -2,7 +2,7 @@
 inaugural bug regression cases.
 
 This is the proof that the gate goes green on main with the two bug tests wired
-as the inaugural Tier-1 members (work tracker ```` acceptance). It
+as the inaugural Tier-1 members. It
 uses the real SubprocessRunner (no stubs) but scopes the full unit suite
 OFF and mypy to the new gate package so the test stays fast while still
 exercising the real pytest/ruff/mypy subprocess path. The first-tier green is

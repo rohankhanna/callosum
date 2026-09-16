@@ -1,7 +1,7 @@
 """Extension point: per-model cost-rank provider.
 
-The trained cost model (derives cost_rank from measured quota burn) is
-private.  This stub falls back to priority ordering from the backend catalog.
+The default provider falls back to priority ordering from the backend catalog.
+Replace it to derive ``cost_rank`` from measured quota burn or another signal.
 
 To implement a custom cost model:
 
@@ -23,10 +23,9 @@ from pathlib import Path
 
 
 class CostRankProvider:
-    """Stub: returns the caller-supplied default rank for every model.
+    """Default provider that returns the caller-supplied rank.
 
-    The trained measured-cost logic is private.  Override ``rank_for`` to
-    implement a custom cost model.
+    Override ``rank_for`` to implement a custom measured-cost model.
     """
 
     def __init__(
@@ -50,5 +49,5 @@ class CostRankProvider:
 
 
 def measured_cost_ranks(*args: object, **kwargs: object) -> dict[str, int]:
-    """Stub: returns empty (cold start)."""
+    """Return no measured ranks by default."""
     return {}

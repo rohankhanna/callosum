@@ -1,10 +1,9 @@
 """Tier 2 — resumable GPU behaviour rate-matrix consumer (read-only).
 
-The unseeded, statistical model x test behaviour RATE matrix is PRODUCED by
-the sibling benchmark suite repo on a GPU under bounded daily windows and
-CONSUMED READ-ONLY here. callosum never builds it; the external handoff
-(work tracker ) asks benchmark suite to publish the matrix
-artifact this reader expects.
+The unseeded, statistical model x test behaviour rate matrix is produced by
+an external benchmark suite on a GPU under bounded daily windows and consumed
+read-only here. Callosum never builds it; an external producer publishes the
+matrix artifact this reader expects.
 
 Resumable / interruptible (per learning ): the
 producer runs inside bounded daily GPU windows and may be paused/reclaimed at
@@ -239,8 +238,7 @@ class ResumableTier2Runner:
             # the operator has not declared expected_tests/models, stay pending
             # so a published matrix is never misread as "0 cell(s) x 0 test(s)
             # above threshold" — a real pass. Configure via `callosum gate
-            # --tier2-expected-test ... --tier2-model ...` (work tracker
-            # ).
+            # --tier2-expected-test ... --tier2-model ...`.
             return self._pending(
                 "tier2 unconfigured: set --tier2-expected-test and --tier2-model before evaluating cells"
             )

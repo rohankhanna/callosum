@@ -1,8 +1,8 @@
 """Extension point: forward cost estimator and composite cost model.
 
-The trained cost estimator (predicts per-request weekly-quota burn) is
-private.  This stub preserves the interfaces used by the router and selector,
-falling back to zero-cost estimates.
+The default implementation preserves the interfaces used by the router and
+selector while returning neutral zero-cost estimates.  Replace it to predict
+per-request meter burn from measured data.
 
 To implement a custom cost estimator, subclass ``CostUsageEstimator`` and
 override ``estimate`` / ``finalize``.
@@ -23,7 +23,7 @@ from callosum.routing.usage_estimate import (
 
 
 class CompositeCostEstimate:
-    """Pair of per-meter cost estimates (stub: all zeros)."""
+    """Pair of per-meter cost estimates."""
 
     five_hourly: Estimate
     weekly: Estimate
@@ -49,7 +49,7 @@ class CompositeCostEstimate:
 
 
 class CostModelProvider:
-    """Stub: single-meter cost model provider (returns zero estimates)."""
+    """Single-meter cost model provider."""
 
     def __init__(self, usage_log_path: Path, *, meter: object | None = None, **kwargs: object) -> None:
         del usage_log_path, meter, kwargs
@@ -59,7 +59,7 @@ class CostModelProvider:
 
 
 class CompositeCostModelProvider:
-    """Stub: pair of meter-specific providers."""
+    """Pair of meter-specific providers."""
 
     def __init__(self, usage_log_path: Path, **kwargs: object) -> None:
         self.five_hourly = CostModelProvider(usage_log_path, meter=FIVE_HOURLY_METER, **kwargs)
@@ -67,7 +67,7 @@ class CompositeCostModelProvider:
 
 
 class CostUsageEstimator:
-    """Stub: returns zero-cost estimates for all cells."""
+    """Returns neutral zero-cost estimates for all cells."""
 
     def __init__(self, provider: CostModelProvider, *, is_remote: Callable[[Cell], bool] | None = None) -> None:
         del provider, is_remote
@@ -105,7 +105,7 @@ class CostUsageEstimator:
 
 
 class CompositeCostUsageEstimator:
-    """Stub: composite estimator over both meters."""
+    """Composite estimator over both meters."""
 
     def __init__(self, provider: CompositeCostModelProvider) -> None:
         self.five_hourly = CostUsageEstimator(provider.five_hourly)

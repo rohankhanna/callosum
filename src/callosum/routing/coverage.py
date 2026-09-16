@@ -1,8 +1,8 @@
 """Extension point: coverage-greedy cell ordering.
 
-The coverage enforcement (minimum-usage floor on organic traffic) is private.
-This module preserves the pure ``coverage_order`` function used by the routing
-pipeline; the quota enforcer that called it is stubbed in ``routing/quota.py``.
+This module provides the pure ``coverage_order`` function used by the routing
+pipeline.  The quota enforcer that consumes it is defined in
+``routing/quota.py``.
 """
 
 from __future__ import annotations

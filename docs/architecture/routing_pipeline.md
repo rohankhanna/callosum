@@ -134,6 +134,6 @@ headroom is sufficient — see `model_fit_probe.md`).
 **Passive surfaces:** routing-events SSE (one event per recorded request),
 label UI, admin routes.
 
-**Offline jobs (operator/cron):** `peer_quality_shadow_report`,
-`apply_peer_quality_labels`, `model_probe` (per-model full-context fit probe;
-`scripts/probe_model_fit.py`), retention pruning.
+**Offline jobs:** `model_probe` (per-model full-context fit probe;
+`scripts/probe_model_fit.py`). Add custom offline jobs for label application,
+retention pruning, or other periodic work.

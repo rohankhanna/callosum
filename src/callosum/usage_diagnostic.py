@@ -25,7 +25,7 @@ from callosum.usage_log import _walk_text, decompress
 # signatures are visible on rows captured while the in-band flag was on.
 #
 # The four segment kinds below decompose such a payload for the first-divergence
-# audit (work tracker ): stable_front (the byte-identical prefix
+# audit: stable_front (the byte-identical prefix
 # shared with the no-capture arm), provenance_mutated_history (the history block
 # carrying provenance tags), live_tail (the current turn's user/tool input),
 # and peer_opinion_suffix (the appended audit instruction). The sidecar-primary
@@ -243,7 +243,7 @@ class TimeBucketSummary:
     traffic_kind_summaries: tuple[TrafficKindBucketSummary, ...] | None = None
 
 
-# --- Per-session compounding input-token cost (work tracker ) ------
+# --- Per-session compounding input-token cost ----------------------
 #
 # In a multi-turn tool-using session every turn re-sends the entire growing
 # transcript to the upstream model, so the cumulative input-token cost across
@@ -864,7 +864,7 @@ def _format_ts(ts: float | None) -> str:
     return datetime.fromtimestamp(ts, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-# --- F2 live terminal view (work tracker ) ------------------------
+# --- F2 live terminal view -----------------------------------------
 #
 # Operator decision 2026-08-23: the F2 live-visualization
 # path for the token-usage diagnostic is a terminal UI (TUI), not OTel/

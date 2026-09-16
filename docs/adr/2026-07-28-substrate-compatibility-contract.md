@@ -1,7 +1,6 @@
 # ADR: Substrate-owned compatibility contract for local model cells
 
 Date: 2026-07-28
-work tracker:  (P2) under shim-reduction program 
 Grounded by: P1 inventory (`docs/investigations/2026-07-28-shim-reduction-p1-inventory.md`), local LLM gateway substrate survey, LiteLLM 1.82.6 survey.
 
 ## Status

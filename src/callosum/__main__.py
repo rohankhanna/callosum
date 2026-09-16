@@ -47,7 +47,7 @@ def _configure_logging() -> None:
     helper so log formatting stays consistent across both code paths."""
     logging.getLogger("callosum.startup").setLevel(logging.INFO)
     if not logging.getLogger().handlers:
-        # Use UTC timestamps in ISO 8601 format per control plane compliance
+        # Use UTC timestamps in ISO 8601 format.
         logging.basicConfig(
             level=logging.INFO,
             format="%(asctime)s %(levelname)s:  %(message)s",
