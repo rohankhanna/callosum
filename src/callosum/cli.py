@@ -963,7 +963,7 @@ def build_parser() -> argparse.ArgumentParser:
     # records the operator's acknowledge/dismiss decision in a local audit
     # table. callosum does NOT relay feedback upstream; the snippet is
     # scrubbed of secret-shaped strings before display. Auto-send (in-band
-    # injection without operator approval) is a separate scoped-A4 decision
+    # injection without operator approval) is a separate automation decision
     # with the auto-promotion master switch OFF and is NOT wired here.
     p_feedback = sub.add_parser(
         "feedback",
@@ -997,7 +997,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Run the tiered merge and promotion gate. "
             "Tier 1 (pytest inaugural bug cases + unit suite + ruff + mypy --strict) "
             "is the only merge-blocking tier. Tier 2 consumes the GPU rate matrix "
-            "published by the sibling benchmark suite repo (read-only, resumable). "
+            "published by the external benchmark suite (read-only, resumable). "
             "Tier 3 evaluates the live shadow/canary guard with auto-revert. "
             "Exit 0 when Tier 1 is green, 1 when merge-blocked."
         ),
@@ -1032,7 +1032,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="tier2_expected_tests",
         metavar="TEST",
         help="Tier-2 behavior test name to require (repeatable). Must match a test the "
-        "sibling benchmark suite rate matrix publishes (e.g. mmlu-pro). Default: none "
+        "external benchmark suite rate matrix publishes (e.g. mmlu-pro). Default: none "
         "(Tier-2 stays pending until configured).",
     )
     p_gate.add_argument(

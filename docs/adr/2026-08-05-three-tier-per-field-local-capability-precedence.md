@@ -52,7 +52,7 @@ through a three-tier, **per-field** precedence
    `CALLOSUM_LOCAL_CAPABILITIES_STOPGAP` = `off` | `modalities` (default)
    | `all`. Modalities are **strictly additive** (a runtime can add
    `image`/`audio` but never revoke the always-present `text`), so the
-   modality stopgap ships on. **Tool accuracy is operator-gated**: the
+   modality stopgap ships on. **Tool accuracy is explicitly enabled**: the
    runtime tool-probe is one-directional — it can *revoke* a wrong
    `tools` claim but cannot *grant* one — so the tool stopgap is off by
    default.
@@ -95,7 +95,7 @@ is now a population bug, not a filter bug.
   fields; until then the effective behavior is tiers 2–3.
 - Tool accuracy depends on a one-directional probe (revoke-only), so a
   runtime that *under*-claims tools cannot be corrected by the stopgap
-  — the operator-gated tool stopgap is the deliberate trade for not
+  — the explicitly enabled tool stopgap is the deliberate trade for not
   trusting blind self-reports.
 - `supports_tools=True` as the default means a non-ollama runtime that
   silently mishandles tools will receive tool traffic until the probe

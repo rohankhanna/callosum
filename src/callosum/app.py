@@ -1660,8 +1660,8 @@ def create_app(
     # peer_quality_shadow_report (peer-quality capture/labeling observability
     # over the requests DB), the min-coverage-quota report (7-day per-cell counts), and the
     # rolling per-mode stats (1h/6h/24h windows) each scan the multi-GB
-    # requests DB on every /status call. The The Menubar Indicator menubar polls /status
-    # every ~30s, so a per-call recompute drives a recurring ~1-2s multi-core
+    # requests DB on every /status call. An external status poller can request /status
+    # frequently, so a per-call recompute drives a recurring multi-core
     # burst — the residual baseline burn. These are slow-drifting
     # observability metrics, so memoize the lot for a short TTL: the first
     # poll after the TTL recomputes, the rest reuse the last snapshot. Live
@@ -1808,8 +1808,8 @@ def create_app(
             },
         }
         # Expensive observability aggregates (peer-quality shadow, min-coverage
-        # quota, per-mode windows) come from the TTL cache above so the The Menubar Indicator
-        # 30s poll doesn't re-scan the requests DB on every call.
+        # quota, per-mode windows) come from the TTL cache above so a frequent
+        # status poller does not re-scan the requests DB on every call.
         obs = _status_obs_report()
         if obs is not None:
             router_block["peer_quality_shadow"] = obs["peer_quality_shadow"]

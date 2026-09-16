@@ -20,9 +20,8 @@ Design:
     supports_tools when the probe disagrees.
   * Re-probe cells whose cached result is older than `probe_ttl_s`
     (default 24h). Skip cells whose result is fresh enough.
-  * Run probes serially per cell to avoid VRAM contention on the
-    local GPU — two 31B-class probes in parallel would OOM most
-    workstations.
+  * Run probes serially per cell to avoid GPU memory contention —
+    two 31B-class probes in parallel would exhaust memory on most hosts.
 
 This module is the orchestrator. The actual probing logic stays in
 `routing/probe.py` so it remains independently testable.

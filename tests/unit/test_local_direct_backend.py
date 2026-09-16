@@ -578,7 +578,7 @@ def test_cell_capabilities_tier2_modalities_stopgap_default_mode() -> None:
 
 def test_cell_capabilities_tier2_all_mode_applies_tool_accuracy(monkeypatch: pytest.MonkeyPatch) -> None:
     """Env `all`: the tier-2 tools claim is applied too — a self-reported
-    supports_tools=False flows through. This is operator-gated because the
+    supports_tools=False flows through. This is explicitly enabled because the
     probe is one-directional (probe-fail revokes, probe-pass cannot grant)."""
     monkeypatch.setenv("CALLOSUM_LOCAL_CAPABILITIES_STOPGAP", "all")
     src = _FakeSource([_catalog_entry("m", throughput=25.0)])

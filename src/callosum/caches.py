@@ -2,7 +2,7 @@
 
 Some callosum observability surfaces — notably the /status router
 sub-reports — aggregate over the multi-GB requests DB on every call. An
-external poller (the The Menubar Indicator menubar) hits /status every ~30s, so a
+external status poller hits /status every ~30s, so a
 per-call recompute drives a recurring multi-core burst. These aggregates
 drift on traffic timescales but are observability-only, so a short TTL
 memo is safe: the first reader after the TTL recomputes, the rest reuse
