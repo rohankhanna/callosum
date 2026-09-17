@@ -810,15 +810,15 @@
       "path": "src/callosum/__main__.py"
     },
     {
-      "end_line": 4874,
+      "end_line": 4877,
       "id": "callosum.app:_active_api_key_count",
-      "line": 4868,
+      "line": 4871,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 2958,
+      "end_line": 2961,
       "id": "callosum.app:_active_pool",
-      "line": 2955,
+      "line": 2958,
       "path": "src/callosum/app.py"
     },
     {
@@ -834,9 +834,9 @@
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 4885,
+      "end_line": 4888,
       "id": "callosum.app:_bearer",
-      "line": 4877,
+      "line": 4880,
       "path": "src/callosum/app.py"
     },
     {
@@ -846,27 +846,27 @@
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 3853,
+      "end_line": 3856,
       "id": "callosum.app:_buffered_strip",
-      "line": 3845,
+      "line": 3848,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 5400,
+      "end_line": 5403,
       "id": "callosum.app:_catalog_boot_resync",
-      "line": 5335,
+      "line": 5338,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 4503,
+      "end_line": 4506,
       "id": "callosum.app:_clean_sse_blob",
-      "line": 4435,
+      "line": 4438,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 5751,
+      "end_line": 5754,
       "id": "callosum.app:_collect_backend_status",
-      "line": 5689,
+      "line": 5692,
       "path": "src/callosum/app.py"
     },
     {
@@ -882,51 +882,51 @@
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 4978,
+      "end_line": 4981,
       "id": "callosum.app:_diagnose_backend",
-      "line": 4903,
+      "line": 4906,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 2945,
+      "end_line": 2948,
       "id": "callosum.app:_dispatch_internal",
-      "line": 2389,
+      "line": 2392,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 3418,
+      "end_line": 3421,
       "id": "callosum.app:_dispatch_nonstream",
-      "line": 3230,
+      "line": 3233,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 3116,
+      "end_line": 3119,
       "id": "callosum.app:_dispatch_nonstream_with_cell_retry",
-      "line": 2996,
+      "line": 2999,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 2386,
+      "end_line": 2389,
       "id": "callosum.app:_dispatch_route",
-      "line": 2335,
+      "line": 2338,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 3653,
+      "end_line": 3656,
       "id": "callosum.app:_dispatch_stream",
-      "line": 3421,
+      "line": 3424,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 3227,
+      "end_line": 3230,
       "id": "callosum.app:_dispatch_stream_with_cell_retry",
-      "line": 3119,
+      "line": 3122,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 4377,
+      "end_line": 4380,
       "id": "callosum.app:_empty_iter",
-      "line": 4375,
+      "line": 4378,
       "path": "src/callosum/app.py"
     },
     {
@@ -942,27 +942,27 @@
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 5543,
+      "end_line": 5546,
       "id": "callosum.app:_evaluate_codex_diagnostic",
-      "line": 5520,
+      "line": 5523,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 5517,
+      "end_line": 5520,
       "id": "callosum.app:_evaluate_diagnostic",
-      "line": 5505,
+      "line": 5508,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 5565,
+      "end_line": 5568,
       "id": "callosum.app:_evaluate_generic_diagnostic",
-      "line": 5546,
+      "line": 5549,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 3923,
+      "end_line": 3926,
       "id": "callosum.app:_event_delta_text",
-      "line": 3893,
+      "line": 3896,
       "path": "src/callosum/app.py"
     },
     {
@@ -984,39 +984,39 @@
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 4167,
+      "end_line": 4170,
       "id": "callosum.app:_extract_complexity_from_stream",
-      "line": 4047,
+      "line": 4050,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 4829,
+      "end_line": 4832,
       "id": "callosum.app:_extract_reasoning_effort",
-      "line": 4819,
+      "line": 4822,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 4797,
+      "end_line": 4800,
       "id": "callosum.app:_extract_tokens",
-      "line": 4774,
+      "line": 4777,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 2332,
+      "end_line": 2335,
       "id": "callosum.app:_filter_cells_to_routable",
-      "line": 2323,
+      "line": 2326,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 3753,
+      "end_line": 3756,
       "id": "callosum.app:_get_at_path",
-      "line": 3728,
+      "line": 3731,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 3842,
+      "end_line": 3845,
       "id": "callosum.app:_hold_trailing_partial",
-      "line": 3814,
+      "line": 3817,
       "path": "src/callosum/app.py"
     },
     {
@@ -1026,21 +1026,21 @@
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 5659,
+      "end_line": 5662,
       "id": "callosum.app:_install_auth_routes",
-      "line": 5568,
+      "line": 5571,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 5681,
+      "end_line": 5684,
       "id": "callosum.app:_install_web_ui",
-      "line": 5665,
+      "line": 5668,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 4839,
+      "end_line": 4842,
       "id": "callosum.app:_int",
-      "line": 4832,
+      "line": 4835,
       "path": "src/callosum/app.py"
     },
     {
@@ -1050,33 +1050,33 @@
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 4753,
+      "end_line": 4756,
       "id": "callosum.app:_log_attempt",
-      "line": 4506,
+      "line": 4509,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 4432,
+      "end_line": 4435,
       "id": "callosum.app:_log_on_complete",
-      "line": 4380,
+      "line": 4383,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 5502,
+      "end_line": 5505,
       "id": "callosum.app:_log_smoke_result",
-      "line": 5433,
+      "line": 5436,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 5823,
+      "end_line": 5826,
       "id": "callosum.app:_no_viable",
-      "line": 5754,
+      "line": 5757,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 4890,
+      "end_line": 4893,
       "id": "callosum.app:_path_requires_api_key",
-      "line": 4888,
+      "line": 4891,
       "path": "src/callosum/app.py"
     },
     {
@@ -1134,9 +1134,9 @@
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 3659,
+      "end_line": 3662,
       "id": "callosum.app:_prepend",
-      "line": 3656,
+      "line": 3659,
       "path": "src/callosum/app.py"
     },
     {
@@ -1146,27 +1146,27 @@
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 4865,
+      "end_line": 4868,
       "id": "callosum.app:_quota_to_dict",
-      "line": 4842,
+      "line": 4845,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 5332,
+      "end_line": 5335,
       "id": "callosum.app:_refresh_catalogs_pass",
-      "line": 5305,
+      "line": 5308,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 2981,
+      "end_line": 2984,
       "id": "callosum.app:_remember_binding",
-      "line": 2978,
+      "line": 2981,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 2952,
+      "end_line": 2955,
       "id": "callosum.app:_require_model",
-      "line": 2948,
+      "line": 2951,
       "path": "src/callosum/app.py"
     },
     {
@@ -1176,51 +1176,51 @@
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 2320,
+      "end_line": 2323,
       "id": "callosum.app:_routable_backends",
-      "line": 2292,
+      "line": 2295,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 5430,
+      "end_line": 5433,
       "id": "callosum.app:_run_startup_smoke_test",
-      "line": 5403,
+      "line": 5406,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 3675,
+      "end_line": 3678,
       "id": "callosum.app:_safe_stream",
-      "line": 3662,
+      "line": 3665,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 3811,
+      "end_line": 3814,
       "id": "callosum.app:_scrub_full_text_event",
-      "line": 3791,
+      "line": 3794,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 4223,
+      "end_line": 4226,
       "id": "callosum.app:_scrub_full_text_events",
-      "line": 4170,
+      "line": 4173,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 3890,
+      "end_line": 3893,
       "id": "callosum.app:_scrub_peer_quality_from_event",
-      "line": 3856,
+      "line": 3859,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 2975,
+      "end_line": 2978,
       "id": "callosum.app:_session_id_from_request",
-      "line": 2961,
+      "line": 2964,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 3788,
+      "end_line": 3791,
       "id": "callosum.app:_set_at_path",
-      "line": 3756,
+      "line": 3759,
       "path": "src/callosum/app.py"
     },
     {
@@ -1242,33 +1242,33 @@
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 4816,
+      "end_line": 4819,
       "id": "callosum.app:_stamp_reasoning_effort",
-      "line": 4800,
+      "line": 4803,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 3977,
+      "end_line": 3980,
       "id": "callosum.app:_strip_chars_from_event",
-      "line": 3926,
+      "line": 3929,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 4044,
+      "end_line": 4047,
       "id": "callosum.app:_strip_chars_from_event_end",
-      "line": 3991,
+      "line": 3994,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 4278,
+      "end_line": 4281,
       "id": "callosum.app:_strip_peer_quality_markers_from_stream",
-      "line": 4226,
+      "line": 4229,
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 4372,
+      "end_line": 4375,
       "id": "callosum.app:_strip_trailing_complexity_marker",
-      "line": 4309,
+      "line": 4312,
       "path": "src/callosum/app.py"
     },
     {
@@ -1278,9 +1278,9 @@
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 4306,
+      "end_line": 4309,
       "id": "callosum.app:_subtract_audit_tokens_from_event",
-      "line": 4281,
+      "line": 4284,
       "path": "src/callosum/app.py"
     },
     {
@@ -1296,9 +1296,9 @@
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 5686,
+      "end_line": 5689,
       "id": "callosum.app:_terminal_http",
-      "line": 5684,
+      "line": 5687,
       "path": "src/callosum/app.py"
     },
     {
@@ -1320,7 +1320,7 @@
       "path": "src/callosum/app.py"
     },
     {
-      "end_line": 2289,
+      "end_line": 2292,
       "id": "callosum.app:create_app",
       "line": 1074,
       "path": "src/callosum/app.py"

@@ -92,13 +92,13 @@
 <g id="node4" class="node">
 <title>callosum.app:_active_api_key_count</title>
 <path fill="#fff8dc" stroke="#555555" d="M1580.25,-2067.07C1580.25,-2067.07 1147.25,-2067.07 1147.25,-2067.07 1141.25,-2067.07 1135.25,-2061.07 1135.25,-2055.07 1135.25,-2055.07 1135.25,-2043.07 1135.25,-2043.07 1135.25,-2037.07 1141.25,-2031.07 1147.25,-2031.07 1147.25,-2031.07 1580.25,-2031.07 1580.25,-2031.07 1586.25,-2031.07 1592.25,-2037.07 1592.25,-2043.07 1592.25,-2043.07 1592.25,-2055.07 1592.25,-2055.07 1592.25,-2061.07 1586.25,-2067.07 1580.25,-2067.07"/>
-<text xml:space="preserve" text-anchor="middle" x="1363.75" y="-2044.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_active_api_key_count\nsrc/callosum/app.py:4868</text>
+<text xml:space="preserve" text-anchor="middle" x="1363.75" y="-2044.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_active_api_key_count\nsrc/callosum/app.py:4871</text>
 </g>
 <!-- callosum.app:_active_pool -->
 <g id="node5" class="node">
 <title>callosum.app:_active_pool</title>
 <path fill="#fff8dc" stroke="#555555" d="M2977.25,-1207.07C2977.25,-1207.07 2612.5,-1207.07 2612.5,-1207.07 2606.5,-1207.07 2600.5,-1201.07 2600.5,-1195.07 2600.5,-1195.07 2600.5,-1183.07 2600.5,-1183.07 2600.5,-1177.07 2606.5,-1171.07 2612.5,-1171.07 2612.5,-1171.07 2977.25,-1171.07 2977.25,-1171.07 2983.25,-1171.07 2989.25,-1177.07 2989.25,-1183.07 2989.25,-1183.07 2989.25,-1195.07 2989.25,-1195.07 2989.25,-1201.07 2983.25,-1207.07 2977.25,-1207.07"/>
-<text xml:space="preserve" text-anchor="middle" x="2794.88" y="-1184.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_active_pool\nsrc/callosum/app.py:2955</text>
+<text xml:space="preserve" text-anchor="middle" x="2794.88" y="-1184.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_active_pool\nsrc/callosum/app.py:2958</text>
 </g>
 <!-- callosum.app:_append_peer_quality_instruction -->
 <g id="node6" class="node">
@@ -116,7 +116,7 @@
 <g id="node8" class="node">
 <title>callosum.app:_bearer</title>
 <path fill="#fff8dc" stroke="#555555" d="M2232.25,-2061.07C2232.25,-2061.07 1899.75,-2061.07 1899.75,-2061.07 1893.75,-2061.07 1887.75,-2055.07 1887.75,-2049.07 1887.75,-2049.07 1887.75,-2037.07 1887.75,-2037.07 1887.75,-2031.07 1893.75,-2025.07 1899.75,-2025.07 1899.75,-2025.07 2232.25,-2025.07 2232.25,-2025.07 2238.25,-2025.07 2244.25,-2031.07 2244.25,-2037.07 2244.25,-2037.07 2244.25,-2049.07 2244.25,-2049.07 2244.25,-2055.07 2238.25,-2061.07 2232.25,-2061.07"/>
-<text xml:space="preserve" text-anchor="middle" x="2066" y="-2038.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_bearer\nsrc/callosum/app.py:4877</text>
+<text xml:space="preserve" text-anchor="middle" x="2066" y="-2038.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_bearer\nsrc/callosum/app.py:4880</text>
 </g>
 <!-- callosum.app:_body_assistant_texts -->
 <g id="node9" class="node">
@@ -128,13 +128,13 @@
 <g id="node10" class="node">
 <title>callosum.app:_buffered_strip</title>
 <path fill="#fff8dc" stroke="#555555" d="M6739.62,-445.07C6739.62,-445.07 6355.38,-445.07 6355.38,-445.07 6349.38,-445.07 6343.38,-439.07 6343.38,-433.07 6343.38,-433.07 6343.38,-421.07 6343.38,-421.07 6343.38,-415.07 6349.38,-409.07 6355.38,-409.07 6355.38,-409.07 6739.62,-409.07 6739.62,-409.07 6745.62,-409.07 6751.62,-415.07 6751.62,-421.07 6751.62,-421.07 6751.62,-433.07 6751.62,-433.07 6751.62,-439.07 6745.62,-445.07 6739.62,-445.07"/>
-<text xml:space="preserve" text-anchor="middle" x="6547.5" y="-422.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_buffered_strip\nsrc/callosum/app.py:3845</text>
+<text xml:space="preserve" text-anchor="middle" x="6547.5" y="-422.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_buffered_strip\nsrc/callosum/app.py:3848</text>
 </g>
 <!-- callosum.app:_hold_trailing_partial -->
 <g id="node38" class="node">
 <title>callosum.app:_hold_trailing_partial</title>
 <path fill="#fff8dc" stroke="#555555" d="M7300.5,-445.07C7300.5,-445.07 6876.5,-445.07 6876.5,-445.07 6870.5,-445.07 6864.5,-439.07 6864.5,-433.07 6864.5,-433.07 6864.5,-421.07 6864.5,-421.07 6864.5,-415.07 6870.5,-409.07 6876.5,-409.07 6876.5,-409.07 7300.5,-409.07 7300.5,-409.07 7306.5,-409.07 7312.5,-415.07 7312.5,-421.07 7312.5,-421.07 7312.5,-433.07 7312.5,-433.07 7312.5,-439.07 7306.5,-445.07 7300.5,-445.07"/>
-<text xml:space="preserve" text-anchor="middle" x="7088.5" y="-422.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_hold_trailing_partial\nsrc/callosum/app.py:3814</text>
+<text xml:space="preserve" text-anchor="middle" x="7088.5" y="-422.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_hold_trailing_partial\nsrc/callosum/app.py:3817</text>
 </g>
 <!-- callosum.app:_buffered_strip&#45;&gt;callosum.app:_hold_trailing_partial -->
 <g id="edge7" class="edge">
@@ -146,13 +146,13 @@
 <g id="node11" class="node">
 <title>callosum.app:_catalog_boot_resync</title>
 <path fill="#fff8dc" stroke="#555555" d="M1577.62,-1921.07C1577.62,-1921.07 1149.88,-1921.07 1149.88,-1921.07 1143.88,-1921.07 1137.88,-1915.07 1137.88,-1909.07 1137.88,-1909.07 1137.88,-1897.07 1137.88,-1897.07 1137.88,-1891.07 1143.88,-1885.07 1149.88,-1885.07 1149.88,-1885.07 1577.62,-1885.07 1577.62,-1885.07 1583.62,-1885.07 1589.62,-1891.07 1589.62,-1897.07 1589.62,-1897.07 1589.62,-1909.07 1589.62,-1909.07 1589.62,-1915.07 1583.62,-1921.07 1577.62,-1921.07"/>
-<text xml:space="preserve" text-anchor="middle" x="1363.75" y="-1898.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_catalog_boot_resync\nsrc/callosum/app.py:5335</text>
+<text xml:space="preserve" text-anchor="middle" x="1363.75" y="-1898.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_catalog_boot_resync\nsrc/callosum/app.py:5338</text>
 </g>
 <!-- callosum.app:_refresh_catalogs_pass -->
 <g id="node61" class="node">
 <title>callosum.app:_refresh_catalogs_pass</title>
 <path fill="#fff8dc" stroke="#555555" d="M2285.88,-2007.07C2285.88,-2007.07 1846.12,-2007.07 1846.12,-2007.07 1840.12,-2007.07 1834.12,-2001.07 1834.12,-1995.07 1834.12,-1995.07 1834.12,-1983.07 1834.12,-1983.07 1834.12,-1977.07 1840.12,-1971.07 1846.12,-1971.07 1846.12,-1971.07 2285.88,-1971.07 2285.88,-1971.07 2291.88,-1971.07 2297.88,-1977.07 2297.88,-1983.07 2297.88,-1983.07 2297.88,-1995.07 2297.88,-1995.07 2297.88,-2001.07 2291.88,-2007.07 2285.88,-2007.07"/>
-<text xml:space="preserve" text-anchor="middle" x="2066" y="-1984.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_refresh_catalogs_pass\nsrc/callosum/app.py:5305</text>
+<text xml:space="preserve" text-anchor="middle" x="2066" y="-1984.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_refresh_catalogs_pass\nsrc/callosum/app.py:5308</text>
 </g>
 <!-- callosum.app:_catalog_boot_resync&#45;&gt;callosum.app:_refresh_catalogs_pass -->
 <g id="edge8" class="edge">
@@ -164,7 +164,7 @@
 <g id="node12" class="node">
 <title>callosum.app:_clean_sse_blob</title>
 <path fill="#fff8dc" stroke="#555555" d="M5555.62,-499.07C5555.62,-499.07 5164.62,-499.07 5164.62,-499.07 5158.62,-499.07 5152.62,-493.07 5152.62,-487.07 5152.62,-487.07 5152.62,-475.07 5152.62,-475.07 5152.62,-469.07 5158.62,-463.07 5164.62,-463.07 5164.62,-463.07 5555.62,-463.07 5555.62,-463.07 5561.62,-463.07 5567.62,-469.07 5567.62,-475.07 5567.62,-475.07 5567.62,-487.07 5567.62,-487.07 5567.62,-493.07 5561.62,-499.07 5555.62,-499.07"/>
-<text xml:space="preserve" text-anchor="middle" x="5360.12" y="-476.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_clean_sse_blob\nsrc/callosum/app.py:4435</text>
+<text xml:space="preserve" text-anchor="middle" x="5360.12" y="-476.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_clean_sse_blob\nsrc/callosum/app.py:4438</text>
 </g>
 <!-- callosum.app:_clean_sse_blob&#45;&gt;callosum.app:_buffered_strip -->
 <g id="edge9" class="edge">
@@ -188,7 +188,7 @@
 <g id="node68" class="node">
 <title>callosum.app:_scrub_full_text_event</title>
 <path fill="#fff8dc" stroke="#555555" d="M6174.25,-553.07C6174.25,-553.07 5739.75,-553.07 5739.75,-553.07 5733.75,-553.07 5727.75,-547.07 5727.75,-541.07 5727.75,-541.07 5727.75,-529.07 5727.75,-529.07 5727.75,-523.07 5733.75,-517.07 5739.75,-517.07 5739.75,-517.07 6174.25,-517.07 6174.25,-517.07 6180.25,-517.07 6186.25,-523.07 6186.25,-529.07 6186.25,-529.07 6186.25,-541.07 6186.25,-541.07 6186.25,-547.07 6180.25,-553.07 6174.25,-553.07"/>
-<text xml:space="preserve" text-anchor="middle" x="5957" y="-530.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_scrub_full_text_event\nsrc/callosum/app.py:3791</text>
+<text xml:space="preserve" text-anchor="middle" x="5957" y="-530.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_scrub_full_text_event\nsrc/callosum/app.py:3794</text>
 </g>
 <!-- callosum.app:_clean_sse_blob&#45;&gt;callosum.app:_scrub_full_text_event -->
 <g id="edge11" class="edge">
@@ -200,7 +200,7 @@
 <g id="node70" class="node">
 <title>callosum.app:_scrub_peer_quality_from_event</title>
 <path fill="#fff8dc" stroke="#555555" d="M6208.75,-499.07C6208.75,-499.07 5705.25,-499.07 5705.25,-499.07 5699.25,-499.07 5693.25,-493.07 5693.25,-487.07 5693.25,-487.07 5693.25,-475.07 5693.25,-475.07 5693.25,-469.07 5699.25,-463.07 5705.25,-463.07 5705.25,-463.07 6208.75,-463.07 6208.75,-463.07 6214.75,-463.07 6220.75,-469.07 6220.75,-475.07 6220.75,-475.07 6220.75,-487.07 6220.75,-487.07 6220.75,-493.07 6214.75,-499.07 6208.75,-499.07"/>
-<text xml:space="preserve" text-anchor="middle" x="5957" y="-476.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_scrub_peer_quality_from_event\nsrc/callosum/app.py:3856</text>
+<text xml:space="preserve" text-anchor="middle" x="5957" y="-476.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_scrub_peer_quality_from_event\nsrc/callosum/app.py:3859</text>
 </g>
 <!-- callosum.app:_clean_sse_blob&#45;&gt;callosum.app:_scrub_peer_quality_from_event -->
 <g id="edge12" class="edge">
@@ -224,7 +224,7 @@
 <g id="node13" class="node">
 <title>callosum.app:_collect_backend_status</title>
 <path fill="#fff8dc" stroke="#555555" d="M4373.5,-1207.07C4373.5,-1207.07 3927,-1207.07 3927,-1207.07 3921,-1207.07 3915,-1201.07 3915,-1195.07 3915,-1195.07 3915,-1183.07 3915,-1183.07 3915,-1177.07 3921,-1171.07 3927,-1171.07 3927,-1171.07 4373.5,-1171.07 4373.5,-1171.07 4379.5,-1171.07 4385.5,-1177.07 4385.5,-1183.07 4385.5,-1183.07 4385.5,-1195.07 4385.5,-1195.07 4385.5,-1201.07 4379.5,-1207.07 4373.5,-1207.07"/>
-<text xml:space="preserve" text-anchor="middle" x="4150.25" y="-1184.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_collect_backend_status\nsrc/callosum/app.py:5689</text>
+<text xml:space="preserve" text-anchor="middle" x="4150.25" y="-1184.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_collect_backend_status\nsrc/callosum/app.py:5692</text>
 </g>
 <!-- callosum.selector:blocking_meters -->
 <g id="node134" class="node">
@@ -266,7 +266,7 @@
 <g id="node34" class="node">
 <title>callosum.app:_extract_reasoning_effort</title>
 <path fill="#fff8dc" stroke="#555555" d="M5587.88,-922.07C5587.88,-922.07 5132.38,-922.07 5132.38,-922.07 5126.38,-922.07 5120.38,-916.07 5120.38,-910.07 5120.38,-910.07 5120.38,-898.07 5120.38,-898.07 5120.38,-892.07 5126.38,-886.07 5132.38,-886.07 5132.38,-886.07 5587.88,-886.07 5587.88,-886.07 5593.88,-886.07 5599.88,-892.07 5599.88,-898.07 5599.88,-898.07 5599.88,-910.07 5599.88,-910.07 5599.88,-916.07 5593.88,-922.07 5587.88,-922.07"/>
-<text xml:space="preserve" text-anchor="middle" x="5360.12" y="-899.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_extract_reasoning_effort\nsrc/callosum/app.py:4819</text>
+<text xml:space="preserve" text-anchor="middle" x="5360.12" y="-899.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_extract_reasoning_effort\nsrc/callosum/app.py:4822</text>
 </g>
 <!-- callosum.app:_composite_cost_estimate_for_body&#45;&gt;callosum.app:_extract_reasoning_effort -->
 <g id="edge17" class="edge">
@@ -284,13 +284,13 @@
 <g id="node16" class="node">
 <title>callosum.app:_diagnose_backend</title>
 <path fill="#fff8dc" stroke="#555555" d="M2273.88,-1953.07C2273.88,-1953.07 1858.12,-1953.07 1858.12,-1953.07 1852.12,-1953.07 1846.12,-1947.07 1846.12,-1941.07 1846.12,-1941.07 1846.12,-1929.07 1846.12,-1929.07 1846.12,-1923.07 1852.12,-1917.07 1858.12,-1917.07 1858.12,-1917.07 2273.88,-1917.07 2273.88,-1917.07 2279.88,-1917.07 2285.88,-1923.07 2285.88,-1929.07 2285.88,-1929.07 2285.88,-1941.07 2285.88,-1941.07 2285.88,-1947.07 2279.88,-1953.07 2273.88,-1953.07"/>
-<text xml:space="preserve" text-anchor="middle" x="2066" y="-1930.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_diagnose_backend\nsrc/callosum/app.py:4903</text>
+<text xml:space="preserve" text-anchor="middle" x="2066" y="-1930.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_diagnose_backend\nsrc/callosum/app.py:4906</text>
 </g>
 <!-- callosum.app:_evaluate_diagnostic -->
 <g id="node27" class="node">
 <title>callosum.app:_evaluate_diagnostic</title>
 <path fill="#fff8dc" stroke="#555555" d="M3007.25,-2099.07C3007.25,-2099.07 2582.5,-2099.07 2582.5,-2099.07 2576.5,-2099.07 2570.5,-2093.07 2570.5,-2087.07 2570.5,-2087.07 2570.5,-2075.07 2570.5,-2075.07 2570.5,-2069.07 2576.5,-2063.07 2582.5,-2063.07 2582.5,-2063.07 3007.25,-2063.07 3007.25,-2063.07 3013.25,-2063.07 3019.25,-2069.07 3019.25,-2075.07 3019.25,-2075.07 3019.25,-2087.07 3019.25,-2087.07 3019.25,-2093.07 3013.25,-2099.07 3007.25,-2099.07"/>
-<text xml:space="preserve" text-anchor="middle" x="2794.88" y="-2076.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_evaluate_diagnostic\nsrc/callosum/app.py:5505</text>
+<text xml:space="preserve" text-anchor="middle" x="2794.88" y="-2076.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_evaluate_diagnostic\nsrc/callosum/app.py:5508</text>
 </g>
 <!-- callosum.app:_diagnose_backend&#45;&gt;callosum.app:_evaluate_diagnostic -->
 <g id="edge18" class="edge">
@@ -314,7 +314,7 @@
 <g id="node17" class="node">
 <title>callosum.app:_dispatch_internal</title>
 <path fill="#f6d365" stroke="#555555" d="M2269,-899.07C2269,-899.07 1863,-899.07 1863,-899.07 1857,-899.07 1851,-893.07 1851,-887.07 1851,-887.07 1851,-875.07 1851,-875.07 1851,-869.07 1857,-863.07 1863,-863.07 1863,-863.07 2269,-863.07 2269,-863.07 2275,-863.07 2281,-869.07 2281,-875.07 2281,-875.07 2281,-887.07 2281,-887.07 2281,-893.07 2275,-899.07 2269,-899.07"/>
-<text xml:space="preserve" text-anchor="middle" x="2066" y="-876.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_dispatch_internal\nsrc/callosum/app.py:2389</text>
+<text xml:space="preserve" text-anchor="middle" x="2066" y="-876.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_dispatch_internal\nsrc/callosum/app.py:2392</text>
 </g>
 <!-- callosum.app:_dispatch_internal&#45;&gt;callosum.app:_active_pool -->
 <g id="edge20" class="edge">
@@ -332,7 +332,7 @@
 <g id="node19" class="node">
 <title>callosum.app:_dispatch_nonstream_with_cell_retry</title>
 <path fill="#f6d365" stroke="#555555" d="M3061.62,-953.07C3061.62,-953.07 2528.12,-953.07 2528.12,-953.07 2522.12,-953.07 2516.12,-947.07 2516.12,-941.07 2516.12,-941.07 2516.12,-929.07 2516.12,-929.07 2516.12,-923.07 2522.12,-917.07 2528.12,-917.07 2528.12,-917.07 3061.62,-917.07 3061.62,-917.07 3067.62,-917.07 3073.62,-923.07 3073.62,-929.07 3073.62,-929.07 3073.62,-941.07 3073.62,-941.07 3073.62,-947.07 3067.62,-953.07 3061.62,-953.07"/>
-<text xml:space="preserve" text-anchor="middle" x="2794.88" y="-930.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_dispatch_nonstream_with_cell_retry\nsrc/callosum/app.py:2996</text>
+<text xml:space="preserve" text-anchor="middle" x="2794.88" y="-930.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_dispatch_nonstream_with_cell_retry\nsrc/callosum/app.py:2999</text>
 </g>
 <!-- callosum.app:_dispatch_internal&#45;&gt;callosum.app:_dispatch_nonstream_with_cell_retry -->
 <g id="edge22" class="edge">
@@ -344,7 +344,7 @@
 <g id="node22" class="node">
 <title>callosum.app:_dispatch_stream_with_cell_retry</title>
 <path fill="#f6d365" stroke="#555555" d="M3048.5,-899.07C3048.5,-899.07 2541.25,-899.07 2541.25,-899.07 2535.25,-899.07 2529.25,-893.07 2529.25,-887.07 2529.25,-887.07 2529.25,-875.07 2529.25,-875.07 2529.25,-869.07 2535.25,-863.07 2541.25,-863.07 2541.25,-863.07 3048.5,-863.07 3048.5,-863.07 3054.5,-863.07 3060.5,-869.07 3060.5,-875.07 3060.5,-875.07 3060.5,-887.07 3060.5,-887.07 3060.5,-893.07 3054.5,-899.07 3048.5,-899.07"/>
-<text xml:space="preserve" text-anchor="middle" x="2794.88" y="-876.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_dispatch_stream_with_cell_retry\nsrc/callosum/app.py:3119</text>
+<text xml:space="preserve" text-anchor="middle" x="2794.88" y="-876.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_dispatch_stream_with_cell_retry\nsrc/callosum/app.py:3122</text>
 </g>
 <!-- callosum.app:_dispatch_internal&#45;&gt;callosum.app:_dispatch_stream_with_cell_retry -->
 <g id="edge23" class="edge">
@@ -362,7 +362,7 @@
 <g id="node36" class="node">
 <title>callosum.app:_filter_cells_to_routable</title>
 <path fill="#fff8dc" stroke="#555555" d="M3015.5,-807.07C3015.5,-807.07 2574.25,-807.07 2574.25,-807.07 2568.25,-807.07 2562.25,-801.07 2562.25,-795.07 2562.25,-795.07 2562.25,-783.07 2562.25,-783.07 2562.25,-777.07 2568.25,-771.07 2574.25,-771.07 2574.25,-771.07 3015.5,-771.07 3015.5,-771.07 3021.5,-771.07 3027.5,-777.07 3027.5,-783.07 3027.5,-783.07 3027.5,-795.07 3027.5,-795.07 3027.5,-801.07 3021.5,-807.07 3015.5,-807.07"/>
-<text xml:space="preserve" text-anchor="middle" x="2794.88" y="-784.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_filter_cells_to_routable\nsrc/callosum/app.py:2323</text>
+<text xml:space="preserve" text-anchor="middle" x="2794.88" y="-784.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_filter_cells_to_routable\nsrc/callosum/app.py:2326</text>
 </g>
 <!-- callosum.app:_dispatch_internal&#45;&gt;callosum.app:_filter_cells_to_routable -->
 <g id="edge25" class="edge">
@@ -410,7 +410,7 @@
 <g id="node63" class="node">
 <title>callosum.app:_require_model</title>
 <path fill="#fff8dc" stroke="#555555" d="M2987.75,-1261.07C2987.75,-1261.07 2602,-1261.07 2602,-1261.07 2596,-1261.07 2590,-1255.07 2590,-1249.07 2590,-1249.07 2590,-1237.07 2590,-1237.07 2590,-1231.07 2596,-1225.07 2602,-1225.07 2602,-1225.07 2987.75,-1225.07 2987.75,-1225.07 2993.75,-1225.07 2999.75,-1231.07 2999.75,-1237.07 2999.75,-1237.07 2999.75,-1249.07 2999.75,-1249.07 2999.75,-1255.07 2993.75,-1261.07 2987.75,-1261.07"/>
-<text xml:space="preserve" text-anchor="middle" x="2794.88" y="-1238.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_require_model\nsrc/callosum/app.py:2948</text>
+<text xml:space="preserve" text-anchor="middle" x="2794.88" y="-1238.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_require_model\nsrc/callosum/app.py:2951</text>
 </g>
 <!-- callosum.app:_dispatch_internal&#45;&gt;callosum.app:_require_model -->
 <g id="edge29" class="edge">
@@ -422,7 +422,7 @@
 <g id="node65" class="node">
 <title>callosum.app:_routable_backends</title>
 <path fill="#fff8dc" stroke="#555555" d="M5568.75,-1445.07C5568.75,-1445.07 5151.5,-1445.07 5151.5,-1445.07 5145.5,-1445.07 5139.5,-1439.07 5139.5,-1433.07 5139.5,-1433.07 5139.5,-1421.07 5139.5,-1421.07 5139.5,-1415.07 5145.5,-1409.07 5151.5,-1409.07 5151.5,-1409.07 5568.75,-1409.07 5568.75,-1409.07 5574.75,-1409.07 5580.75,-1415.07 5580.75,-1421.07 5580.75,-1421.07 5580.75,-1433.07 5580.75,-1433.07 5580.75,-1439.07 5574.75,-1445.07 5568.75,-1445.07"/>
-<text xml:space="preserve" text-anchor="middle" x="5360.12" y="-1422.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_routable_backends\nsrc/callosum/app.py:2292</text>
+<text xml:space="preserve" text-anchor="middle" x="5360.12" y="-1422.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_routable_backends\nsrc/callosum/app.py:2295</text>
 </g>
 <!-- callosum.app:_dispatch_internal&#45;&gt;callosum.app:_routable_backends -->
 <g id="edge30" class="edge">
@@ -434,7 +434,7 @@
 <g id="node76" class="node">
 <title>callosum.app:_stamp_reasoning_effort</title>
 <path fill="#fff8dc" stroke="#555555" d="M3718.88,-899.07C3718.88,-899.07 3268.62,-899.07 3268.62,-899.07 3262.62,-899.07 3256.62,-893.07 3256.62,-887.07 3256.62,-887.07 3256.62,-875.07 3256.62,-875.07 3256.62,-869.07 3262.62,-863.07 3268.62,-863.07 3268.62,-863.07 3718.88,-863.07 3718.88,-863.07 3724.88,-863.07 3730.88,-869.07 3730.88,-875.07 3730.88,-875.07 3730.88,-887.07 3730.88,-887.07 3730.88,-893.07 3724.88,-899.07 3718.88,-899.07"/>
-<text xml:space="preserve" text-anchor="middle" x="3493.75" y="-876.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_stamp_reasoning_effort\nsrc/callosum/app.py:4800</text>
+<text xml:space="preserve" text-anchor="middle" x="3493.75" y="-876.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_stamp_reasoning_effort\nsrc/callosum/app.py:4803</text>
 </g>
 <!-- callosum.app:_dispatch_internal&#45;&gt;callosum.app:_stamp_reasoning_effort -->
 <g id="edge31" class="edge">
@@ -542,7 +542,7 @@
 <g id="node18" class="node">
 <title>callosum.app:_dispatch_nonstream</title>
 <path fill="#f6d365" stroke="#555555" d="M3707.62,-1007.07C3707.62,-1007.07 3279.88,-1007.07 3279.88,-1007.07 3273.88,-1007.07 3267.88,-1001.07 3267.88,-995.07 3267.88,-995.07 3267.88,-983.07 3267.88,-983.07 3267.88,-977.07 3273.88,-971.07 3279.88,-971.07 3279.88,-971.07 3707.62,-971.07 3707.62,-971.07 3713.62,-971.07 3719.62,-977.07 3719.62,-983.07 3719.62,-983.07 3719.62,-995.07 3719.62,-995.07 3719.62,-1001.07 3713.62,-1007.07 3707.62,-1007.07"/>
-<text xml:space="preserve" text-anchor="middle" x="3493.75" y="-984.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_dispatch_nonstream\nsrc/callosum/app.py:3230</text>
+<text xml:space="preserve" text-anchor="middle" x="3493.75" y="-984.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_dispatch_nonstream\nsrc/callosum/app.py:3233</text>
 </g>
 <!-- callosum.app:_dispatch_nonstream&#45;&gt;callosum.app:_collect_backend_status -->
 <g id="edge40" class="edge">
@@ -572,7 +572,7 @@
 <g id="node44" class="node">
 <title>callosum.app:_log_attempt</title>
 <path fill="#f6d365" stroke="#555555" d="M4947.5,-499.07C4947.5,-499.07 4577.5,-499.07 4577.5,-499.07 4571.5,-499.07 4565.5,-493.07 4565.5,-487.07 4565.5,-487.07 4565.5,-475.07 4565.5,-475.07 4565.5,-469.07 4571.5,-463.07 4577.5,-463.07 4577.5,-463.07 4947.5,-463.07 4947.5,-463.07 4953.5,-463.07 4959.5,-469.07 4959.5,-475.07 4959.5,-475.07 4959.5,-487.07 4959.5,-487.07 4959.5,-493.07 4953.5,-499.07 4947.5,-499.07"/>
-<text xml:space="preserve" text-anchor="middle" x="4762.5" y="-476.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_log_attempt\nsrc/callosum/app.py:4506</text>
+<text xml:space="preserve" text-anchor="middle" x="4762.5" y="-476.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_log_attempt\nsrc/callosum/app.py:4509</text>
 </g>
 <!-- callosum.app:_dispatch_nonstream&#45;&gt;callosum.app:_log_attempt -->
 <g id="edge43" class="edge">
@@ -584,7 +584,7 @@
 <g id="node47" class="node">
 <title>callosum.app:_no_viable</title>
 <path fill="#fff8dc" stroke="#555555" d="M4326.62,-845.07C4326.62,-845.07 3973.88,-845.07 3973.88,-845.07 3967.88,-845.07 3961.88,-839.07 3961.88,-833.07 3961.88,-833.07 3961.88,-821.07 3961.88,-821.07 3961.88,-815.07 3967.88,-809.07 3973.88,-809.07 3973.88,-809.07 4326.62,-809.07 4326.62,-809.07 4332.62,-809.07 4338.62,-815.07 4338.62,-821.07 4338.62,-821.07 4338.62,-833.07 4338.62,-833.07 4338.62,-839.07 4332.62,-845.07 4326.62,-845.07"/>
-<text xml:space="preserve" text-anchor="middle" x="4150.25" y="-822.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_no_viable\nsrc/callosum/app.py:5754</text>
+<text xml:space="preserve" text-anchor="middle" x="4150.25" y="-822.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_no_viable\nsrc/callosum/app.py:5757</text>
 </g>
 <!-- callosum.app:_dispatch_nonstream&#45;&gt;callosum.app:_no_viable -->
 <g id="edge44" class="edge">
@@ -596,7 +596,7 @@
 <g id="node62" class="node">
 <title>callosum.app:_remember_binding</title>
 <path fill="#fff8dc" stroke="#555555" d="M4359.62,-1061.07C4359.62,-1061.07 3940.88,-1061.07 3940.88,-1061.07 3934.88,-1061.07 3928.88,-1055.07 3928.88,-1049.07 3928.88,-1049.07 3928.88,-1037.07 3928.88,-1037.07 3928.88,-1031.07 3934.88,-1025.07 3940.88,-1025.07 3940.88,-1025.07 4359.62,-1025.07 4359.62,-1025.07 4365.62,-1025.07 4371.62,-1031.07 4371.62,-1037.07 4371.62,-1037.07 4371.62,-1049.07 4371.62,-1049.07 4371.62,-1055.07 4365.62,-1061.07 4359.62,-1061.07"/>
-<text xml:space="preserve" text-anchor="middle" x="4150.25" y="-1038.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_remember_binding\nsrc/callosum/app.py:2978</text>
+<text xml:space="preserve" text-anchor="middle" x="4150.25" y="-1038.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_remember_binding\nsrc/callosum/app.py:2981</text>
 </g>
 <!-- callosum.app:_dispatch_nonstream&#45;&gt;callosum.app:_remember_binding -->
 <g id="edge45" class="edge">
@@ -620,7 +620,7 @@
 <g id="node85" class="node">
 <title>callosum.app:_terminal_http</title>
 <path fill="#fff8dc" stroke="#555555" d="M4340.12,-1007.07C4340.12,-1007.07 3960.38,-1007.07 3960.38,-1007.07 3954.38,-1007.07 3948.38,-1001.07 3948.38,-995.07 3948.38,-995.07 3948.38,-983.07 3948.38,-983.07 3948.38,-977.07 3954.38,-971.07 3960.38,-971.07 3960.38,-971.07 4340.12,-971.07 4340.12,-971.07 4346.12,-971.07 4352.12,-977.07 4352.12,-983.07 4352.12,-983.07 4352.12,-995.07 4352.12,-995.07 4352.12,-1001.07 4346.12,-1007.07 4340.12,-1007.07"/>
-<text xml:space="preserve" text-anchor="middle" x="4150.25" y="-984.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_terminal_http\nsrc/callosum/app.py:5684</text>
+<text xml:space="preserve" text-anchor="middle" x="4150.25" y="-984.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_terminal_http\nsrc/callosum/app.py:5687</text>
 </g>
 <!-- callosum.app:_dispatch_nonstream&#45;&gt;callosum.app:_terminal_http -->
 <g id="edge47" class="edge">
@@ -686,7 +686,7 @@
 <g id="node20" class="node">
 <title>callosum.app:_dispatch_route</title>
 <path fill="#f6d365" stroke="#555555" d="M1558.5,-1126.07C1558.5,-1126.07 1169,-1126.07 1169,-1126.07 1163,-1126.07 1157,-1120.07 1157,-1114.07 1157,-1114.07 1157,-1102.07 1157,-1102.07 1157,-1096.07 1163,-1090.07 1169,-1090.07 1169,-1090.07 1558.5,-1090.07 1558.5,-1090.07 1564.5,-1090.07 1570.5,-1096.07 1570.5,-1102.07 1570.5,-1102.07 1570.5,-1114.07 1570.5,-1114.07 1570.5,-1120.07 1564.5,-1126.07 1558.5,-1126.07"/>
-<text xml:space="preserve" text-anchor="middle" x="1363.75" y="-1103.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_dispatch_route\nsrc/callosum/app.py:2335</text>
+<text xml:space="preserve" text-anchor="middle" x="1363.75" y="-1103.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_dispatch_route\nsrc/callosum/app.py:2338</text>
 </g>
 <!-- callosum.app:_dispatch_route&#45;&gt;callosum.app:_dispatch_internal -->
 <g id="edge54" class="edge">
@@ -698,7 +698,7 @@
 <g id="node71" class="node">
 <title>callosum.app:_session_id_from_request</title>
 <path fill="#fff8dc" stroke="#555555" d="M2294.5,-1126.07C2294.5,-1126.07 1837.5,-1126.07 1837.5,-1126.07 1831.5,-1126.07 1825.5,-1120.07 1825.5,-1114.07 1825.5,-1114.07 1825.5,-1102.07 1825.5,-1102.07 1825.5,-1096.07 1831.5,-1090.07 1837.5,-1090.07 1837.5,-1090.07 2294.5,-1090.07 2294.5,-1090.07 2300.5,-1090.07 2306.5,-1096.07 2306.5,-1102.07 2306.5,-1102.07 2306.5,-1114.07 2306.5,-1114.07 2306.5,-1120.07 2300.5,-1126.07 2294.5,-1126.07"/>
-<text xml:space="preserve" text-anchor="middle" x="2066" y="-1103.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_session_id_from_request\nsrc/callosum/app.py:2961</text>
+<text xml:space="preserve" text-anchor="middle" x="2066" y="-1103.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_session_id_from_request\nsrc/callosum/app.py:2964</text>
 </g>
 <!-- callosum.app:_dispatch_route&#45;&gt;callosum.app:_session_id_from_request -->
 <g id="edge55" class="edge">
@@ -710,7 +710,7 @@
 <g id="node21" class="node">
 <title>callosum.app:_dispatch_stream</title>
 <path fill="#f6d365" stroke="#555555" d="M3694.5,-845.07C3694.5,-845.07 3293,-845.07 3293,-845.07 3287,-845.07 3281,-839.07 3281,-833.07 3281,-833.07 3281,-821.07 3281,-821.07 3281,-815.07 3287,-809.07 3293,-809.07 3293,-809.07 3694.5,-809.07 3694.5,-809.07 3700.5,-809.07 3706.5,-815.07 3706.5,-821.07 3706.5,-821.07 3706.5,-833.07 3706.5,-833.07 3706.5,-839.07 3700.5,-845.07 3694.5,-845.07"/>
-<text xml:space="preserve" text-anchor="middle" x="3493.75" y="-822.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_dispatch_stream\nsrc/callosum/app.py:3421</text>
+<text xml:space="preserve" text-anchor="middle" x="3493.75" y="-822.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_dispatch_stream\nsrc/callosum/app.py:3424</text>
 </g>
 <!-- callosum.app:_dispatch_stream&#45;&gt;callosum.app:_collect_backend_status -->
 <g id="edge56" class="edge">
@@ -728,7 +728,7 @@
 <g id="node23" class="node">
 <title>callosum.app:_empty_iter</title>
 <path fill="#fff8dc" stroke="#555555" d="M4331.12,-591.07C4331.12,-591.07 3969.38,-591.07 3969.38,-591.07 3963.38,-591.07 3957.38,-585.07 3957.38,-579.07 3957.38,-579.07 3957.38,-567.07 3957.38,-567.07 3957.38,-561.07 3963.38,-555.07 3969.38,-555.07 3969.38,-555.07 4331.12,-555.07 4331.12,-555.07 4337.12,-555.07 4343.12,-561.07 4343.12,-567.07 4343.12,-567.07 4343.12,-579.07 4343.12,-579.07 4343.12,-585.07 4337.12,-591.07 4331.12,-591.07"/>
-<text xml:space="preserve" text-anchor="middle" x="4150.25" y="-568.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_empty_iter\nsrc/callosum/app.py:4375</text>
+<text xml:space="preserve" text-anchor="middle" x="4150.25" y="-568.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_empty_iter\nsrc/callosum/app.py:4378</text>
 </g>
 <!-- callosum.app:_dispatch_stream&#45;&gt;callosum.app:_empty_iter -->
 <g id="edge58" class="edge">
@@ -740,7 +740,7 @@
 <g id="node33" class="node">
 <title>callosum.app:_extract_complexity_from_stream</title>
 <path fill="#fff8dc" stroke="#555555" d="M4406.5,-683.07C4406.5,-683.07 3894,-683.07 3894,-683.07 3888,-683.07 3882,-677.07 3882,-671.07 3882,-671.07 3882,-659.07 3882,-659.07 3882,-653.07 3888,-647.07 3894,-647.07 3894,-647.07 4406.5,-647.07 4406.5,-647.07 4412.5,-647.07 4418.5,-653.07 4418.5,-659.07 4418.5,-659.07 4418.5,-671.07 4418.5,-671.07 4418.5,-677.07 4412.5,-683.07 4406.5,-683.07"/>
-<text xml:space="preserve" text-anchor="middle" x="4150.25" y="-660.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_extract_complexity_from_stream\nsrc/callosum/app.py:4047</text>
+<text xml:space="preserve" text-anchor="middle" x="4150.25" y="-660.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_extract_complexity_from_stream\nsrc/callosum/app.py:4050</text>
 </g>
 <!-- callosum.app:_dispatch_stream&#45;&gt;callosum.app:_extract_complexity_from_stream -->
 <g id="edge59" class="edge">
@@ -758,7 +758,7 @@
 <g id="node45" class="node">
 <title>callosum.app:_log_on_complete</title>
 <path fill="#fff8dc" stroke="#555555" d="M4351.75,-499.07C4351.75,-499.07 3948.75,-499.07 3948.75,-499.07 3942.75,-499.07 3936.75,-493.07 3936.75,-487.07 3936.75,-487.07 3936.75,-475.07 3936.75,-475.07 3936.75,-469.07 3942.75,-463.07 3948.75,-463.07 3948.75,-463.07 4351.75,-463.07 4351.75,-463.07 4357.75,-463.07 4363.75,-469.07 4363.75,-475.07 4363.75,-475.07 4363.75,-487.07 4363.75,-487.07 4363.75,-493.07 4357.75,-499.07 4351.75,-499.07"/>
-<text xml:space="preserve" text-anchor="middle" x="4150.25" y="-476.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_log_on_complete\nsrc/callosum/app.py:4380</text>
+<text xml:space="preserve" text-anchor="middle" x="4150.25" y="-476.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_log_on_complete\nsrc/callosum/app.py:4383</text>
 </g>
 <!-- callosum.app:_dispatch_stream&#45;&gt;callosum.app:_log_on_complete -->
 <g id="edge61" class="edge">
@@ -776,7 +776,7 @@
 <g id="node58" class="node">
 <title>callosum.app:_prepend</title>
 <path fill="#fff8dc" stroke="#555555" d="M4322.88,-353.07C4322.88,-353.07 3977.62,-353.07 3977.62,-353.07 3971.62,-353.07 3965.62,-347.07 3965.62,-341.07 3965.62,-341.07 3965.62,-329.07 3965.62,-329.07 3965.62,-323.07 3971.62,-317.07 3977.62,-317.07 3977.62,-317.07 4322.88,-317.07 4322.88,-317.07 4328.88,-317.07 4334.88,-323.07 4334.88,-329.07 4334.88,-329.07 4334.88,-341.07 4334.88,-341.07 4334.88,-347.07 4328.88,-353.07 4322.88,-353.07"/>
-<text xml:space="preserve" text-anchor="middle" x="4150.25" y="-330.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_prepend\nsrc/callosum/app.py:3656</text>
+<text xml:space="preserve" text-anchor="middle" x="4150.25" y="-330.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_prepend\nsrc/callosum/app.py:3659</text>
 </g>
 <!-- callosum.app:_dispatch_stream&#45;&gt;callosum.app:_prepend -->
 <g id="edge63" class="edge">
@@ -800,7 +800,7 @@
 <g id="node67" class="node">
 <title>callosum.app:_safe_stream</title>
 <path fill="#fff8dc" stroke="#555555" d="M4336,-791.07C4336,-791.07 3964.5,-791.07 3964.5,-791.07 3958.5,-791.07 3952.5,-785.07 3952.5,-779.07 3952.5,-779.07 3952.5,-767.07 3952.5,-767.07 3952.5,-761.07 3958.5,-755.07 3964.5,-755.07 3964.5,-755.07 4336,-755.07 4336,-755.07 4342,-755.07 4348,-761.07 4348,-767.07 4348,-767.07 4348,-779.07 4348,-779.07 4348,-785.07 4342,-791.07 4336,-791.07"/>
-<text xml:space="preserve" text-anchor="middle" x="4150.25" y="-768.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_safe_stream\nsrc/callosum/app.py:3662</text>
+<text xml:space="preserve" text-anchor="middle" x="4150.25" y="-768.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_safe_stream\nsrc/callosum/app.py:3665</text>
 </g>
 <!-- callosum.app:_dispatch_stream&#45;&gt;callosum.app:_safe_stream -->
 <g id="edge66" class="edge">
@@ -812,7 +812,7 @@
 <g id="node69" class="node">
 <title>callosum.app:_scrub_full_text_events</title>
 <path fill="#fff8dc" stroke="#555555" d="M5581.12,-553.07C5581.12,-553.07 5139.12,-553.07 5139.12,-553.07 5133.12,-553.07 5127.12,-547.07 5127.12,-541.07 5127.12,-541.07 5127.12,-529.07 5127.12,-529.07 5127.12,-523.07 5133.12,-517.07 5139.12,-517.07 5139.12,-517.07 5581.12,-517.07 5581.12,-517.07 5587.12,-517.07 5593.12,-523.07 5593.12,-529.07 5593.12,-529.07 5593.12,-541.07 5593.12,-541.07 5593.12,-547.07 5587.12,-553.07 5581.12,-553.07"/>
-<text xml:space="preserve" text-anchor="middle" x="5360.12" y="-530.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_scrub_full_text_events\nsrc/callosum/app.py:4170</text>
+<text xml:space="preserve" text-anchor="middle" x="5360.12" y="-530.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_scrub_full_text_events\nsrc/callosum/app.py:4173</text>
 </g>
 <!-- callosum.app:_dispatch_stream&#45;&gt;callosum.app:_scrub_full_text_events -->
 <g id="edge67" class="edge">
@@ -824,7 +824,7 @@
 <g id="node79" class="node">
 <title>callosum.app:_strip_peer_quality_markers_from_stream</title>
 <path fill="#fff8dc" stroke="#555555" d="M4434.62,-407.07C4434.62,-407.07 3865.88,-407.07 3865.88,-407.07 3859.88,-407.07 3853.88,-401.07 3853.88,-395.07 3853.88,-395.07 3853.88,-383.07 3853.88,-383.07 3853.88,-377.07 3859.88,-371.07 3865.88,-371.07 3865.88,-371.07 4434.62,-371.07 4434.62,-371.07 4440.62,-371.07 4446.62,-377.07 4446.62,-383.07 4446.62,-383.07 4446.62,-395.07 4446.62,-395.07 4446.62,-401.07 4440.62,-407.07 4434.62,-407.07"/>
-<text xml:space="preserve" text-anchor="middle" x="4150.25" y="-384.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_strip_peer_quality_markers_from_stream\nsrc/callosum/app.py:4226</text>
+<text xml:space="preserve" text-anchor="middle" x="4150.25" y="-384.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_strip_peer_quality_markers_from_stream\nsrc/callosum/app.py:4229</text>
 </g>
 <!-- callosum.app:_dispatch_stream&#45;&gt;callosum.app:_strip_peer_quality_markers_from_stream -->
 <g id="edge68" class="edge">
@@ -836,7 +836,7 @@
 <g id="node80" class="node">
 <title>callosum.app:_strip_trailing_complexity_marker</title>
 <path fill="#fff8dc" stroke="#555555" d="M4406.88,-737.07C4406.88,-737.07 3893.62,-737.07 3893.62,-737.07 3887.62,-737.07 3881.62,-731.07 3881.62,-725.07 3881.62,-725.07 3881.62,-713.07 3881.62,-713.07 3881.62,-707.07 3887.62,-701.07 3893.62,-701.07 3893.62,-701.07 4406.88,-701.07 4406.88,-701.07 4412.88,-701.07 4418.88,-707.07 4418.88,-713.07 4418.88,-713.07 4418.88,-725.07 4418.88,-725.07 4418.88,-731.07 4412.88,-737.07 4406.88,-737.07"/>
-<text xml:space="preserve" text-anchor="middle" x="4150.25" y="-714.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_strip_trailing_complexity_marker\nsrc/callosum/app.py:4309</text>
+<text xml:space="preserve" text-anchor="middle" x="4150.25" y="-714.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_strip_trailing_complexity_marker\nsrc/callosum/app.py:4312</text>
 </g>
 <!-- callosum.app:_dispatch_stream&#45;&gt;callosum.app:_strip_trailing_complexity_marker -->
 <g id="edge69" class="edge">
@@ -920,7 +920,7 @@
 <g id="node26" class="node">
 <title>callosum.app:_evaluate_codex_diagnostic</title>
 <path fill="#fff8dc" stroke="#555555" d="M3730.12,-2072.07C3730.12,-2072.07 3257.38,-2072.07 3257.38,-2072.07 3251.38,-2072.07 3245.38,-2066.07 3245.38,-2060.07 3245.38,-2060.07 3245.38,-2048.07 3245.38,-2048.07 3245.38,-2042.07 3251.38,-2036.07 3257.38,-2036.07 3257.38,-2036.07 3730.12,-2036.07 3730.12,-2036.07 3736.12,-2036.07 3742.12,-2042.07 3742.12,-2048.07 3742.12,-2048.07 3742.12,-2060.07 3742.12,-2060.07 3742.12,-2066.07 3736.12,-2072.07 3730.12,-2072.07"/>
-<text xml:space="preserve" text-anchor="middle" x="3493.75" y="-2049.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_evaluate_codex_diagnostic\nsrc/callosum/app.py:5520</text>
+<text xml:space="preserve" text-anchor="middle" x="3493.75" y="-2049.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_evaluate_codex_diagnostic\nsrc/callosum/app.py:5523</text>
 </g>
 <!-- callosum.app:_evaluate_diagnostic&#45;&gt;callosum.app:_evaluate_codex_diagnostic -->
 <g id="edge79" class="edge">
@@ -932,7 +932,7 @@
 <g id="node28" class="node">
 <title>callosum.app:_evaluate_generic_diagnostic</title>
 <path fill="#fff8dc" stroke="#555555" d="M3735.38,-2126.07C3735.38,-2126.07 3252.12,-2126.07 3252.12,-2126.07 3246.12,-2126.07 3240.12,-2120.07 3240.12,-2114.07 3240.12,-2114.07 3240.12,-2102.07 3240.12,-2102.07 3240.12,-2096.07 3246.12,-2090.07 3252.12,-2090.07 3252.12,-2090.07 3735.38,-2090.07 3735.38,-2090.07 3741.38,-2090.07 3747.38,-2096.07 3747.38,-2102.07 3747.38,-2102.07 3747.38,-2114.07 3747.38,-2114.07 3747.38,-2120.07 3741.38,-2126.07 3735.38,-2126.07"/>
-<text xml:space="preserve" text-anchor="middle" x="3493.75" y="-2103.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_evaluate_generic_diagnostic\nsrc/callosum/app.py:5546</text>
+<text xml:space="preserve" text-anchor="middle" x="3493.75" y="-2103.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_evaluate_generic_diagnostic\nsrc/callosum/app.py:5549</text>
 </g>
 <!-- callosum.app:_evaluate_diagnostic&#45;&gt;callosum.app:_evaluate_generic_diagnostic -->
 <g id="edge80" class="edge">
@@ -944,7 +944,7 @@
 <g id="node29" class="node">
 <title>callosum.app:_event_delta_text</title>
 <path fill="#fff8dc" stroke="#555555" d="M4963.25,-687.07C4963.25,-687.07 4561.75,-687.07 4561.75,-687.07 4555.75,-687.07 4549.75,-681.07 4549.75,-675.07 4549.75,-675.07 4549.75,-663.07 4549.75,-663.07 4549.75,-657.07 4555.75,-651.07 4561.75,-651.07 4561.75,-651.07 4963.25,-651.07 4963.25,-651.07 4969.25,-651.07 4975.25,-657.07 4975.25,-663.07 4975.25,-663.07 4975.25,-675.07 4975.25,-675.07 4975.25,-681.07 4969.25,-687.07 4963.25,-687.07"/>
-<text xml:space="preserve" text-anchor="middle" x="4762.5" y="-664.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_event_delta_text\nsrc/callosum/app.py:3893</text>
+<text xml:space="preserve" text-anchor="middle" x="4762.5" y="-664.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_event_delta_text\nsrc/callosum/app.py:3896</text>
 </g>
 <!-- callosum.app:_example_qop_score -->
 <g id="node30" class="node">
@@ -974,7 +974,7 @@
 <g id="node77" class="node">
 <title>callosum.app:_strip_chars_from_event</title>
 <path fill="#fff8dc" stroke="#555555" d="M4986.88,-633.07C4986.88,-633.07 4538.12,-633.07 4538.12,-633.07 4532.12,-633.07 4526.12,-627.07 4526.12,-621.07 4526.12,-621.07 4526.12,-609.07 4526.12,-609.07 4526.12,-603.07 4532.12,-597.07 4538.12,-597.07 4538.12,-597.07 4986.88,-597.07 4986.88,-597.07 4992.88,-597.07 4998.88,-603.07 4998.88,-609.07 4998.88,-609.07 4998.88,-621.07 4998.88,-621.07 4998.88,-627.07 4992.88,-633.07 4986.88,-633.07"/>
-<text xml:space="preserve" text-anchor="middle" x="4762.5" y="-610.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_strip_chars_from_event\nsrc/callosum/app.py:3926</text>
+<text xml:space="preserve" text-anchor="middle" x="4762.5" y="-610.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_strip_chars_from_event\nsrc/callosum/app.py:3929</text>
 </g>
 <!-- callosum.app:_extract_complexity_from_stream&#45;&gt;callosum.app:_strip_chars_from_event -->
 <g id="edge84" class="edge">
@@ -986,13 +986,13 @@
 <g id="node35" class="node">
 <title>callosum.app:_extract_tokens</title>
 <path fill="#fff8dc" stroke="#555555" d="M5554.5,-291.07C5554.5,-291.07 5165.75,-291.07 5165.75,-291.07 5159.75,-291.07 5153.75,-285.07 5153.75,-279.07 5153.75,-279.07 5153.75,-267.07 5153.75,-267.07 5153.75,-261.07 5159.75,-255.07 5165.75,-255.07 5165.75,-255.07 5554.5,-255.07 5554.5,-255.07 5560.5,-255.07 5566.5,-261.07 5566.5,-267.07 5566.5,-267.07 5566.5,-279.07 5566.5,-279.07 5566.5,-285.07 5560.5,-291.07 5554.5,-291.07"/>
-<text xml:space="preserve" text-anchor="middle" x="5360.12" y="-268.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_extract_tokens\nsrc/callosum/app.py:4774</text>
+<text xml:space="preserve" text-anchor="middle" x="5360.12" y="-268.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_extract_tokens\nsrc/callosum/app.py:4777</text>
 </g>
 <!-- callosum.app:_int -->
 <g id="node42" class="node">
 <title>callosum.app:_int</title>
 <path fill="#fff8dc" stroke="#555555" d="M6109.75,-283.07C6109.75,-283.07 5804.25,-283.07 5804.25,-283.07 5798.25,-283.07 5792.25,-277.07 5792.25,-271.07 5792.25,-271.07 5792.25,-259.07 5792.25,-259.07 5792.25,-253.07 5798.25,-247.07 5804.25,-247.07 5804.25,-247.07 6109.75,-247.07 6109.75,-247.07 6115.75,-247.07 6121.75,-253.07 6121.75,-259.07 6121.75,-259.07 6121.75,-271.07 6121.75,-271.07 6121.75,-277.07 6115.75,-283.07 6109.75,-283.07"/>
-<text xml:space="preserve" text-anchor="middle" x="5957" y="-260.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_int\nsrc/callosum/app.py:4832</text>
+<text xml:space="preserve" text-anchor="middle" x="5957" y="-260.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_int\nsrc/callosum/app.py:4835</text>
 </g>
 <!-- callosum.app:_extract_tokens&#45;&gt;callosum.app:_int -->
 <g id="edge85" class="edge">
@@ -1004,7 +1004,7 @@
 <g id="node37" class="node">
 <title>callosum.app:_get_at_path</title>
 <path fill="#fff8dc" stroke="#555555" d="M6731.75,-553.07C6731.75,-553.07 6363.25,-553.07 6363.25,-553.07 6357.25,-553.07 6351.25,-547.07 6351.25,-541.07 6351.25,-541.07 6351.25,-529.07 6351.25,-529.07 6351.25,-523.07 6357.25,-517.07 6363.25,-517.07 6363.25,-517.07 6731.75,-517.07 6731.75,-517.07 6737.75,-517.07 6743.75,-523.07 6743.75,-529.07 6743.75,-529.07 6743.75,-541.07 6743.75,-541.07 6743.75,-547.07 6737.75,-553.07 6731.75,-553.07"/>
-<text xml:space="preserve" text-anchor="middle" x="6547.5" y="-530.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_get_at_path\nsrc/callosum/app.py:3728</text>
+<text xml:space="preserve" text-anchor="middle" x="6547.5" y="-530.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_get_at_path\nsrc/callosum/app.py:3731</text>
 </g>
 <!-- callosum.app:_inject_peer_quality_prompt&#45;&gt;callosum.app:_append_peer_quality_instruction -->
 <g id="edge86" class="edge">
@@ -1106,7 +1106,7 @@
 <g id="node40" class="node">
 <title>callosum.app:_install_auth_routes</title>
 <path fill="#fff8dc" stroke="#555555" d="M1572.38,-2013.07C1572.38,-2013.07 1155.12,-2013.07 1155.12,-2013.07 1149.12,-2013.07 1143.12,-2007.07 1143.12,-2001.07 1143.12,-2001.07 1143.12,-1989.07 1143.12,-1989.07 1143.12,-1983.07 1149.12,-1977.07 1155.12,-1977.07 1155.12,-1977.07 1572.38,-1977.07 1572.38,-1977.07 1578.38,-1977.07 1584.38,-1983.07 1584.38,-1989.07 1584.38,-1989.07 1584.38,-2001.07 1584.38,-2001.07 1584.38,-2007.07 1578.38,-2013.07 1572.38,-2013.07"/>
-<text xml:space="preserve" text-anchor="middle" x="1363.75" y="-1990.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_install_auth_routes\nsrc/callosum/app.py:5568</text>
+<text xml:space="preserve" text-anchor="middle" x="1363.75" y="-1990.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_install_auth_routes\nsrc/callosum/app.py:5571</text>
 </g>
 <!-- callosum.app:_install_auth_routes&#45;&gt;callosum.app:_bearer -->
 <g id="edge95" class="edge">
@@ -1118,7 +1118,7 @@
 <g id="node41" class="node">
 <title>callosum.app:_install_web_ui</title>
 <path fill="#fff8dc" stroke="#555555" d="M1555.5,-207.07C1555.5,-207.07 1172,-207.07 1172,-207.07 1166,-207.07 1160,-201.07 1160,-195.07 1160,-195.07 1160,-183.07 1160,-183.07 1160,-177.07 1166,-171.07 1172,-171.07 1172,-171.07 1555.5,-171.07 1555.5,-171.07 1561.5,-171.07 1567.5,-177.07 1567.5,-183.07 1567.5,-183.07 1567.5,-195.07 1567.5,-195.07 1567.5,-201.07 1561.5,-207.07 1555.5,-207.07"/>
-<text xml:space="preserve" text-anchor="middle" x="1363.75" y="-184.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_install_web_ui\nsrc/callosum/app.py:5665</text>
+<text xml:space="preserve" text-anchor="middle" x="1363.75" y="-184.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_install_web_ui\nsrc/callosum/app.py:5668</text>
 </g>
 <!-- callosum.app:_log_attempt&#45;&gt;callosum.app:_clean_sse_blob -->
 <g id="edge96" class="edge">
@@ -1172,7 +1172,7 @@
 <g id="node46" class="node">
 <title>callosum.app:_log_smoke_result</title>
 <path fill="#fff8dc" stroke="#555555" d="M2269,-1899.07C2269,-1899.07 1863,-1899.07 1863,-1899.07 1857,-1899.07 1851,-1893.07 1851,-1887.07 1851,-1887.07 1851,-1875.07 1851,-1875.07 1851,-1869.07 1857,-1863.07 1863,-1863.07 1863,-1863.07 2269,-1863.07 2269,-1863.07 2275,-1863.07 2281,-1869.07 2281,-1875.07 2281,-1875.07 2281,-1887.07 2281,-1887.07 2281,-1893.07 2275,-1899.07 2269,-1899.07"/>
-<text xml:space="preserve" text-anchor="middle" x="2066" y="-1876.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_log_smoke_result\nsrc/callosum/app.py:5433</text>
+<text xml:space="preserve" text-anchor="middle" x="2066" y="-1876.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_log_smoke_result\nsrc/callosum/app.py:5436</text>
 </g>
 <!-- callosum.app:_utc_timestamp -->
 <g id="node87" class="node">
@@ -1190,7 +1190,7 @@
 <g id="node48" class="node">
 <title>callosum.app:_path_requires_api_key</title>
 <path fill="#fff8dc" stroke="#555555" d="M1584,-153.07C1584,-153.07 1143.5,-153.07 1143.5,-153.07 1137.5,-153.07 1131.5,-147.07 1131.5,-141.07 1131.5,-141.07 1131.5,-129.07 1131.5,-129.07 1131.5,-123.07 1137.5,-117.07 1143.5,-117.07 1143.5,-117.07 1584,-117.07 1584,-117.07 1590,-117.07 1596,-123.07 1596,-129.07 1596,-129.07 1596,-141.07 1596,-141.07 1596,-147.07 1590,-153.07 1584,-153.07"/>
-<text xml:space="preserve" text-anchor="middle" x="1363.75" y="-130.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_path_requires_api_key\nsrc/callosum/app.py:4888</text>
+<text xml:space="preserve" text-anchor="middle" x="1363.75" y="-130.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_path_requires_api_key\nsrc/callosum/app.py:4891</text>
 </g>
 <!-- callosum.app:_peer_quality_capture_rate -->
 <g id="node50" class="node">
@@ -1256,7 +1256,7 @@
 <g id="node60" class="node">
 <title>callosum.app:_quota_to_dict</title>
 <path fill="#fff8dc" stroke="#555555" d="M1553.62,-99.07C1553.62,-99.07 1173.88,-99.07 1173.88,-99.07 1167.88,-99.07 1161.88,-93.07 1161.88,-87.07 1161.88,-87.07 1161.88,-75.07 1161.88,-75.07 1161.88,-69.07 1167.88,-63.07 1173.88,-63.07 1173.88,-63.07 1553.62,-63.07 1553.62,-63.07 1559.62,-63.07 1565.62,-69.07 1565.62,-75.07 1565.62,-75.07 1565.62,-87.07 1565.62,-87.07 1565.62,-93.07 1559.62,-99.07 1553.62,-99.07"/>
-<text xml:space="preserve" text-anchor="middle" x="1363.75" y="-76.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_quota_to_dict\nsrc/callosum/app.py:4842</text>
+<text xml:space="preserve" text-anchor="middle" x="1363.75" y="-76.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_quota_to_dict\nsrc/callosum/app.py:4845</text>
 </g>
 <!-- callosum.app:_routable_backends&#45;&gt;callosum.selector:blocking_meters -->
 <g id="edge109" class="edge">
@@ -1268,7 +1268,7 @@
 <g id="node66" class="node">
 <title>callosum.app:_run_startup_smoke_test</title>
 <path fill="#fff8dc" stroke="#555555" d="M1590.38,-1791.07C1590.38,-1791.07 1137.12,-1791.07 1137.12,-1791.07 1131.12,-1791.07 1125.12,-1785.07 1125.12,-1779.07 1125.12,-1779.07 1125.12,-1767.07 1125.12,-1767.07 1125.12,-1761.07 1131.12,-1755.07 1137.12,-1755.07 1137.12,-1755.07 1590.38,-1755.07 1590.38,-1755.07 1596.38,-1755.07 1602.38,-1761.07 1602.38,-1767.07 1602.38,-1767.07 1602.38,-1779.07 1602.38,-1779.07 1602.38,-1785.07 1596.38,-1791.07 1590.38,-1791.07"/>
-<text xml:space="preserve" text-anchor="middle" x="1363.75" y="-1768.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_run_startup_smoke_test\nsrc/callosum/app.py:5403</text>
+<text xml:space="preserve" text-anchor="middle" x="1363.75" y="-1768.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_run_startup_smoke_test\nsrc/callosum/app.py:5406</text>
 </g>
 <!-- callosum.app:_run_startup_smoke_test&#45;&gt;callosum.app:_diagnose_backend -->
 <g id="edge110" class="edge">
@@ -1304,7 +1304,7 @@
 <g id="node72" class="node">
 <title>callosum.app:_set_at_path</title>
 <path fill="#fff8dc" stroke="#555555" d="M6731,-499.07C6731,-499.07 6364,-499.07 6364,-499.07 6358,-499.07 6352,-493.07 6352,-487.07 6352,-487.07 6352,-475.07 6352,-475.07 6352,-469.07 6358,-463.07 6364,-463.07 6364,-463.07 6731,-463.07 6731,-463.07 6737,-463.07 6743,-469.07 6743,-475.07 6743,-475.07 6743,-487.07 6743,-487.07 6743,-493.07 6737,-499.07 6731,-499.07"/>
-<text xml:space="preserve" text-anchor="middle" x="6547.5" y="-476.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_set_at_path\nsrc/callosum/app.py:3756</text>
+<text xml:space="preserve" text-anchor="middle" x="6547.5" y="-476.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_set_at_path\nsrc/callosum/app.py:3759</text>
 </g>
 <!-- callosum.app:_scrub_full_text_event&#45;&gt;callosum.app:_set_at_path -->
 <g id="edge115" class="edge">
@@ -1376,7 +1376,7 @@
 <g id="node78" class="node">
 <title>callosum.app:_strip_chars_from_event_end</title>
 <path fill="#fff8dc" stroke="#555555" d="M5003.38,-741.07C5003.38,-741.07 4521.62,-741.07 4521.62,-741.07 4515.62,-741.07 4509.62,-735.07 4509.62,-729.07 4509.62,-729.07 4509.62,-717.07 4509.62,-717.07 4509.62,-711.07 4515.62,-705.07 4521.62,-705.07 4521.62,-705.07 5003.38,-705.07 5003.38,-705.07 5009.38,-705.07 5015.38,-711.07 5015.38,-717.07 5015.38,-717.07 5015.38,-729.07 5015.38,-729.07 5015.38,-735.07 5009.38,-741.07 5003.38,-741.07"/>
-<text xml:space="preserve" text-anchor="middle" x="4762.5" y="-718.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_strip_chars_from_event_end\nsrc/callosum/app.py:3991</text>
+<text xml:space="preserve" text-anchor="middle" x="4762.5" y="-718.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_strip_chars_from_event_end\nsrc/callosum/app.py:3994</text>
 </g>
 <!-- callosum.app:_strip_peer_quality_markers_from_stream&#45;&gt;callosum.app:_scrub_peer_quality_from_event -->
 <g id="edge124" class="edge">
@@ -1388,7 +1388,7 @@
 <g id="node82" class="node">
 <title>callosum.app:_subtract_audit_tokens_from_event</title>
 <path fill="#fff8dc" stroke="#555555" d="M5024.75,-445.07C5024.75,-445.07 4500.25,-445.07 4500.25,-445.07 4494.25,-445.07 4488.25,-439.07 4488.25,-433.07 4488.25,-433.07 4488.25,-421.07 4488.25,-421.07 4488.25,-415.07 4494.25,-409.07 4500.25,-409.07 4500.25,-409.07 5024.75,-409.07 5024.75,-409.07 5030.75,-409.07 5036.75,-415.07 5036.75,-421.07 5036.75,-421.07 5036.75,-433.07 5036.75,-433.07 5036.75,-439.07 5030.75,-445.07 5024.75,-445.07"/>
-<text xml:space="preserve" text-anchor="middle" x="4762.5" y="-422.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_subtract_audit_tokens_from_event\nsrc/callosum/app.py:4281</text>
+<text xml:space="preserve" text-anchor="middle" x="4762.5" y="-422.39" font-family="Helvetica,sans-Serif" font-size="14.00">callosum.app:_subtract_audit_tokens_from_event\nsrc/callosum/app.py:4284</text>
 </g>
 <!-- callosum.app:_strip_peer_quality_markers_from_stream&#45;&gt;callosum.app:_subtract_audit_tokens_from_event -->
 <g id="edge125" class="edge">

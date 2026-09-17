@@ -1164,7 +1164,10 @@ def create_app(
                 "openrouter",
             ):
                 continue
-            backend_meta = getattr(b, "model_metadata", None) or {}
+            backend_meta = getattr(b, "model_metadata", None)
+            if callable(backend_meta):
+                backend_meta = backend_meta()
+            backend_meta = backend_meta or {}
             for slug, m in backend_meta.items():
                 existing = merged_metadata.get(slug)
                 if existing is None:
