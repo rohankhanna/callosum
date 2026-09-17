@@ -14,14 +14,19 @@ Strategy selectors (a *routing engine* that selects within a pool):
     callosum:remote-only   -> strategy="remote-only"
 
 Concrete pins (name a specific model; drop the `-only` suffix):
-    callosum:remote/<model>[:<effort>]  -> source="remote", pinned_model, pinned_effort?
-    callosum:local/<model>[:<effort>]   -> source="local",  pinned_model, pinned_effort?
+    callosum:remote/<model>::<effort>  -> source="remote", pinned_model, pinned_effort
+    callosum:local/<model>::<effort>   -> source="local",  pinned_model, pinned_effort
+    callosum:remote/<model>            -> source="remote", pinned_model
+    callosum:local/<model>             -> source="local",  pinned_model
 
 Notes
 -----
+- For model IDs that contain colons, use `::<effort>` as the explicit
+  effort delimiter. A single `:<effort>` is retained for backward
+  compatibility when the model ID itself contains no colon.
 - `callosum:offline` is explicitly rejected until no-network semantics can be
   enforced end to end (raises SelectorError -> caller returns 400).
-- A local pin may carry `:<effort>` symmetric to a remote pin. The parser is
+- A local pin may carry `::<effort>` symmetric to a remote pin. The parser is
   deliberately ignorant of effort vocabulary because providers own that
   fast-moving metadata. It accepts any non-empty effort and the *model-specific*
   check ("does THIS model actually expose that level?") lives where the live
@@ -96,7 +101,7 @@ def parse_selector(model: str | None) -> SelectorDecision | None:
             )
         raise SelectorError(f"unknown callosum strategy selector {model!r}")
 
-    # Concrete pin: callosum:<source>/<model>[:<effort>]
+    # Concrete pin: callosum:<source>/<model>::<effort>
     source, _, tail = rest.partition("/")
     if source not in _PIN_SOURCES:
         raise SelectorError(
@@ -105,7 +110,13 @@ def parse_selector(model: str | None) -> SelectorDecision | None:
     if not tail:
         raise SelectorError(f"missing model in callosum pin {model!r}")
 
-    pinned_model, sep, effort = tail.partition(":")
+    if "::" in tail:
+        pinned_model, _, effort = tail.partition("::")
+        sep = "::"
+    elif tail.count(":") == 1:
+        pinned_model, sep, effort = tail.partition(":")
+    else:
+        pinned_model, sep, effort = tail, "", ""
     if not pinned_model:
         raise SelectorError(f"missing model in callosum pin {model!r}")
 

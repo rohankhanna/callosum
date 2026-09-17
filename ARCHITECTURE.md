@@ -7,7 +7,7 @@ the artifact a future operator or contributor should be able to read
 without tribal knowledge to understand what callosum does and why it
 is shaped the way it is.
 
-For the product's purpose and intended outcome, see `The Project Documentation`.
+For the product's purpose and intended outcome, see `README.md`.
 
 ## Runtime topology
 
@@ -166,8 +166,7 @@ All paths are under `src/callosum/`.
   7d-weekly usage meters from credential proxy (credential-custody sibling on
   `127.0.0.1:7342`) via a credential-free loopback stand-in token —
   callosum still holds NO credential; this is env-gated and defaults OFF
-  (see `docs/operations/runtime_deploy.md`). `credential_proxy.py` is a
-  thin adapter for the legacy credential-proxy shape.
+  (see `docs/operations/runtime_deploy.md`).
 - `cell_grid.py` — the (model, reasoning_effort) cell taxonomy and
   the merger that produces the live cell pool from backend
   `advertised_models` and per-backend `model_metadata`.
@@ -175,7 +174,7 @@ All paths are under `src/callosum/`.
   model id expresses routing intent for a single request: strategy
   selectors (`callosum:auto` / `callosum:local-only` /
   `callosum:remote-only`) set the routing engine, and concrete pins
-  (`callosum:remote/<model>:<effort>`, `callosum:local/<model>`) name
+  (`callosum:remote/<model>::<effort>`, `callosum:local/<model>`) name
   a specific model. `parse_selector()` runs on the dispatch hot path;
   a selector overrides the per-request routing value (and, for pins,
   narrows the cell pool and dispatch pool) **without mutating the

@@ -110,7 +110,7 @@ class CodexCatalogConfig(BaseModel):
     # change and on startup). Seconds.
     refresh_interval_seconds: int = 1800
     # Operator-declared lanes that should appear in the picker even when no
-    # backend serves them yet (e.g. "callosum:remote/model-a0e8:high"). Selecting
+    # backend serves them yet (e.g. "callosum:remote/model-a0e8::high"). Selecting
     # one surfaces a clean "not available yet" message at dispatch.
     declared_lanes: list[str] = Field(default_factory=list)
 

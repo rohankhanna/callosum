@@ -853,7 +853,7 @@ async def test_health_unknown_when_source_has_no_reason_attr() -> None:
 # Regression for commit d295876 — the responses-native chat-stream sub-path
 # must be wrapped in stall_guarded (mid-stream stall -> transient; idle_gap
 # captured onto the handle). The existing translation test above stays green
-# if that wrap is removed; these two turn red. See logs/2026-08-13.md.
+# if that wrap is removed; these two turn red.
 # --------------------------------------------------------------------------- #
 
 

@@ -36,7 +36,7 @@ DEFAULT_PROMPT = 'Reply with exactly this JSON object and nothing else: {"callos
 CASES: dict[str, str] = {
     "smoke": DEFAULT_PROMPT,
     "repo_inspect": (
-        "Do not modify files. Inspect README.md and The Project Documentation, then answer "
+        "Do not modify files. Inspect README.md, then answer "
         "with exactly two bullets: one naming the repo purpose, one naming one non-goal."
     ),
     "tool_roundtrip": (

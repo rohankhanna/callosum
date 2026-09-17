@@ -19,7 +19,7 @@ from callosum.selectors import (
             SelectorDecision(source="remote", pinned_model="model-a0e8"),
         ),
         (
-            "callosum:remote/model-a0e8:high",
+            "callosum:remote/model-a0e8::high",
             SelectorDecision(source="remote", pinned_model="model-a0e8", pinned_effort="high"),
         ),
         (
@@ -29,16 +29,31 @@ from callosum.selectors import (
         (
             # Local pins accept an effort symmetric to remote ();
             # per-model support is enforced downstream against live metadata.
-            "callosum:local/model-a0d2:high",
+            "callosum:local/model-a0d2::high",
             SelectorDecision(source="local", pinned_model="model-a0d2", pinned_effort="high"),
         ),
         (
-            "callosum:remote/model-a0d1:ultra",
+            "callosum:remote/model-a0d1::ultra",
             SelectorDecision(source="remote", pinned_model="model-a0d1", pinned_effort="ultra"),
         ),
         (
-            "callosum:local/future-model:adaptive-v2",
+            "callosum:local/future-model::adaptive-v2",
             SelectorDecision(source="local", pinned_model="future-model", pinned_effort="adaptive-v2"),
+        ),
+        (
+            # Model IDs may contain colons, e.g. Ollama-style tags.
+            "callosum:remote/glm-5.3-flash:cloud::default",
+            SelectorDecision(
+                source="remote",
+                pinned_model="glm-5.3-flash:cloud",
+                pinned_effort="default",
+            ),
+        ),
+        (
+            # Legacy single-colon effort delimiter remains supported when
+            # the model ID itself contains no colon.
+            "callosum:remote/model-a0e8:high",
+            SelectorDecision(source="remote", pinned_model="model-a0e8", pinned_effort="high"),
         ),
     ],
 )
@@ -77,8 +92,8 @@ def test_unknown_pin_source_rejected():
 @pytest.mark.parametrize(
     "model",
     [
-        "callosum:remote/model-a0d1:",
-        "callosum:local/future-model:",
+        "callosum:remote/model-a0d1::",
+        "callosum:local/future-model::",
     ],
 )
 def test_empty_effort_rejected(model):

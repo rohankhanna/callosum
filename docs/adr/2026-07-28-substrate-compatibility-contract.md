@@ -354,6 +354,6 @@ translator deletes.
   that is a P4 per-cell routing/handoff decision, not a contract property. The
   contract is substrate-agnostic.
 - Mid-stream failover or cross-backend stream stitching (already a non-goal per
-  `The Project Documentation`).
+  `README.md`).
 - Moving the per-CLI codex endpoint transform architecture — that is in-scope
   KEEP per the per-CLI-endpoint architecture and is not a shim.

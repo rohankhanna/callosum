@@ -20,9 +20,9 @@ def test_v1_models_returns_canonical_catalog() -> None:
     # These fakes are remote (kind != litellm_gateway), so each model gets one
     # concrete remote pin per reasoning level (compatibility fallback because
     # these fakes do not supply dynamic provider metadata).
-    assert "callosum:remote/model-a0e7:high" in ids
-    assert "callosum:remote/model-a0e6:low" in ids
-    assert "callosum:remote/model-a0c3:xhigh" in ids
+    assert "callosum:remote/model-a0e7::high" in ids
+    assert "callosum:remote/model-a0e6::low" in ids
+    assert "callosum:remote/model-a0c3::xhigh" in ids
     # No local backend → no local pins.
     assert not any(i.startswith("callosum:local/") for i in ids)
     # Raw passthrough ids remain for back-compat.
@@ -67,14 +67,14 @@ def test_v1_models_advertises_local_effort_variants() -> None:
     # Bare local pins for both.
     assert {"callosum:local/model-a0d2", "callosum:local/model-a0g2"} <= ids
     # Effort variants only for the model that advertises those levels.
-    assert "callosum:local/model-a0d2:high" in ids
-    assert "callosum:local/model-a0d2:low" in ids
+    assert "callosum:local/model-a0d2::high" in ids
+    assert "callosum:local/model-a0d2::low" in ids
     # default-only model gets NO effort variant, and "default" is never pinned.
     assert not any(i.startswith("callosum:local/model-a0g2:") for i in ids)
-    assert "callosum:local/model-a0d2:default" not in ids
+    assert "callosum:local/model-a0d2::default" not in ids
     # Single-model lookup resolves a local effort variant.
     with TestClient(create_app(backends=[effortful, default_only])) as client:
-        r = client.get("/v1/models/callosum:local/model-a0d2:high")
+        r = client.get("/v1/models/callosum:local/model-a0d2::high")
     assert r.status_code == 200
 
 
@@ -102,12 +102,12 @@ def test_v1_models_preserves_provider_defined_effort_names() -> None:
     local.kind = "litellm_gateway"
     with TestClient(create_app(backends=[remote, local])) as client:
         ids = {m["id"] for m in client.get("/v1/models").json()["data"]}
-        assert "callosum:remote/model-a0d8:max" in ids
-        assert "callosum:remote/model-a0d8:ultra" in ids
-        assert "callosum:remote/model-a0d8:adaptive-v2" in ids
-        assert "callosum:local/local-future:adaptive-v2" in ids
-        assert client.get("/v1/models/callosum:remote/model-a0d8:adaptive-v2").status_code == 200
-        assert client.get("/v1/models/callosum:local/local-future:adaptive-v2").status_code == 200
+        assert "callosum:remote/model-a0d8::max" in ids
+        assert "callosum:remote/model-a0d8::ultra" in ids
+        assert "callosum:remote/model-a0d8::adaptive-v2" in ids
+        assert "callosum:local/local-future::adaptive-v2" in ids
+        assert client.get("/v1/models/callosum:remote/model-a0d8::adaptive-v2").status_code == 200
+        assert client.get("/v1/models/callosum:local/local-future::adaptive-v2").status_code == 200
 
 
 def test_v1_models_selector_lookup() -> None:
@@ -116,9 +116,9 @@ def test_v1_models_selector_lookup() -> None:
         # Strategy selector resolves.
         assert client.get("/v1/models/callosum:auto").status_code == 200
         # Valid concrete pin resolves.
-        assert client.get("/v1/models/callosum:remote/model-a0e7:high").status_code == 200
+        assert client.get("/v1/models/callosum:remote/model-a0e7::high").status_code == 200
         # Pin to an unadvertised model 404s.
-        assert client.get("/v1/models/callosum:remote/model-a0g0:high").status_code == 404
+        assert client.get("/v1/models/callosum:remote/model-a0g0::high").status_code == 404
 
 
 def test_v1_models_hides_hidden_raw_ids_but_resolves_explicit_pin() -> None:
@@ -151,8 +151,8 @@ def test_v1_models_hides_hidden_raw_ids_but_resolves_explicit_pin() -> None:
     with TestClient(create_app(backends=[backend])) as client:
         ids = {m["id"] for m in client.get("/v1/models").json()["data"]}
         assert "codex-auto-review" not in ids
-        assert "callosum:remote/codex-auto-review:medium" not in ids
-        assert client.get("/v1/models/callosum:remote/codex-auto-review:medium").status_code == 200
+        assert "callosum:remote/codex-auto-review::medium" not in ids
+        assert client.get("/v1/models/callosum:remote/codex-auto-review::medium").status_code == 200
 
 
 def test_v1_models_lookup_returns_advertised_one() -> None:

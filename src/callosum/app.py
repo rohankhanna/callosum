@@ -1164,7 +1164,10 @@ def create_app(
                 "openrouter",
             ):
                 continue
-            backend_meta = getattr(b, "model_metadata", None) or {}
+            backend_meta = getattr(b, "model_metadata", None)
+            if callable(backend_meta):
+                backend_meta = backend_meta()
+            backend_meta = backend_meta or {}
             for slug, m in backend_meta.items():
                 existing = merged_metadata.get(slug)
                 if existing is None:
@@ -1452,7 +1455,7 @@ def create_app(
         # refresh each backend's upstream-owned model catalog BEFORE the smoke
         # test — so the smoke test probes models the upstream actually still
         # serves, not stale TOML names. A backend whose catalog is STILL empty
-        # afterward booted before its dependency (credential service) was ready;
+        # afterward booted before its dependency endpoint was ready;
         # rather than leave the cell grid empty until the hourly smoke tester,
         # retry it in the background. This is the model-catalog leg of the
         # stale-on-cold-boot class; quota/cooldown staleness is handled by the
@@ -1934,11 +1937,11 @@ def create_app(
         cell grid uses, so the catalog and the router agree on what exists:
 
         - strategy selectors: callosum:auto / local-only / remote-only
-        - remote concrete pins: callosum:remote/<model>:<effort> (one per
+        - remote concrete pins: callosum:remote/<model>::<effort> (one per
           supported reasoning level, from model_metadata with a compatibility
           fallback only when metadata is absent)
         - local concrete pins: callosum:local/<model>, plus a
-          callosum:local/<model>:<effort> variant for each non-default
+          callosum:local/<model>::<effort> variant for each non-default
           reasoning level the model advertises (from model_metadata). Models
           that advertise only ("default",) get the bare pin alone.
         - raw passthrough ids, still listed + resolvable for back-compat
@@ -1979,7 +1982,7 @@ def create_app(
         ]
         for m in sorted(remote_models):
             for level in reasoning_levels_for(m, remote_meta):
-                ids.append(f"callosum:remote/{m}:{level}")
+                ids.append(f"callosum:remote/{m}::{level}")
         for m in sorted(local_models):
             ids.append(f"callosum:local/{m}")
             # Effort variants come straight from the model's advertised
@@ -1990,7 +1993,7 @@ def create_app(
             levels = md.supported_reasoning_levels if md is not None else ()
             for level in levels:
                 if level != "default":
-                    ids.append(f"callosum:local/{m}:{level}")
+                    ids.append(f"callosum:local/{m}::{level}")
         ids.extend(sorted(raw))
         return ids
 
@@ -3129,7 +3132,7 @@ async def _dispatch_stream_with_cell_retry(
 
     Reroute happens only on pre-first-chunk HTTPException from the inner
     dispatch — once StreamingResponse is committed and bytes start flowing,
-    mid-stream failover stays a non-goal (per The Project Documentation). The inner
+    mid-stream failover stays a non-goal (per README.md). The inner
     dispatch raises HTTPException only before first-chunk; after that, it
     returns StreamingResponse and any backend failure is bubbled in-band.
     """
@@ -3392,8 +3395,8 @@ async def _dispatch_nonstream(
     backend_status = await _collect_backend_status(backends_list)
     if should_attempt_fallback(error_classifications):
         fallback = FallbackExecutor()
-        # TODO: Implement fallback retry logic here
-        # For now, just log that we attempted it
+        # Fallback strategies are intentionally not implemented yet. Record the
+        # attempted decision and surface the underlying failure to the client.
         fallback.record_attempt(
             "considered_fallback",
             "skipped",
@@ -3627,8 +3630,8 @@ async def _dispatch_stream(
     backend_status = await _collect_backend_status(backends_list)
     if should_attempt_fallback(error_classifications):
         fallback = FallbackExecutor()
-        # TODO: Implement fallback retry logic here
-        # For now, just log that we attempted it
+        # Fallback strategies are intentionally not implemented yet. Record the
+        # attempted decision and surface the underlying failure to the client.
         fallback.record_attempt(
             "considered_fallback",
             "skipped",
@@ -5305,7 +5308,7 @@ class _PeriodicModelProbeSpawner:
 async def _refresh_catalogs_pass(backends: Sequence[Backend], *, state_store: Any | None) -> list[Backend]:
     """Run one upstream model-catalog refresh per backend. Returns the
     backends whose catalog is STILL empty afterward — the signal that the
-    backend's dependency (credential service) was not ready at boot and the
+    backend's dependency endpoint was not ready at boot and the
     fetch needs retrying. Also records a model-release timestamp when new
     models appear. Best-effort: a backend that raises keeps its cold-start set.
     """
@@ -5373,7 +5376,7 @@ async def _catalog_boot_resync(
         )
     # Slow tail: the fast budget is spent but at least one catalog is still
     # empty. Keep retrying at a longer cadence so a slow-to-start dependency
-    # (credential service, network) still self-heals in minutes rather than
+    # (dependency endpoint, network) still self-heals in minutes rather than
     # waiting up to 1h for the first hourly smoke-tester tick.
     for attempt in range(1, tail_attempts + 1):
         logger.warning(

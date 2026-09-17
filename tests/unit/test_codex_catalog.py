@@ -45,10 +45,10 @@ def _template() -> dict:
         ("callosum:auto", "Callosum: Auto", 0),
         ("callosum:remote-only", "Callosum: Remote only", 1),
         ("callosum:local-only", "Callosum: Local only", 2),
-        ("callosum:remote/model-a0e8:high", "Callosum remote · model-a0e8 · high", 10),
+        ("callosum:remote/model-a0e8::high", "Callosum remote · model-a0e8 · high", 10),
         ("callosum:remote/model-a0e8", "Callosum remote · model-a0e8", 10),
         ("callosum:local/model-a0g2", "Callosum local · model-a0g2", 20),
-        ("callosum:local/model-a0d2:high", "Callosum local · model-a0d2 · high", 20),
+        ("callosum:local/model-a0d2::high", "Callosum local · model-a0d2 · high", 20),
     ],
 )
 def test_lane_metadata_known_lanes(model_id, expected_name, expected_priority):
@@ -73,12 +73,12 @@ def test_ordered_lane_ids_strategy_first_then_pins_then_declared():
     ids = [
         "model-a0e7",  # raw → dropped
         "callosum:local/model-a0g2",
-        "callosum:remote/model-a0e8:high",
+        "callosum:remote/model-a0e8::high",
         "callosum:local-only",
         "callosum:auto",
         "callosum:remote-only",
     ]
-    declared = ["callosum:remote/model-a0e9:xhigh", "callosum:auto"]
+    declared = ["callosum:remote/model-a0e9::xhigh", "callosum:auto"]
     out = cc._ordered_lane_ids(ids, declared)
     # Strategy selectors lead in fixed order.
     assert out[:3] == [
@@ -88,7 +88,7 @@ def test_ordered_lane_ids_strategy_first_then_pins_then_declared():
     ]
     # Declared-but-not-live lane is present exactly once; no dupes.
     assert out.count("callosum:auto") == 1
-    assert "callosum:remote/model-a0e9:xhigh" in out
+    assert "callosum:remote/model-a0e9::xhigh" in out
     assert "model-a0e7" not in out
     assert len(out) == len(set(out))
 
@@ -115,7 +115,7 @@ def test_build_catalog_restamps_identity_and_keeps_rich_fields():
 
 def test_remote_pin_restricts_reasoning_levels_to_baked_effort():
     cat = cc.build_codex_catalog(
-        model_ids=["callosum:remote/model-a0d1:ultra"],
+        model_ids=["callosum:remote/model-a0d1::ultra"],
         declared_lanes=[],
         template=_template(),
     )
@@ -127,7 +127,7 @@ def test_remote_pin_restricts_reasoning_levels_to_baked_effort():
 
 def test_future_pinned_effort_is_preserved_when_template_does_not_know_it():
     cat = cc.build_codex_catalog(
-        model_ids=["callosum:remote/future-model:adaptive-v2"],
+        model_ids=["callosum:remote/future-model::adaptive-v2"],
         declared_lanes=[],
         template=_template(),
     )
@@ -142,12 +142,12 @@ def test_local_pin_restricts_reasoning_levels_to_baked_effort():
     # Symmetric to the remote case: a local pin that bakes an effort offers only
     # that effort in the picker ().
     cat = cc.build_codex_catalog(
-        model_ids=["callosum:local/model-a0d2:high"],
+        model_ids=["callosum:local/model-a0d2::high"],
         declared_lanes=[],
         template=_template(),
     )
     (entry,) = cat["models"]
-    assert entry["slug"] == "callosum:local/model-a0d2:high"
+    assert entry["slug"] == "callosum:local/model-a0d2::high"
     assert entry["display_name"] == "Callosum local · model-a0d2 · high"
     levels = entry["supported_reasoning_levels"]
     assert [lvl["effort"] for lvl in levels] == ["high"]
@@ -174,11 +174,11 @@ def test_strategy_selector_keeps_full_reasoning_levels():
 def test_declared_lane_appears_even_when_not_live():
     cat = cc.build_codex_catalog(
         model_ids=["callosum:auto"],
-        declared_lanes=["callosum:remote/model-a0e9:xhigh"],
+        declared_lanes=["callosum:remote/model-a0e9::xhigh"],
         template=_template(),
     )
     slugs = [m["slug"] for m in cat["models"]]
-    assert "callosum:remote/model-a0e9:xhigh" in slugs
+    assert "callosum:remote/model-a0e9::xhigh" in slugs
 
 
 def test_digest_is_stable_and_order_independent():
