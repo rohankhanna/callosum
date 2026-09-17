@@ -101,7 +101,7 @@ def test_remote_pin_with_effort_routes_to_remote(tmp_path: Path) -> None:
         with TestClient(app) as client:
             response = client.post(
                 "/v1/responses",
-                json={"model": "callosum:remote/model-a0e7:high", "input": []},
+                json={"model": "callosum:remote/model-a0e7::high", "input": []},
             )
         assert response.status_code == 200, response.text
         assert response.json()["id"] == "resp-remote"
@@ -144,7 +144,7 @@ def test_provider_defined_future_effort_routes_by_live_metadata(tmp_path: Path) 
         with TestClient(create_app(backends=[remote], operator_state=state)) as client:
             response = client.post(
                 "/v1/responses",
-                json={"model": "callosum:remote/model-a0d8:adaptive-v2", "input": []},
+                json={"model": "callosum:remote/model-a0d8::adaptive-v2", "input": []},
             )
         assert response.status_code == 200, response.text
         assert response.json()["model"] == "model-a0d8"
@@ -165,7 +165,7 @@ def test_local_pin_with_effort_routes_to_local(tmp_path: Path) -> None:
         with TestClient(app) as client:
             response = client.post(
                 "/v1/responses",
-                json={"model": "callosum:local/model-a0e7:high", "input": []},
+                json={"model": "callosum:local/model-a0e7::high", "input": []},
             )
         assert response.status_code == 200, response.text
         body = response.json()
@@ -216,7 +216,7 @@ def test_local_pin_with_unsupported_effort_returns_503(tmp_path: Path) -> None:
         with TestClient(app) as client:
             response = client.post(
                 "/v1/responses",
-                json={"model": "callosum:local/model-a0g2:high", "input": []},
+                json={"model": "callosum:local/model-a0g2::high", "input": []},
             )
         assert response.status_code == 503, response.text
         assert "Retry-After" in response.headers
@@ -240,7 +240,7 @@ def test_unsatisfiable_pin_returns_503(tmp_path: Path) -> None:
         with TestClient(app) as client:
             response = client.post(
                 "/v1/responses",
-                json={"model": "callosum:remote/model-a0e7:high", "input": []},
+                json={"model": "callosum:remote/model-a0e7::high", "input": []},
             )
         assert response.status_code == 503, response.text
         assert "Retry-After" in response.headers
@@ -264,7 +264,7 @@ def test_not_live_lane_returns_actionable_503(tmp_path: Path) -> None:
             response = client.post(
                 "/v1/responses",
                 json={
-                    "model": "callosum:remote/model-a0b2:high",
+                    "model": "callosum:remote/model-a0b2::high",
                     "input": [],
                 },
             )
@@ -316,7 +316,7 @@ def test_hidden_model_excluded_from_auto_but_reachable_by_explicit_pin(tmp_path:
             explicit_response = client.post(
                 "/v1/responses",
                 json={
-                    "model": "callosum:remote/codex-auto-review:medium",
+                    "model": "callosum:remote/codex-auto-review::medium",
                     "input": [],
                 },
             )
@@ -356,7 +356,7 @@ def test_hidden_model_explicit_pin_with_unsupported_effort_returns_503(tmp_path:
             response = client.post(
                 "/v1/responses",
                 json={
-                    "model": "callosum:remote/codex-auto-review:high",
+                    "model": "callosum:remote/codex-auto-review::high",
                     "input": [],
                 },
             )

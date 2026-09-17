@@ -68,18 +68,16 @@ make test     # pytest
 ```
 
 > **Note on `make test`:** the target sets `PYTHONPATH=src` and runs
-> `uv run python -m pytest`. The default pytest configuration
-> **deselects live end-to-end tests** (they require a running local lane
-> and real credentials and are opt-in). If you specifically need them,
-> run them explicitly per the instructions in `tests/live_e2e/`; they are
-> not part of `make verify` or the merge gate.
+> `uv run python -m pytest`. It covers the hermetic unit and contract
+> suites. If you add a live end-to-end check, keep it opt-in and separate
+> from the automated merge gate.
 
 All four `make verify` steps must pass before a change is merged. A
 merge that skips any of them is not green.
 
 ## Tests
 
-Callosum has three layers of tests:
+Callosum has two layers of automated tests:
 
 - **Unit tests** (`tests/unit/`) — fast, hermetic, no network. The bulk
   of coverage lives here.
@@ -87,9 +85,9 @@ Callosum has three layers of tests:
   committed upstream captures, plus `ContractFakeBackend`-based synthetic
   behavior tests. These run in the merge gate and are hermetic (no live
   upstream, no tokens).
-- **Live end-to-end tests** (`tests/live_e2e/`) — explicitly invoked
-  only; deselected by default. They consume real tokens and require a
-  running local lane, so they are never part of the automated gate.
+Live end-to-end checks are intentionally separate from the automated
+gate because they consume real tokens and depend on operator-specific
+endpoints.
 
 When you fix a representable bug, add a hermetic regression (unit or
 contract) that turns red if the fix is reverted. A live E2E test may
@@ -104,8 +102,8 @@ Significant architectural or design decisions are recorded as ADRs
 When you make a material design decision, add an ADR rather than leaving
 the rationale implicit in a commit message.
 
-Diagrams live under `docs/diagrams/` (and referenced from
-`docs/architecture/`). If you change the architecture, update the
+Architecture diagrams and generated static graphs live under
+`docs/architecture/`. If you change the architecture, update the
 diagrams and any prose that describes it so the docs never drift from
 the code.
 

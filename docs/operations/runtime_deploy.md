@@ -103,9 +103,10 @@ Environment`. To disable: remove the file (or set the value to `0`),
 ### Ollama Cloud enable (live example)
 
 `CALLOSUM_OLLAMA_CLOUD_ENABLED=1` registers the `OllamaCloudBackend`
-(`BackendKind="ollama_cloud"`) — cloud models served by ollama.com
-key on the final hop, so the real key never enters callosum (it holds
-signin` chat path. The durable drop-in is
+(`BackendKind="ollama_cloud"`), a remote backend that calls an
+Ollama-compatible endpoint and discovers its catalog through
+`/v1/models`, `/api/tags`, and `/api/show`. The endpoint is
+operator-supplied and defaults to `https://ollama.com`. The durable drop-in is
 `~/.config/systemd/user/system-dependency-callosum.service.d/ollama-cloud.conf`:
 
 ```ini
@@ -120,12 +121,10 @@ curl -s http://127.0.0.1:8765/status | jq '.backends[] | select(.id=="ollama-clo
 curl -s http://127.0.0.1:8765/models | jq '.data[] | select(.id|test(":cloud")) | .id'
 ```
 
-`:cloud`-suffixed models catalog from ollama.com's `/api/tags` (reached
-`callosum:remote/...` (e.g. `callosum:remote/glm-5.1:cloud:default`). The local lane catalogs from
-local LLM gateway's `/v1/models` serving endpoint, which excludes unmanaged
-`:cloud` models, so there is no double-list. Cloud cells enter the
-per-cell minimum-coverage grid, so the quota may route some real
-traffic to `glm-5.X:cloud` to satisfy the per-cell floor.
+Use a selector such as
+`callosum:remote/glm-5.1:cloud::default` to pin a specific cloud model
+and reasoning effort. The local lane catalogs from its own
+`/v1/models` endpoint, so cloud and local cells stay separated.
 
 
 By default `OllamaCloudBackend.usage_snapshot()` returns an
@@ -134,9 +133,8 @@ By default `OllamaCloudBackend.usage_snapshot()` returns an
 because callosum has no real usage meter. The advisory is honest about
 the gap: it simply never claims exhaustion.
 
-Callosum can now optionally read the **real** ollama-cloud 5h-session
-Callosum holds NO credential for this either — same daemon-custody
-ollama signin cookie and exposes a read-only usage endpoint.
+Callosum can optionally read real usage data from an operator-supplied
+read-only usage endpoint. This path is disabled by default.
 
 Two env flags gate the path. **Both default OFF — there is no
 live-routing change at merge.**
@@ -160,10 +158,10 @@ Environment=CALLOSUM_OLLAMA_CLOUD_USAGE_ACCOUNT=primary
 Environment=CALLOSUM_OLLAMA_CLOUD_STANDIN_TTL=1800
 ```
 
-shadow-available: when `CALLOSUM_OLLAMA_CLOUD_USAGE_LIVE` is OFF, or
-`usage_snapshot()` falls back to the existing honest-advisory —
-routing never errors and never cools down the cloud lane just because
-a meter is unavailable.
+When `CALLOSUM_OLLAMA_CLOUD_USAGE_LIVE` is off, or the usage endpoint is
+unavailable, `usage_snapshot()` falls back to the existing
+honest-advisory behavior. Routing never errors and never cools down the
+cloud lane just because a meter is unavailable.
 
 **Observability:** `callosum usage ollama-cloud` is a read-only
 diagnostic that constructs an ephemeral source from the same env vars
@@ -173,10 +171,9 @@ and prints the live session/weekly meters without touching routing:
 callosum usage ollama-cloud
 ```
 
-**Stopgap status:** this cookie-custody path is temporary — it exists
-until ollama ships keypair/API-key auth or an official usage API. The
-fallback contract above means the path can be removed without changing
-routing behavior (it reverts to honest-advisory).
+**Current limitation:** Callosum does not provide a public Ollama usage
+contract. The optional usage endpoint is operator-specific and may be
+removed if Ollama later ships an official usage API.
 
 ## Host-side change
 

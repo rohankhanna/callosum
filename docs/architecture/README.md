@@ -1,55 +1,34 @@
-# Architecture diagrams
+# Architecture artifacts
 
-Version-controlled sources for callosum's architecture diagrams.
+Version-controlled architecture artifacts for Callosum.
 
-Architecture diagrams are generated from version-controlled source rather
-than maintained as hand-edited image files. Each `.puml` file in this directory is a
-PlantUML source; the matching `.svg` next to it is the rendered output.
-Regenerate when the source changes.
+Static call and control-flow graphs are generated from version-controlled
+Python source. Regenerate them whenever the routing or dispatch architecture
+changes.
 
-## Sources
+## Generated artifacts
 
-- `request_lifecycle.puml` — sequence diagram of one request from
-  inbound POST through routing decision, backend dispatch, upstream
-  streaming, usage-log write, peer-quality capture, and the offline
-  shadow label pass that can turn captured peer opinions into
-  `quality_score` training candidates. Renders without external
-  dependencies (just PlantUML + Java).
-- `runtime_topology.puml` — component diagram of the loopback proxy,
-  backend lanes, persistent state, capability harness, and scheduled
-  auto-dev path. This is the quickest visual for understanding where
-  model-research inputs feed the dev loop.
-- `generated/` — code-generated static analysis artifacts for review:
-  focused call graph and dispatch/router control-flow references in
-  `.dot`, `.svg`, and `.json` form, emitted by
-  `scripts/generate_static_graphs.py`.
+- `generated/call_graph_focus.dot`
+- `generated/call_graph_focus.json`
+- `generated/call_graph_focus.svg`
+- `generated/control_flow_focus.dot`
+- `generated/control_flow_focus.json`
+- `generated/control_flow_focus.svg`
+- `generated/README.md`
 
-## Rendering
+Prose architecture is documented in `ARCHITECTURE.md`.
 
-```
-scripts/render_diagrams.sh
+## Regeneration
+
+```bash
+uv run python scripts/generate_static_graphs.py --out-dir docs/architecture/generated
 ```
 
-Output: `docs/architecture/*.svg` next to each `.puml` source. PNG
-copies can be rendered on demand with the same PlantUML jar using
-`-tpng`.
+The script uses Python's standard library and Graphviz `dot`.
 
-The script expects PlantUML's single-file jar at
-`~/.local/share/plantuml/plantuml.jar` by default. The jar is not committed to
-this repository. If it is missing, the script prints a clear message and exits
-non-zero. Java is the only other requirement.
+## Why generated static graphs
 
-## Why PlantUML and not Structurizr / Mermaid / diagrams-as-code
-
-- **PlantUML + Java** needs no language runtime install and no
-  `npm`/Chromium dependency (note: Java must be on `PATH` — see above).
-- Pure-text source is diff-friendly. Source review catches drift
-  between intent and what gets rendered.
-- SVG output is the preferred format for architecture artifacts.
-- Sequence diagrams in PlantUML do not need Graphviz, which is the
-  most common friction with `dot`-backed component diagrams.
-
-Switching to Structurizr DSL later is reasonable if the diagram
-inventory grows past a handful of files and the C4-model formalism
-starts paying off; for the current scope (one sequence diagram) the
-overhead would exceed the benefit.
+- Generated graphs stay synchronized with source code.
+- DOT, JSON, and SVG outputs are inspectable and reviewable.
+- SVG output works in browsers and Markdown viewers.
+- The generator uses no third-party Python packages.

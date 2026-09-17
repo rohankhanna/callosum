@@ -252,7 +252,7 @@ class TimeBucketSummary:
 # and callosum->upstream) and tags tool turns from its own decoded request
 # payloads — a vantage no external observability platform has — so the
 # compounding-cost metric, per-turn marginal, and tool-turn attribution are
-# irreducibly local to this routing layer (see logs/2026-08-04.md).
+# irreducibly local to this routing layer.
 #
 # Field names mirror the OpenTelemetry GenAI semantic conventions
 # (gen_ai.usage.cache_read.input_tokens / new input / output_tokens, PR #3163)

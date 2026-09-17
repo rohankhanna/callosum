@@ -52,16 +52,19 @@ knowing anything else is going on.
 - [Per-request usage log](#per-request-usage-log)
 - [Daily upstream healthcheck](#daily-upstream-healthcheck-getdiagnoseupstream)
 - [Operational notes](#operational-notes)
+- [Extending Callosum](#extending-callosum)
+- [API stability](#api-stability)
+- [Terms of service](#terms-of-service)
 - [Verify](#verify)
 
 ## How it works (architecture)
 
-The proxy sits between clients and upstream services, managing request distribution and credential handling.
+The proxy sits between clients and upstream model endpoints, managing request distribution and credential handling.
 
 ```
 [ Client 1 ]   HTTP /v1/responses ─────┐
-[ Client 2 ]   HTTP /v1/chat/completions ├──► [ API Proxy ]  ─► [ Credential Custody ]  ─► [ Upstream Service ]
-[ Client 3 ]   HTTP /v1/chat/completions │    (FastAPI)         (manages tokens)           (OpenAI-compatible)
+    [ Client 2 ]   HTTP /v1/chat/completions ├──► [ API Proxy ]  ─► [ Codex or Ollama endpoint ]
+    [ Client 3 ]   HTTP /v1/chat/completions │    (FastAPI)
                                         └─► (with bearer token)
 
                             Authorization: Bearer <api-key> (from proxy's /auth/keys)
@@ -72,11 +75,11 @@ Two auth flows are involved:
 | Layer | What it secures | Credential | Where it lives |
 | --- | --- | --- | --- |
 | **Client → Proxy** | Client authenticating to the proxy | API key minted via `/auth/keys` | `PROXY_TOKEN` env var |
-| **Proxy → Upstream** | The proxy authenticating to upstream services | Managed by credential custody service | Credential service (not proxy) |
+| **Proxy → Upstream** | The proxy authenticating to your model endpoint | API key supplied by your backend configuration | Your Codex or Ollama endpoint |
 
-Clients get their own short-lived API keys via the proxy's `/auth/keys` endpoint. The proxy never handles upstream credentials directly — a separate credential custody service manages them, issues stand-in tokens, and injects them only on final-hop requests.
+Clients get their own short-lived API keys via the proxy's `/auth/keys` endpoint. Upstream credentials remain in your backend configuration; the proxy forwards requests to the endpoint you configure.
 
-The proxy is a FastAPI process that routes requests based on availability and load. It forwards OpenAI-compatible `/v1/responses` and `/v1/chat/completions` requests through the credential custody service, which handles token provisioning and upstream credential injection.
+The proxy is a FastAPI process that routes requests based on availability and load. It forwards OpenAI-compatible `/v1/responses` and `/v1/chat/completions` requests to the Codex-compatible or Ollama endpoint you configure.
 
 ## Quick start
 
@@ -86,7 +89,7 @@ Install with [uv](https://docs.astral.sh/uv/):
 uv sync
 ```
 
-The proxy requires a credential custody service running on the local network. Configure it to point to your credential service:
+The proxy requires a Codex-compatible or Ollama endpoint. Configure it to point to your endpoint:
 
 Write `~/.config/callosum/config.toml`:
 
@@ -107,18 +110,20 @@ db = "/home/you/.local/state/callosum/auth.sqlite"
 
 [[backends]]
 id = "primary"
-type = "credential_proxy"
-proxy_url = "http://127.0.0.1:7342"
+type = "codex_gateway"
+base_url = "http://127.0.0.1:7342"
+api_key = "REPLACE_WITH_UPSTREAM_API_KEY"
 models = ["model-a0e7"]
 
 [[backends]]
 id = "secondary"
-type = "credential_proxy"
-proxy_url = "http://127.0.0.1:7342"
+type = "codex_gateway"
+base_url = "http://127.0.0.1:7342"
+api_key = "REPLACE_WITH_UPSTREAM_API_KEY"
 models = ["model-a0e7"]
 ```
 
-Replace `proxy_url` with your credential service's URL. Ensure the credential service is running before starting the proxy. The service itself determines which accounts/credentials are used.
+Replace `base_url` with your endpoint's URL and `api_key` with a key that endpoint accepts. Ensure the endpoint is running before starting the proxy.
 
 Start the server:
 
@@ -451,29 +456,31 @@ Passwords are stored as **argon2id** hashes. Session tokens and API keys are 32 
 
 ### `[[backends]]`
 
-One table per upstream account. Each backend needs a unique `id` and credentials at a credential service.
+One table per upstream endpoint. Each backend needs a unique `id` and credentials for that endpoint.
 
 ```toml
 [[backends]]
 id = "primary"
-type = "credential_proxy"
-proxy_url = "http://127.0.0.1:7342"
+type = "codex_gateway"
+base_url = "http://127.0.0.1:7342"
+api_key = "REPLACE_WITH_UPSTREAM_API_KEY"
 models = ["model-a0e7", "model-a0c3"]
 ```
 
 - `id` — required. Used in `/status`, `/control/pin`, and session bindings. Must be unique across all backends.
-- `type` — required. Must be `"credential_proxy"` to forward requests to a credential service.
-- `proxy_url` — required. Base URL of the credential service (e.g., `http://127.0.0.1:7342` for a local service).
+- `type` — required. Must be `"codex_gateway"` to forward requests to a Codex-compatible endpoint.
+- `base_url` — required. Base URL of your endpoint (e.g., `http://127.0.0.1:7342` for a local service).
+- `api_key` — required. Bearer token your endpoint accepts.
 - `models` — required as a **cold-start fallback**. The proxy fetches the live model list from the service at startup (and refreshes hourly), and uses *that* dynamic list in preference to whatever's in the TOML. The TOML value is what's served until the first successful upstream refresh — so it must be non-empty, but it doesn't need to be exhaustive or up to date. Model listings change frequently, so this design means operators don't have to manually chase updates.
 
-To distribute load across multiple backends, declare multiple `[[backends]]` entries pointing to the same or different credential services. The `models` values can be the same across them — each backend pulls its actual catalog at startup based on what the service provides.
+To distribute load across multiple backends, declare multiple `[[backends]]` entries pointing to the same or different endpoints. The `models` values can be the same across them — each backend pulls its actual catalog at startup based on what the endpoint provides.
 
 ### Backends registered outside `[[backends]]`
 
 Not every backend is a `[[backends]]` TOML entry. Two local-process backends and one remote-band backend are registered programmatically in `__main__.build_runtime_backends` and are NOT configured via `[[backends]]`:
 
 - **Local lane** (`LocalModelRegistryBackend`, preferred; `LiteLLMGatewayBackend`, fallback) — local models served by local LLM gateway / a LiteLLM gateway. The two are mutually exclusive; the preferred one is registered whenever the `local-llm` CLI is on PATH. See `ARCHITECTURE.md`.
-- **Ollama Cloud** (`OllamaCloudBackend`, `BackendKind="ollama_cloud"`) — cloud models served by ollama.com through the credential service. Callosum receives a short-lived, revocable stand-in token and never holds the real Ollama Cloud API key. The backend is disabled unless `CALLOSUM_OLLAMA_CLOUD_ENABLED=1`; usage metering is advisory unless explicitly enabled with `CALLOSUM_OLLAMA_CLOUD_USAGE_LIVE=1`. See `docs/operations/runtime_deploy.md`.
+- **Ollama Cloud** (`OllamaCloudBackend`, `BackendKind="ollama_cloud"`) — cloud models served by ollama.com through the configured Ollama endpoint. The backend is disabled unless `CALLOSUM_OLLAMA_CLOUD_ENABLED=1`; usage metering is advisory unless explicitly enabled with `CALLOSUM_OLLAMA_CLOUD_USAGE_LIVE=1`. See `docs/operations/runtime_deploy.md`.
 
 ## Endpoints
 
@@ -880,6 +887,30 @@ bash deploy/systemd/install.sh --enable
 - **No log rotation.** The usage-log SQLite file grows append-only. Archive manually when it gets large.
 - **Localhost only.** The proxy binds `127.0.0.1`. If you need to expose it to other machines, front it with TLS (Caddy / nginx) and rely on `[auth]` for access control.
 - **One worker.** uvicorn defaults to one worker; the SQLite databases are not safe across multiple worker processes. Don't increase `--workers`.
+
+## Extending Callosum
+
+Callosum is designed around two extension points:
+
+1. **Backends** — implement the `callosum.backend.Backend` protocol to add a
+   new upstream model endpoint.
+2. **Routing components** — implement or replace a predictor, selector, or
+   capability provider to change routing behavior.
+
+See [`docs/EXTENDING.md`](docs/EXTENDING.md) for the supported extension
+contract.
+
+## API stability
+
+Callosum uses a rolling `main` release model. See
+[`docs/API_STABILITY.md`](docs/API_STABILITY.md) for the compatibility
+promises.
+
+## Terms of service
+
+Callosum is a routing proxy and does not bypass provider authentication or
+quota enforcement. See [`docs/TERMS.md`](docs/TERMS.md) before configuring an
+upstream provider.
 
 ## Verify
 
